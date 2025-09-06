@@ -4,5 +4,9 @@ contextBridge.exposeInMainWorld('fsAPI', {
   getFileTree: () => ipcRenderer.invoke('get-file-tree'),
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
-  getSettings: () => ipcRenderer.invoke('get-settings')
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  createFolder: (parentPath, folderName) => ipcRenderer.invoke('create-folder', parentPath, folderName),
+  createFile: (parentPath, fileName) => ipcRenderer.invoke('create-file', parentPath, fileName),
+  deleteItem: (itemPath) => ipcRenderer.invoke('delete-item', itemPath),
+  renameItem: (itemPath, newName) => ipcRenderer.invoke('rename-item', itemPath, newName)
 });

@@ -166,10 +166,29 @@
     .file-item {
       cursor: pointer;
       padding: 2px 5px;
+      border-radius: 3px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      user-select: none;
     }
 
     .file-item:hover {
       background: var(--tree-hover);
+    }
+    
+    .file-item.selected {
+      background-color: rgba(128, 128, 128, 0.2);
+    }
+    
+    .folder-arrow {
+      cursor: pointer;
+      transition: transform 0.2s ease;
+      margin-right: 2px;
+    }
+    
+    .folder-arrow:hover {
+      color: #007acc;
     }
 
     /* 文件内容展示 */
@@ -269,6 +288,7 @@
           <button id="new-folder"><div id="folder-icon"></div></button>
           <button id="new-file"><div id="new-file-icon"></div></button>
           <button id="refresh-tree"><div id="refresh-icon"></div></button>
+          <button id="delete-item"><div id="trash-icon"></div></button>
         </div>
       </div>
       <div id="file-tree">Loading...</div>
