@@ -84,7 +84,7 @@
     /* 文件树栏 */
     #file-tree-container {
       width: 250px;
-      min-width: 150px;
+      min-width: 220px;
       max-width: 500px;
       background: var(--tree-bg);
       display: flex;
@@ -120,6 +120,8 @@
       overflow: hidden;
       text-overflow: ellipsis;
       max-width: 150px;
+      display: flex;
+      align-items: center;
     }
 
     #file-tree-header > div {
@@ -137,7 +139,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      margin-left: 5px;
+      margin-left: 2px;
       border-radius: 3px;
       transition: background-color 0.2s;
     }
@@ -154,6 +156,7 @@
       width: 16px;
       height: 16px;
       color: var(--text-color);
+      margin-top: 4px;
     }
 
     /* 文件树 */
@@ -165,9 +168,9 @@
 
     .file-item {
       cursor: pointer;
-      padding: 2px 5px;
+      padding: 3px 5px;
       border-radius: 3px;
-      font-size: 12px;
+      font-size: 13px;
       display: flex;
       align-items: center;
       user-select: none;
@@ -286,8 +289,9 @@
         <span id="resource-title">资源管理器</span>
         <div>
           <button id="new-folder"><div id="folder-icon"></div></button>
-          <button id="new-file"><div id="new-file-icon"></div></button>
-          <button id="refresh-tree"><div id="refresh-icon"></div></button>
+              <button id="new-file"><div id="new-file-icon"></div></button>
+              <button id="import-files"><div id="import-icon"></div></button>
+              <button id="refresh-tree"><div id="refresh-icon"></div></button>
           <button id="delete-item"><div id="trash-icon"></div></button>
         </div>
       </div>

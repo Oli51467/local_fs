@@ -8,5 +8,7 @@ contextBridge.exposeInMainWorld('fsAPI', {
   createFolder: (parentPath, folderName) => ipcRenderer.invoke('create-folder', parentPath, folderName),
   createFile: (parentPath, fileName) => ipcRenderer.invoke('create-file', parentPath, fileName),
   deleteItem: (itemPath) => ipcRenderer.invoke('delete-item', itemPath),
-  renameItem: (itemPath, newName) => ipcRenderer.invoke('rename-item', itemPath, newName)
+  renameItem: (itemPath, newName) => ipcRenderer.invoke('rename-item', itemPath, newName),
+  selectFiles: () => ipcRenderer.invoke('select-files'),
+  importFiles: (targetPath, filePaths) => ipcRenderer.invoke('import-files', targetPath, filePaths)
 });

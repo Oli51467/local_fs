@@ -11,11 +11,13 @@ function renderIcons() {
   document.getElementById('folder-icon').innerHTML = icons.folder;
   document.getElementById('new-file-icon').innerHTML = icons.newFile;
   document.getElementById('refresh-icon').innerHTML = icons.refresh;
+  document.getElementById('import-icon').innerHTML = icons.import;
   document.getElementById('trash-icon').innerHTML = icons.trash;
   
   // 添加悬浮提示
   document.getElementById('new-folder').title = '新建文件夹';
   document.getElementById('new-file').title = '新建文件';
+  document.getElementById('import-files').title = '导入文件';
   document.getElementById('refresh-tree').title = '刷新';
   document.getElementById('delete-item').title = '删除';
 }
@@ -146,7 +148,7 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     // 添加文件名
     const nameSpan = document.createElement('span');
     nameSpan.textContent = node.name;
-    nameSpan.style.fontSize = '11px';
+    nameSpan.style.fontSize = '13px';
     contentDiv.appendChild(nameSpan);
     
     div.appendChild(contentDiv);
@@ -203,7 +205,7 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     // 添加文件名
     const nameSpan = document.createElement('span');
     nameSpan.textContent = node.name;
-    nameSpan.style.fontSize = '11px';
+    nameSpan.style.fontSize = '12px';
     contentDiv.appendChild(nameSpan);
     
     div.appendChild(contentDiv);
@@ -234,11 +236,8 @@ function initResizer() {
   
   // 根据容器宽度更新标题
   function updateResourceTitle(width) {
-    if (width < 200) {
-      resourceTitle.textContent = '资源...';
-    } else {
-      resourceTitle.textContent = '资源管理器';
-    }
+    // 始终显示完整的"资源管理器"
+    resourceTitle.textContent = '资源管理器';
   }
   
   function startResize(e) {
@@ -252,8 +251,8 @@ function initResizer() {
   
   function resize(e) {
     const newWidth = startWidth + (e.clientX - startX);
-    // 限制最小和最大宽度
-    if (newWidth >= 150 && newWidth <= 500) {
+    // 限制最小和最大宽度，确保能显示完整的"资源管理器"
+    if (newWidth >= 180 && newWidth <= 500) {
       fileTreeContainer.style.width = `${newWidth}px`;
       updateResourceTitle(newWidth);
     }
@@ -715,6 +714,75 @@ function isSelectedItemFolder(itemPath) {
   return !fileName.includes('.'); // 简单判断：没有扩展名的可能是文件夹
 }
 
+// 导入文件功能
+async function importFiles() {
+  // 检查是否选中了文件夹
+  if (!selectedItemPath) {
+    alert('请先选择一个文件夹作为导入目标');
+    return;
+  }
+  
+  // 检查选中的是否为文件夹
+  const isFolder = isSelectedItemFolder(selectedItemPath);
+  if (!isFolder) {
+    alert('请选择一个文件夹作为导入目标，不能导入到文件中');
+    return;
+  }
+  
+  try {
+    // 打开文件选择器
+    const selectResult = await window.fsAPI.selectFiles();
+    
+    if (!selectResult.success) {
+      if (!selectResult.canceled) {
+        alert('文件选择失败: ' + (selectResult.error || '未知错误'));
+      }
+      return;
+    }
+    
+    if (!selectResult.filePaths || selectResult.filePaths.length === 0) {
+      return;
+    }
+    
+    // 显示导入进度提示
+    const progressMsg = `正在导入 ${selectResult.filePaths.length} 个项目...`;
+    console.log(progressMsg);
+    
+    // 执行导入操作
+    const importResult = await window.fsAPI.importFiles(selectedItemPath, selectResult.filePaths);
+    
+    if (!importResult.success) {
+      alert('导入失败: ' + (importResult.error || '未知错误'));
+      return;
+    }
+    
+    // 处理导入结果
+    const results = importResult.results;
+    const successCount = results.filter(r => r.success).length;
+    const failCount = results.filter(r => !r.success).length;
+    
+    let message = `导入完成！成功: ${successCount} 个`;
+    if (failCount > 0) {
+      message += `，失败: ${failCount} 个`;
+      const failedItems = results.filter(r => !r.success);
+      const failedNames = failedItems.map(item => {
+        const name = item.sourcePath.split('/').pop() || item.sourcePath.split('\\').pop();
+        return `${name}: ${item.error}`;
+      }).join('\n');
+      message += `\n\n失败详情:\n${failedNames}`;
+    }
+    
+    alert(message);
+    
+    // 刷新文件树
+    await loadFileTree();
+    
+  } catch (error) {
+    console.error('导入文件时发生错误:', error);
+    alert('导入文件时发生错误: ' + error.message);
+  }
+}
+
 // 创建删除确认弹窗
 function createDeleteModal(itemPath, isFolder) {
   // 创建遮罩层
@@ -907,6 +975,7 @@ async function testPythonBackend() {
   document.getElementById('new-folder').addEventListener('click', createFolder);
   document.getElementById('new-file').addEventListener('click', createFile);
   document.getElementById('refresh-tree').addEventListener('click', refreshFileTree);
+  document.getElementById('import-files').addEventListener('click', importFiles);
   
   // 绑定删除按钮事件
   document.getElementById('delete-item').addEventListener('click', () => {
