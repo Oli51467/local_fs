@@ -1,0 +1,19 @@
+# server/main.py
+import os
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"message": "Hello from Python backend!"}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok1"}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="127.0.0.1", port=port, log_level="info")
