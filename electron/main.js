@@ -12,7 +12,7 @@ const defaultSettings = {
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1200,
+    width: 1300,
     height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -72,5 +72,73 @@ ipcMain.handle('get-settings', () => {
   }
 });
 
-app.whenReady().then(createWindow);
+
+// 启动Python后端
+let pythonProcess = null;
+
+function startPythonBackend() {
+  const isProduction = process.env.NODE_ENV === 'production';
+  let pythonExecutablePath;
+  
+  if (isProduction) {
+    // 在打包后的应用中，Python后端已经被打包
+    if (process.platform === 'win32') {
+      pythonExecutablePath = path.join(process.resourcesPath, 'python_backend', 'python_backend.exe');
+    } else if (process.platform === 'darwin') {
+      pythonExecutablePath = path.join(process.resourcesPath, 'python_backend', 'python_backend');
+    } else {
+      pythonExecutablePath = path.join(process.resourcesPath, 'python_backend', 'python_backend');
+    }
+  } else {
+    // 在开发环境中，直接运行Python脚本
+    const pythonPath = process.platform === 'win32' ? 'python' : 'python3';
+    pythonExecutablePath = pythonPath;
+    
+    // 使用子进程运行Python脚本
+    pythonProcess = require('child_process').spawn(pythonExecutablePath, [path.join(__dirname, '..', 'server', 'main.py')]);
+    
+    pythonProcess.stdout.on('data', (data) => {
+      console.log(`Python stdout: ${data}`);
+    });
+    
+    pythonProcess.stderr.on('data', (data) => {
+      console.error(`Python stderr: ${data}`);
+    });
+    
+    pythonProcess.on('close', (code) => {
+      console.log(`Python process exited with code ${code}`);
+    });
+    
+    return;
+  }
+  
+  // 在生产环境中运行打包后的Python可执行文件
+  pythonProcess = require('child_process').execFile(pythonExecutablePath);
+  
+  pythonProcess.stdout.on('data', (data) => {
+    console.log(`Python stdout: ${data}`);
+  });
+  
+  pythonProcess.stderr.on('data', (data) => {
+    console.error(`Python stderr: ${data}`);
+  });
+  
+  pythonProcess.on('close', (code) => {
+    console.log(`Python process exited with code ${code}`);
+  });
+}
+
+// 在应用启动时启动Python后端
+app.whenReady().then(() => {
+  createWindow();
+  startPythonBackend();
+});
+
+// 在应用退出时关闭Python后端
+app.on('will-quit', () => {
+  if (pythonProcess) {
+    process.platform === 'win32' ? require('child_process').exec(`taskkill /pid ${pythonProcess.pid} /f /t`) : pythonProcess.kill();
+  }
+});
+
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

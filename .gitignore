@@ -1,4 +1,6 @@
 /data
 .venv
 /electron/node_modules
+/electron/dist
+/electron/python_backend
 /server/__pycache__

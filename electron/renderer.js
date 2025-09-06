@@ -145,8 +145,27 @@ function initResizer() {
   resizer.addEventListener('mousedown', startResize);
 }
 
-// 初始化
+
+// 连接Python后端API
+async function testPythonBackend() {
+  try {
+    const response = await fetch('http://127.0.0.1:8000/health');
+    const data = await response.json();
+    console.log('Python后端健康检查:', data);
+    return data;
+  } catch (error) {
+    console.error('无法连接到Python后端:', error);
+    return null;
+  }
+}
+
+// 在初始化时测试Python后端连接
 (async () => {
+  // 等待Python后端启动
+  setTimeout(async () => {
+    await testPythonBackend();
+  }, 2000);
+  
   // 渲染图标
   renderIcons();
   
@@ -161,3 +180,4 @@ function initResizer() {
   // 默认显示文件页面
   showFilePage();
 })();
+
