@@ -61,6 +61,22 @@ ipcMain.handle('read-file', (event, filePath) => {
   return fs.readFileSync(filePath, 'utf-8');
 });
 
+// 读取文件为Buffer
+ipcMain.handle('read-file-buffer', (event, filePath) => {
+  return fs.readFileSync(filePath);
+});
+
+// 写文件
+ipcMain.handle('write-file', (event, filePath, content) => {
+  try {
+    fs.writeFileSync(filePath, content, 'utf-8');
+    return { success: true };
+  } catch (error) {
+    console.error('写文件失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // 创建文件夹
 ipcMain.handle('create-folder', (event, parentPath, folderName) => {
   try {

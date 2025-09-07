@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>组件测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 20px;
+            background-color: #f6f8fa;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border-left: 4px solid #007bff;
+            background: #f8f9fa;
+        }
+    </style>
+</head>
+<body>
+    <h1>Markdown 组件测试页面</h1>
+    
+    <div class="test-section">
+        <h2>1. 库加载测试</h2>
+        <div id="library-tests"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>2. CSS 样式测试</h2>
+        <div id="css-tests"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>3. Markdown 解析测试</h2>
+        <div id="markdown-tests"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>4. 实际渲染测试</h2>
+        <div id="render-test"></div>
+    </div>
+    
+    <script src="./node_modules/marked/lib/marked.umd.js"></script>
+    <script src="./node_modules/highlight.js/lib/index.js"></script>
+    <script>
+        function addTestResult(containerId, testName, success, message) {
+            const container = document.getElementById(containerId);
+            const div = document.createElement('div');
+            div.className = 'test-result';
+            div.innerHTML = `
+                <strong>${testName}</strong>
+                <span class="status ${success ? 'success' : 'error'}">
+                    ${success ? '✓ 通过' : '✗ 失败'}
+                </span>
+                <br>
+                <small>${message}</small>
+            `;
+            container.appendChild(div);
+        }
+        
+        // 1. 库加载测试
+        function testLibraries() {
+            // 测试 marked
+            const markedLoaded = typeof marked !== 'undefined';
+            addTestResult('library-tests', 'marked 库加载', markedLoaded, 
+                markedLoaded ? `版本: ${marked.version || '未知'}` : '库未加载或加载失败');
+            
+            // 测试 hljs
+            const hljsLoaded = typeof hljs !== 'undefined';
+            addTestResult('library-tests', 'highlight.js 库加载', hljsLoaded,
+                hljsLoaded ? `版本: ${hljs.versionString || '未知'}` : '库未加载或加载失败');
+            
+            return { markedLoaded, hljsLoaded };
+        }
+        
+        // 2. CSS 样式测试
+        function testCSS() {
+            const links = document.querySelectorAll('link[rel="stylesheet"]');
+            let githubCss = false;
+            let hljsCss = false;
+            
+            links.forEach(link => {
+                if (link.href.includes('github-markdown')) githubCss = true;
+                if (link.href.includes('highlight.js')) hljsCss = true;
+            });
+            
+            addTestResult('css-tests', 'GitHub Markdown CSS', githubCss,
+                githubCss ? 'CSS 文件已加载' : 'CSS 文件未找到');
+            
+            addTestResult('css-tests', 'Highlight.js CSS', hljsCss,
+                hljsCss ? 'CSS 文件已加载' : 'CSS 文件未找到');
+            
+            return { githubCss, hljsCss };
+        }
+        
+        // 3. Markdown 解析测试
+        function testMarkdownParsing() {
+            if (typeof marked === 'undefined') {
+                addTestResult('markdown-tests', 'Markdown 解析', false, 'marked 库未加载');
+                return false;
+            }
+            
+            try {
+                // 配置 marked
+                marked.setOptions({
+                    gfm: true,
+                    breaks: true,
+                    headerIds: true,
+                    mangle: false,
+                    highlight: function (code, lang) {
+                        if (typeof hljs !== 'undefined') {
+                            try {
+                                if (lang && hljs.getLanguage(lang)) {
+                                    return hljs.highlight(code, { language: lang }).value;
+                                }
+                                return hljs.highlightAuto(code).value;
+                            } catch (e) {
+                                return code;
+                            }
+                        }
+                        return code;
+                    }
+                });
+                
+                // 测试基本解析
+                const testMd = '# 标题\n\n**粗体** *斜体*\n\n```js\nconsole.log("test");\n```';
+                const html = marked.parse(testMd);
+                
+                const hasH1 = html.includes('<h1');
+                const hasStrong = html.includes('<strong>');
+                const hasEm = html.includes('<em>');
+                const hasCode = html.includes('<code');
+                
+                addTestResult('markdown-tests', '基本 Markdown 解析', 
+                    hasH1 && hasStrong && hasEm, 
+                    `标题: ${hasH1}, 粗体: ${hasStrong}, 斜体: ${hasEm}, 代码: ${hasCode}`);
+                
+                // 测试表格解析
+                const tableMd = '| A | B |\n|---|---|\n| 1 | 2 |';
+                const tableHtml = marked.parse(tableMd);
+                const hasTable = tableHtml.includes('<table');
+                
+                addTestResult('markdown-tests', '表格解析', hasTable,
+                    hasTable ? '表格解析成功' : '表格解析失败');
+                
+                return true;
+            } catch (error) {
+                addTestResult('markdown-tests', 'Markdown 解析', false, 
+                    `解析错误: ${error.message}`);
+                return false;
+            }
+        }
+        
+        // 4. 实际渲染测试
+        function testRendering() {
+            const testMarkdown = `# 测试标题
+
+---
+
+| 列1 | 列2 |
+|-----|-----|
+| 数据1 | 数据2 |
+
+\`\`\`javascript
+function test() {
+    return 'hello';
+}
+\`\`\`
+
+- 列表项1
+- 列表项2
+
+> 引用块测试`;
+            
+            try {
+                if (typeof marked === 'undefined') {
+                    throw new Error('marked 库未加载');
+                }
+                
+                const html = marked.parse(testMarkdown);
+                
+                // 创建渲染容器
+                const container = document.createElement('div');
+                container.className = 'markdown-body';
+                container.style.cssText = `
+                    border: 1px solid #ddd;
+                    padding: 20px;
+                    margin: 10px 0;
+                    background: white;
+                    font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;
+                `;
+                container.innerHTML = html;
+                
+                document.getElementById('render-test').appendChild(container);
+                
+                addTestResult('render-test', '完整渲染测试', true,
+                    '上方显示了完整的 Markdown 渲染结果');
+                
+            } catch (error) {
+                addTestResult('render-test', '完整渲染测试', false,
+                    `渲染错误: ${error.message}`);
+            }
+        }
+        
+        // 运行所有测试
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('开始运行测试...');
+            
+            setTimeout(() => {
+                const libResults = testLibraries();
+                const cssResults = testCSS();
+                const parseResults = testMarkdownParsing();
+                testRendering();
+                
+                console.log('测试完成:', {
+                    libraries: libResults,
+                    css: cssResults,
+                    parsing: parseResults
+                });
+            }, 100);
+        });
+    </script>
+</body>
+</html>

@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <title>Electron Notes App</title>
+  <link rel="stylesheet" href="./node_modules/github-markdown-css/github-markdown.css">
+  <!-- highlight.js 库 -->
+  <script src="./node_modules/highlight.js/lib/common.js"></script>
   <style>
     :root {
       --bg-color: #ffffff;
@@ -299,7 +302,7 @@
     </div>
 
     <!-- 文件内容展示 -->
-    <div id="file-content">Select a file to view content</div>
+    <div id="file-content"></div>
     
     <!-- 设置页面 -->
     <div id="settings-page">
@@ -316,6 +319,10 @@
     </div>
   </div>
   <script src="./icons.js"></script>
+  <script src="./node_modules/docx-preview/dist/docx-preview.min.js"></script>
+  <script src="./node_modules/marked/lib/marked.umd.js"></script>
+  <script src="./node_modules/highlight.js/lib/index.js"></script>
+  <script src="./src/components/fileViewer.js"></script>
   <script src="./renderer.js"></script>
 </body>
 </html>

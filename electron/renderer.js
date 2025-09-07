@@ -4,6 +4,16 @@ const settingsPageEl = document.getElementById('settings-page');
 const settingsBtn = document.getElementById('settings-btn');
 const darkModeToggle = document.getElementById('dark-mode-toggle');
 
+// 初始化文件查看器
+let fileViewer = null;
+
+// 等待DOM加载完成后初始化文件查看器
+function initFileViewer() {
+  if (fileContentEl && typeof FileViewer !== 'undefined') {
+    fileViewer = new FileViewer(fileContentEl);
+  }
+}
+
 // 渲染SVG图标
 function renderIcons() {
   document.getElementById('file-icon').innerHTML = icons.file;
@@ -218,9 +228,10 @@ function renderTree(node, container, isRoot = false, depth = 0) {
       div.classList.add('selected');
       selectedItemPath = node.path;
       
-      // 显示文件内容
-      const content = await window.fsAPI.readFile(node.path);
-      fileContentEl.textContent = content;
+      // 使用文件查看器打开文件
+      if (fileViewer) {
+        await fileViewer.openFile(node.path);
+      }
     });
     container.appendChild(div);
   }
@@ -961,6 +972,9 @@ async function testPythonBackend() {
   
   // 渲染图标
   renderIcons();
+  
+  // 初始化文件查看器
+  initFileViewer();
   
   // 添加键盘事件监听器
   document.addEventListener('keydown', (e) => {

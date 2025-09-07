@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('fsAPI', {
   getFileTree: () => ipcRenderer.invoke('get-file-tree'),
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
+  readFileBuffer: (filePath) => ipcRenderer.invoke('read-file-buffer', filePath),
+  writeFile: (filePath, content) => ipcRenderer.invoke('write-file', filePath, content),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   getSettings: () => ipcRenderer.invoke('get-settings'),
   createFolder: (parentPath, folderName) => ipcRenderer.invoke('create-folder', parentPath, folderName),
