@@ -85,6 +85,7 @@
 # 克隆项目
 git clone <repository-url>
 cd LocalFS
+source .venv/bin/activate 
 ```
 
 2. **安装依赖**
@@ -104,7 +105,7 @@ python server/main.py
 
 # 启动 Electron 应用
 cd electron
-npm start
+npm run electron:de
 ```
 
 ### 打包发布
