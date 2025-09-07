@@ -50,6 +50,9 @@ class FileViewer {
         border-bottom: 2px solid var(--tree-border);
         background: var(--tree-bg);
         min-height: 35px;
+        margin-top:-9px;
+        margin-left: -10px;
+        margin-right: -10px;
       }
 
 
@@ -58,6 +61,8 @@ class FileViewer {
         display: flex;
         overflow-x: auto;
         scrollbar-width: thin;
+        padding: 0;
+        margin: 0;
       }
 
       .tab-item {
@@ -70,14 +75,17 @@ class FileViewer {
           color: var(--text-color);
           font-size: 13px;
           white-space: nowrap;
-          min-width: 120px;
-          max-width: 200px;
+          width: auto;
           position: relative;
           border-bottom: 2px solid transparent;
         }
 
         .tab-item:first-child {
           margin-left: 0;
+        }
+        
+        .tab-item:last-child {
+          border-right: none;
         }
 
       .tab-item:hover {
@@ -90,23 +98,23 @@ class FileViewer {
       }
 
       .tab-title {
-        flex: 1;
         overflow: hidden;
         text-overflow: ellipsis;
-        margin-right: 8px;
+        margin-right: 4px;
+        white-space: nowrap;
       }
 
       .tab-close {
-        width: 16px;
-        height: 16px;
+        width: 10px;
+        height: 10px;
         border-radius: 3px;
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 12px;
-        opacity: 0.7;
-        margin-left: 8px;
-        padding: 2px 6px;
+        opacity: 1.7;
+        margin-left: 0px;
+        padding: 0px 0px;
         font-weight: bold;
         color: var(--text-color);
         cursor: pointer;
@@ -139,6 +147,17 @@ class FileViewer {
       }
 
       .file-content.active {
+        display: flex;
+        flex-direction: column;
+      }
+      
+      /* Markdown编辑器特殊样式 - 移除padding确保完全占据高度 */
+      .file-content.markdown-content {
+        padding: 0;
+        overflow: hidden;
+      }
+      
+      .file-content.markdown-content.active {
         display: flex;
         flex-direction: column;
       }
@@ -218,6 +237,104 @@ class FileViewer {
         text-align: center;
         color: var(--text-color);
       }
+      
+      /* Markdown编辑器样式 */
+      .markdown-editor-container {
+          display: flex;
+          height: 100%;
+          width: 100%;
+          position: relative;
+          margin-left: 10px;
+          padding: 0;
+          box-sizing: border-box;
+        }
+      
+      .markdown-editor-pane,
+        .markdown-preview-pane {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          min-width: 200px;
+          position: relative;
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+      
+      .markdown-editor {
+        flex: 1;
+        border: none;
+        outline: none;
+        padding: 16px;
+        margin: 0;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 14px;
+        line-height: 1.5;
+        background: var(--bg-color);
+        color: var(--text-color);
+        resize: none;
+        tab-size: 2;
+        box-sizing: border-box;
+        overflow-y: auto;
+      }
+      
+      .markdown-preview {
+        flex: 1;
+        overflow-y: auto;
+        background: var(--bg-color);
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      
+      .markdown-preview .markdown-body {
+        padding: 16px;
+        margin: 0;
+      }
+      
+      /* 自定义滚动条样式 */
+      .markdown-editor::-webkit-scrollbar,
+      .markdown-preview::-webkit-scrollbar {
+        width: 2px;
+      }
+      
+      .markdown-editor::-webkit-scrollbar-track,
+      .markdown-preview::-webkit-scrollbar-track {
+        background: var(--tree-bg, #2d2d30);
+      }
+      
+      .markdown-editor::-webkit-scrollbar-thumb,
+      .markdown-preview::-webkit-scrollbar-thumb {
+        background: var(--tree-border, #464647);
+        border-radius: 3px;
+      }
+      
+      .markdown-editor::-webkit-scrollbar-thumb:hover,
+      .markdown-preview::-webkit-scrollbar-thumb:hover {
+        background: var(--accent-color, #007acc);
+      }
+      
+      .resize-handle {
+        width: 0px;
+        background: var(--tree-border);
+        cursor: col-resize;
+        position: relative;
+        flex-shrink: 0;
+      }
+      
+      .resize-handle:hover {
+        background: var(--accent-color, #007acc);
+      }
+      
+      .resize-handle::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -2px;
+        right: -2px;
+        bottom: 0;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -262,10 +379,10 @@ class FileViewer {
            break;
          case 'md':
          case 'markdown':
-           content = await this.loadMarkdownFile(filePath);
-           this.createHtmlViewer(tabId, content);
-           displayMode = 'html';
-           isEditable = false;
+           content = await window.fsAPI.readFile(filePath);
+           this.createMarkdownEditor(tabId, content, filePath);
+           displayMode = 'markdown';
+           isEditable = true;
            break;
         case 'docx':
         case 'doc':
@@ -394,6 +511,11 @@ class FileViewer {
   closeTab(tabId) {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
+
+    // 清理Markdown编辑器的自动保存计时器
+    if (tab.autoSaveTimer) {
+      clearTimeout(tab.autoSaveTimer);
+    }
 
     // 移除DOM元素
     tab.element.remove();
@@ -771,6 +893,207 @@ class FileViewer {
     tab.contentElement.appendChild(viewer);
   }
 
+  // 创建Markdown编辑器
+  createMarkdownEditor(tabId, content, filePath) {// 获取tab并设置内容
+    const tab = this.tabs.get(tabId);
+    if (!tab) return;
+    
+    // 为Markdown内容添加特殊类名
+    tab.contentElement.classList.add('markdown-content');
+
+    // 创建分屏布局
+    tab.contentElement.innerHTML = `
+      <div class="markdown-editor-container" id="container-${tabId}">
+        <div class="markdown-editor-pane" id="editor-pane-${tabId}">
+          <textarea class="markdown-editor" id="editor-${tabId}" spellcheck="false">${content}</textarea>
+        </div>
+        <div class="resize-handle" id="resize-handle-${tabId}"></div>
+        <div class="markdown-preview-pane" id="preview-pane-${tabId}">
+          <div class="markdown-preview" id="preview-${tabId}"></div>
+        </div>
+      </div>
+    `;
+
+    // 获取编辑器和预览区域
+    const editor = document.getElementById(`editor-${tabId}`);
+    const preview = document.getElementById(`preview-${tabId}`);
+
+    // 存储文件路径和原始内容
+    if (tab) {
+      tab.filePath = filePath;
+      tab.originalContent = content;
+      tab.editor = editor;
+      tab.preview = preview;
+      tab.isDirty = false;
+      tab.autoSaveTimer = null;
+    }
+
+    // 初始渲染预览
+    this.updateMarkdownPreview(tabId, content);
+
+    // 绑定编辑器事件
+    this.bindMarkdownEditorEvents(tabId);
+  }
+
+  // 更新Markdown预览
+  updateMarkdownPreview(tabId, content) {
+    const preview = document.getElementById(`preview-${tabId}`);
+    if (!preview) return;
+
+    const html = this.parseMarkdown(content);
+    preview.innerHTML = html;
+  }
+
+  // 绑定Markdown编辑器事件
+  bindMarkdownEditorEvents(tabId) {
+    const editor = document.getElementById(`editor-${tabId}`);
+    if (!editor) return;
+
+    const tab = this.tabs.get(tabId);
+    if (!tab) return;
+
+    // 实时预览更新
+    editor.addEventListener('input', () => {
+      const content = editor.value;
+      this.updateMarkdownPreview(tabId, content);
+      
+      // 标记为已修改
+      if (content !== tab.originalContent) {
+        this.markTabAsDirty(tabId);
+        tab.isDirty = true;
+      } else {
+        tab.isDirty = false;
+        this.updateTabTitle(tabId);
+      }
+
+      // 重置自动保存计时器
+      this.resetAutoSaveTimer(tabId);
+    });
+
+    // 点击行进入编辑模式（编辑器默认就是编辑模式）
+    editor.addEventListener('click', () => {
+      editor.focus();
+    });
+
+    // 添加拖拽调整大小功能
+    this.initResizeHandle(tabId);
+  }
+
+  // 初始化拖拽调整大小功能
+  initResizeHandle(tabId) {
+    const resizeHandle = document.getElementById(`resize-handle-${tabId}`);
+    const container = document.getElementById(`container-${tabId}`);
+    const editorPane = document.getElementById(`editor-pane-${tabId}`);
+    const previewPane = document.getElementById(`preview-pane-${tabId}`);
+    
+    if (!resizeHandle || !container || !editorPane || !previewPane) return;
+    
+    let isResizing = false;
+    let startX = 0;
+    let startEditorWidth = 0;
+    
+    resizeHandle.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      startX = e.clientX;
+      startEditorWidth = editorPane.offsetWidth;
+      
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      
+      e.preventDefault();
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+      if (!isResizing) return;
+      
+      const deltaX = e.clientX - startX;
+      const containerWidth = container.offsetWidth;
+      const newEditorWidth = startEditorWidth + deltaX;
+      
+      // 限制最小和最大宽度
+      const minWidth = 200;
+      const maxWidth = containerWidth - minWidth - 4; // 4px for resize handle
+      
+      if (newEditorWidth >= minWidth && newEditorWidth <= maxWidth) {
+        const editorPercent = (newEditorWidth / containerWidth) * 100;
+        const previewPercent = ((containerWidth - newEditorWidth - 4) / containerWidth) * 100;
+        
+        editorPane.style.flex = `0 0 ${editorPercent}%`;
+        previewPane.style.flex = `0 0 ${previewPercent}%`;
+      }
+      
+      e.preventDefault();
+    });
+    
+    document.addEventListener('mouseup', () => {
+      if (isResizing) {
+        isResizing = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    });
+  }
+
+  // 重置自动保存计时器
+  resetAutoSaveTimer(tabId) {
+    const tab = this.tabs.get(tabId);
+    if (!tab) return;
+
+    // 清除现有计时器
+    if (tab.autoSaveTimer) {
+      clearTimeout(tab.autoSaveTimer);
+    }
+
+    // 设置新的5秒自动保存计时器
+    tab.autoSaveTimer = setTimeout(() => {
+      if (tab.isDirty) {
+        this.saveMarkdownFile(tabId);
+      }
+    }, 5000);
+  }
+
+  // 保存Markdown文件
+  async saveMarkdownFile(tabId) {
+    const tab = this.tabs.get(tabId);
+    if (!tab || !tab.editor || !tab.filePath) return;
+
+    try {
+      const content = tab.editor.value;
+      await window.fsAPI.writeFile(tab.filePath, content);
+      
+      // 更新原始内容和状态
+      tab.originalContent = content;
+      tab.isDirty = false;
+      this.updateTabTitle(tabId);
+      
+      // 清除自动保存计时器
+      if (tab.autoSaveTimer) {
+        clearTimeout(tab.autoSaveTimer);
+        tab.autoSaveTimer = null;
+      }
+
+      console.log('Markdown文件保存成功:', tab.filePath);
+    } catch (error) {
+      console.error('保存Markdown文件失败:', error);
+      alert(`保存文件失败: ${error.message}`);
+    }
+  }
+
+  // 更新标签标题
+  updateTabTitle(tabId) {
+    const tab = this.tabs.get(tabId);
+    if (!tab) return;
+
+    const tabElement = document.querySelector(`[data-tab-id="${tabId}"]`);
+    if (tabElement) {
+      const titleElement = tabElement.querySelector('.tab-title');
+      if (titleElement) {
+        const fileName = tab.fileName || 'Untitled';
+        titleElement.textContent = tab.isDirty ? `${fileName} *` : fileName;
+      }
+    }
+  }
+
   // 创建错误视图
   createErrorView(tabId, message) {
     const tab = this.tabs.get(tabId);
@@ -790,6 +1113,13 @@ class FileViewer {
     const activeTab = this.getActiveTab();
     if (!activeTab || !activeTab.isEditable) return;
 
+    // 处理Markdown文件
+    if (activeTab.displayMode === 'markdown') {
+      await this.saveMarkdownFile(this.activeTabId);
+      return;
+    }
+
+    // 处理普通文本文件
     const textarea = activeTab.contentElement.querySelector('.txt-editor');
     if (!textarea) return;
 
