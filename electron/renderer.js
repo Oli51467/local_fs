@@ -104,8 +104,29 @@ function getFileIcon(fileName, isFolder = false, isExpanded = false) {
     return isExpanded ? window.icons.folderOpen : window.icons.folder;
   }
   
-  // 所有文件都使用统一的文件图标
-  return window.icons.file;
+  // 根据文件扩展名返回对应的图标
+  const ext = fileName.toLowerCase().split('.').pop();
+  
+  switch (ext) {
+    case 'txt':
+      return '<img src="./dist/assets/txt.png" style="width: 12px; height: 12px;" />';
+    case 'html':
+    case 'htm':
+      return '<img src="./dist/assets/html.png" style="width: 12px; height: 12px;" />';
+    case 'md':
+    case 'markdown':
+      return '<img src="./dist/assets/markdown.png" style="width: 12px; height: 12px;" />';
+    case 'pdf':
+      return '<img src="./dist/assets/pdf.png" style="width: 12px; height: 12px;" />';
+    case 'docx':
+    case 'doc':
+      return '<img src="./dist/assets/docx.png" style="width: 12px; height: 12px;" />';
+    case 'json':
+      return '<img src="./dist/assets/json.png" style="width: 12px; height: 12px;" />';
+    default:
+      // 其他文件类型使用默认文件图标
+      return window.icons.file;
+  }
 }
 
 // 渲染文件树（递归）
