@@ -161,6 +161,28 @@ class FileViewer {
         display: flex;
         flex-direction: column;
       }
+      
+      /* TXT和JSON文件特殊样式 - 移除padding确保完全占据宽度 */
+      .file-content.txt-content {
+        padding: 0;
+        overflow: hidden;
+      }
+      
+      .file-content.txt-content.active {
+        display: flex;
+        flex-direction: column;
+      }
+      
+      /* DOCX文件特殊样式 - 移除padding确保完全占据宽度 */
+      .file-content.docx-content {
+        padding: 0;
+        overflow: hidden;
+      }
+      
+      .file-content.docx-content.active {
+        display: flex;
+        flex-direction: column;
+      }
 
       .file-content-wrapper {
         height: 100%;
@@ -203,27 +225,97 @@ class FileViewer {
         background: var(--bg-color);
         color: var(--text-color);
         resize: none;
-        padding: 10px;
+        padding: 0;
+        margin: 0;
         box-sizing: border-box;
+      }
+      
+      /* 文本编辑器滚动条样式 */
+      .txt-editor::-webkit-scrollbar {
+        width: 3px;
+      }
+      
+      .txt-editor::-webkit-scrollbar-track {
+        background: var(--tree-bg);
+      }
+      
+      .txt-editor::-webkit-scrollbar-thumb {
+        background: var(--tree-border);
+        border-radius: 1.5px;
+      }
+      
+      .txt-editor::-webkit-scrollbar-thumb:hover {
+        background: var(--text-color);
       }
 
       .html-viewer {
         width: 100%;
         height: 100%;
-        overflow: auto;
+        overflow: hidden;
+        padding: 0;
         background: var(--bg-color);
         color: var(--text-color);
+      }
+
+      .html-viewer iframe {
+        background: var(--bg-color) !important;
+        color: var(--text-color) !important;
       }
 
       .word-viewer {
         width: 100%;
         height: 100%;
         overflow: auto;
-        padding: 20px;
-        background: white;
-        color: black;
+        padding: 0;
+        margin: 0;
+        background: var(--bg-color);
+        color: var(--text-color);
         font-family: 'Times New Roman', serif;
         line-height: 1.6;
+      }
+      
+      /* 确保docx内容适配深色模式 */
+      .word-viewer * {
+        background-color: transparent !important;
+        color: var(--text-color) !important;
+      }
+      
+      .word-viewer p, .word-viewer div, .word-viewer span {
+        color: var(--text-color) !important;
+      }
+      
+      .word-viewer h1, .word-viewer h2, .word-viewer h3, .word-viewer h4, .word-viewer h5, .word-viewer h6 {
+        color: var(--text-color) !important;
+      }
+      
+      .word-viewer table {
+        border-collapse: collapse;
+        border: 1px solid var(--tree-border) !important;
+      }
+      
+      .word-viewer th, .word-viewer td {
+        border: 1px solid var(--tree-border) !important;
+        padding: 8px 12px;
+        background: var(--bg-color) !important;
+        color: var(--text-color) !important;
+      }
+      
+      /* Word查看器滚动条样式 */
+      .word-viewer::-webkit-scrollbar {
+        width: 3px;
+      }
+      
+      .word-viewer::-webkit-scrollbar-track {
+        background: var(--tree-bg);
+      }
+      
+      .word-viewer::-webkit-scrollbar-thumb {
+        background: var(--tree-border);
+        border-radius: 1.5px;
+      }
+      
+      .word-viewer::-webkit-scrollbar-thumb:hover {
+        background: var(--text-color);
       }
 
       .error-message {
@@ -283,6 +375,7 @@ class FileViewer {
         flex: 1;
         overflow-y: auto;
         background: var(--bg-color);
+        color: var(--text-color);
         box-sizing: border-box;
         margin: 0;
         padding: 0;
@@ -291,6 +384,64 @@ class FileViewer {
       .markdown-preview .markdown-body {
         padding: 16px;
         margin: 0;
+        background: var(--bg-color) !important;
+        color: var(--text-color) !important;
+      }
+      
+      /* 确保Markdown预览内容适配深色模式 */
+      .markdown-preview * {
+        background-color: transparent !important;
+        color: var(--text-color) !important;
+      }
+      
+      .markdown-preview h1, .markdown-preview h2, .markdown-preview h3,
+      .markdown-preview h4, .markdown-preview h5, .markdown-preview h6 {
+        color: var(--text-color) !important;
+        border-bottom-color: var(--tree-border) !important;
+      }
+      
+      .markdown-preview code {
+        background: var(--tree-bg) !important;
+        color: var(--text-color) !important;
+        padding: 2px 4px;
+        border-radius: 3px;
+      }
+      
+      .markdown-preview pre {
+        background: var(--tree-bg) !important;
+        color: var(--text-color) !important;
+        border: 1px solid var(--tree-border) !important;
+        border-radius: 5px;
+        padding: 10px;
+      }
+      
+      .markdown-preview blockquote {
+        border-left: 4px solid var(--tree-border) !important;
+        background: var(--tree-bg) !important;
+        color: var(--text-color) !important;
+        padding: 10px 15px;
+        margin: 10px 0;
+      }
+      
+      .markdown-preview a {
+        color: #007acc !important;
+      }
+      
+      .markdown-preview table {
+        border-collapse: collapse;
+        border: 1px solid var(--tree-border) !important;
+      }
+      
+      .markdown-preview th, .markdown-preview td {
+        border: 1px solid var(--tree-border) !important;
+        padding: 8px 12px;
+        background: var(--bg-color) !important;
+        color: var(--text-color) !important;
+      }
+      
+      .markdown-preview th {
+        background: var(--tree-bg) !important;
+        font-weight: bold;
       }
       
       /* 自定义滚动条样式 */
@@ -335,6 +486,76 @@ class FileViewer {
         right: -2px;
         bottom: 0;
       }
+      
+      /* Docx编辑器样式 */
+      .docx-content {
+        padding: 0 !important;
+        height: 100% !important;
+        width: 100% !important;
+        overflow: hidden;
+        background: white !important;
+        margin: 0 !important;
+        position: relative;
+      }
+
+      .docx-preview-full {
+        height: 100% !important;
+        width: 100% !important;
+        overflow: auto;
+        background: white !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+      }
+
+      .docx-preview {
+        height: 100% !important;
+        width: 100% !important;
+        overflow-y: auto;
+        background: white !important;
+        color: black;
+        margin: 0 !important;
+        padding: 0 !important;
+        box-sizing: border-box;
+      }
+
+      /* 强制docx内容占满整个区域 */
+      .docx-preview .docx-wrapper,
+      .docx-preview-content .docx-wrapper,
+      .docx-preview > div,
+      .docx-preview-content > div {
+        width: 100% !important;
+        height: auto !important;
+        min-height: 100% !important;
+        margin: 0 !important;
+        padding: 20px !important;
+        background: white !important;
+        box-sizing: border-box !important;
+      }
+
+      /* 移除所有可能的灰色背景 */
+      .docx-preview *,
+      .docx-preview-content *,
+      .docx-content * {
+        background-color: white !important;
+        max-width: 100% !important;
+      }
+
+      /* 确保文档页面样式 */
+      .docx-preview section,
+      .docx-preview-content section {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 20px !important;
+        background: white !important;
+        box-shadow: none !important;
+      }
+
+
     `;
     document.head.appendChild(style);
   }
@@ -385,9 +606,20 @@ class FileViewer {
            isEditable = true;
            break;
         case 'docx':
+          content = await this.loadWordFile(filePath);
+          if (content && content.isEditable) {
+            this.createDocxEditor(tabId, content, filePath);
+            displayMode = 'docx';
+            isEditable = true;
+          } else {
+            this.createWordViewer(tabId, content.content || content);
+            displayMode = 'html';
+            isEditable = false;
+          }
+          break;
         case 'doc':
           content = await this.loadWordFile(filePath);
-          this.createWordViewer(tabId, content);
+          this.createWordViewer(tabId, content.content || content);
           displayMode = 'html';
           isEditable = false;
           break;
@@ -790,7 +1022,8 @@ class FileViewer {
       const fileBuffer = await window.fsAPI.readFileBuffer(filePath);
       
       // 检查docx-preview是否可用
-      if (typeof docx !== 'undefined') {
+      console.log('检查docx对象:', typeof window.docx, window.docx);
+      if (typeof window.docx !== 'undefined' && window.docx.renderAsync) {
         // 创建一个临时容器来渲染Word文档
         const tempContainer = document.createElement('div');
         tempContainer.style.padding = '20px';
@@ -798,16 +1031,21 @@ class FileViewer {
         tempContainer.style.color = 'black';
         tempContainer.style.fontFamily = 'Times New Roman, serif';
         tempContainer.style.lineHeight = '1.6';
+        tempContainer.style.maxWidth = '100%';
+        tempContainer.style.wordWrap = 'break-word';
         
         try {
+          // 确保fileBuffer是Uint8Array格式
+          const uint8Array = new Uint8Array(fileBuffer);
+          
           // 使用docx-preview渲染
-          await docx.renderAsync(fileBuffer, tempContainer, null, {
+          await window.docx.renderAsync(uint8Array, tempContainer, null, {
             className: 'docx-wrapper',
             inWrapper: true,
             ignoreWidth: false,
             ignoreHeight: false,
             ignoreFonts: false,
-            breakPages: true,
+            breakPages: false,
             ignoreLastRenderedPageBreak: true,
             experimental: false,
             trimXmlDeclaration: true,
@@ -816,31 +1054,48 @@ class FileViewer {
             showChanges: false,
             debug: false
           });
-          return tempContainer.outerHTML;
+          
+          return {
+            content: tempContainer.outerHTML,
+            rawBuffer: uint8Array,
+            isEditable: true
+          };
         } catch (renderError) {
           console.error('docx渲染失败:', renderError);
-          return `<div style="padding: 20px; color: #e74c3c;">
-            <h3>Word文档渲染失败</h3>
-            <p>错误信息: ${renderError.message}</p>
-            <p>文件路径: ${filePath}</p>
-            <p>请确保这是一个有效的.docx文件</p>
-          </div>`;
+          return {
+            content: `<div style="padding: 20px; color: #e74c3c;">
+              <h3>Word文档渲染失败</h3>
+              <p>错误信息: ${renderError.message}</p>
+              <p>文件路径: ${filePath}</p>
+              <p>请确保这是一个有效的.docx文件</p>
+            </div>`,
+            rawBuffer: null,
+            isEditable: false
+          };
         }
       } else {
-        return `<div style="padding: 20px; color: #f39c12;">
-          <h3>Word文件查看功能不可用</h3>
-          <p>docx-preview库未正确加载</p>
-          <p>文件路径: ${filePath}</p>
-          <p>请检查库文件是否正确引入</p>
-        </div>`;
+        return {
+          content: `<div style="padding: 20px; color: #f39c12;">
+            <h3>Word文件查看功能不可用</h3>
+            <p>docx-preview库未正确加载</p>
+            <p>文件路径: ${filePath}</p>
+            <p>请检查库文件是否正确引入</p>
+          </div>`,
+          rawBuffer: null,
+          isEditable: false
+        };
       }
     } catch (error) {
       console.error('加载Word文件失败:', error);
-      return `<div style="padding: 20px; color: #e74c3c;">
-        <h3>加载Word文件失败</h3>
-        <p>错误信息: ${error.message}</p>
-        <p>文件路径: ${filePath}</p>
-      </div>`;
+      return {
+        content: `<div style="padding: 20px; color: #e74c3c;">
+          <h3>加载Word文件失败</h3>
+          <p>错误信息: ${error.message}</p>
+          <p>文件路径: ${filePath}</p>
+        </div>`,
+        rawBuffer: null,
+        isEditable: false
+      };
     }
   }
 
@@ -848,6 +1103,14 @@ class FileViewer {
   createTextEditor(tabId, content, fileType) {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
+
+    // 为TXT和JSON文件添加特殊类名
+    tab.contentElement.classList.add('txt-content');
+
+    // 清空容器并移除padding和margin
+    tab.contentElement.innerHTML = '';
+    tab.contentElement.style.padding = '0';
+    tab.contentElement.style.margin = '0';
 
     const textarea = document.createElement('textarea');
     textarea.className = 'txt-editor';
@@ -889,7 +1152,80 @@ class FileViewer {
     iframe.onload = () => {
       const doc = iframe.contentDocument || iframe.contentWindow.document;
       doc.open();
-      doc.write(content);
+      
+      // 检查当前是否为深色模式
+      const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
+      
+      // 为HTML内容添加深色模式样式
+      const styledContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body {
+              background-color: ${isDarkMode ? '#1e1e1e' : '#ffffff'} !important;
+              color: ${isDarkMode ? '#d4d4d4' : '#000000'} !important;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              margin: 0;
+              padding: 20px;
+              line-height: 1.6;
+              overflow-y: auto;
+              height: 100vh;
+              box-sizing: border-box;
+            }
+            /* 自定义滚动条样式 */
+            body::-webkit-scrollbar {
+              width: 3px;
+            }
+            body::-webkit-scrollbar-track {
+              background: ${isDarkMode ? '#2d2d2d' : '#f1f1f1'};
+            }
+            body::-webkit-scrollbar-thumb {
+              background: ${isDarkMode ? '#555' : '#888'};
+              border-radius: 1.5px;
+            }
+            body::-webkit-scrollbar-thumb:hover {
+              background: ${isDarkMode ? '#777' : '#555'};
+            }
+            * {
+              background-color: transparent !important;
+              color: ${isDarkMode ? '#d4d4d4' : '#000000'} !important;
+            }
+            h1, h2, h3, h4, h5, h6 {
+              color: ${isDarkMode ? '#ffffff' : '#000000'} !important;
+            }
+            a {
+              color: ${isDarkMode ? '#4fc3f7' : '#0066cc'} !important;
+            }
+            pre, code {
+              background-color: ${isDarkMode ? '#2d2d2d' : '#f5f5f5'} !important;
+              color: ${isDarkMode ? '#d4d4d4' : '#000000'} !important;
+              padding: 4px 8px;
+              border-radius: 4px;
+            }
+            table {
+              border-collapse: collapse;
+              border: 1px solid ${isDarkMode ? '#404040' : '#cccccc'} !important;
+            }
+            th, td {
+              border: 1px solid ${isDarkMode ? '#404040' : '#cccccc'} !important;
+              padding: 8px 12px;
+              background-color: ${isDarkMode ? '#1e1e1e' : '#ffffff'} !important;
+            }
+            th {
+              background-color: ${isDarkMode ? '#2d2d2d' : '#f5f5f5'} !important;
+              font-weight: bold;
+            }
+          </style>
+        </head>
+        <body>
+          ${content}
+        </body>
+        </html>
+      `;
+      
+      doc.write(styledContent);
       doc.close();
     };
     
@@ -902,11 +1238,59 @@ class FileViewer {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
 
+    // 为DOCX文件添加特殊类名
+    tab.contentElement.classList.add('docx-content');
+
+    // 清空容器并移除padding和margin
+    tab.contentElement.innerHTML = '';
+    tab.contentElement.style.padding = '0';
+    tab.contentElement.style.margin = '0';
+
     const viewer = document.createElement('div');
     viewer.className = 'word-viewer';
     viewer.innerHTML = content;
 
     tab.contentElement.appendChild(viewer);
+  }
+
+  // 创建Docx编辑器
+  createDocxEditor(tabId, wordData, filePath) {
+    const tab = this.tabs.get(tabId);
+    if (!tab) return;
+
+    // 为Docx内容添加特殊类名
+    tab.contentElement.classList.add('docx-content');
+
+    // 创建简化的预览布局
+    tab.contentElement.innerHTML = `
+      <div class="docx-preview-full" id="docx-preview-full-${tabId}">
+        <div class="docx-preview" id="docx-preview-${tabId}"></div>
+      </div>
+    `;
+
+    // 获取预览元素
+    const preview = document.getElementById(`docx-preview-${tabId}`);
+
+    // 存储数据到tab
+    if (tab) {
+      tab.filePath = filePath;
+      tab.wordData = wordData;
+      tab.isDirty = false;
+      tab.isEditMode = false;
+      tab.preview = preview;
+      tab.originalContent = '';
+    }
+
+    // 初始渲染预览
+    if (wordData && wordData.content) {
+      preview.innerHTML = wordData.content;
+    }
+  }
+
+  // 从docx预览中提取文本内容
+  extractTextFromDocx(previewElement) {
+    const textContent = previewElement.textContent || previewElement.innerText || '';
+    return textContent.trim();
   }
 
   // 创建Markdown编辑器
@@ -1095,6 +1479,53 @@ class FileViewer {
     }
   }
 
+  // 保存Docx文件
+  async saveDocxFile(tabId) {
+    const tab = this.tabs.get(tabId);
+    if (!tab || !tab.textEditor || !tab.filePath) return;
+
+    try {
+      const textContent = tab.textEditor.value;
+      
+      // 注意：这里是简化的保存方式，只保存文本内容
+      // 实际的docx文件保存需要更复杂的处理来保持格式
+      // 这里我们创建一个简单的文本文件作为备份
+      const backupPath = tab.filePath.replace('.docx', '_backup.txt');
+      await window.fsAPI.writeFile(backupPath, textContent);
+      
+      // 更新状态
+      tab.originalContent = textContent;
+      tab.isDirty = false;
+      
+      // 更新tab标题
+      this.updateTabTitle(tabId);
+      
+      // 禁用保存按钮
+      const saveBtn = document.getElementById(`docx-save-btn-${tabId}`);
+      if (saveBtn) {
+        saveBtn.disabled = true;
+      }
+      
+      // 显示保存成功提示
+      const status = document.getElementById(`docx-status-${tabId}`);
+      if (status) {
+        const originalText = status.textContent;
+        status.textContent = '已保存';
+        status.style.color = '#28a745';
+        setTimeout(() => {
+          status.textContent = originalText;
+          status.style.color = '';
+        }, 2000);
+      }
+      
+      console.log('Docx文件内容已保存为文本备份:', backupPath);
+      alert(`文档内容已保存为文本备份：${backupPath}\n\n注意：由于docx格式的复杂性，当前版本只能保存文本内容。`);
+    } catch (error) {
+      console.error('保存Docx文件失败:', error);
+      alert('保存文件失败: ' + error.message);
+    }
+  }
+
   // 更新标签标题
   updateTabTitle(tabId) {
     const tab = this.tabs.get(tabId);
@@ -1129,26 +1560,27 @@ class FileViewer {
     const activeTab = this.getActiveTab();
     if (!activeTab || !activeTab.isEditable) return;
 
-    // 处理Markdown文件
-    if (activeTab.displayMode === 'markdown') {
-      await this.saveMarkdownFile(this.activeTabId);
-      return;
-    }
-
-    // 处理普通文本文件
-    const textarea = activeTab.contentElement.querySelector('.txt-editor');
-    if (!textarea) return;
-
     try {
-      await window.fsAPI.writeFile(activeTab.filePath, textarea.value);
-      // 移除修改标记
-      const tabTitle = activeTab.element.querySelector('.tab-title');
-      if (tabTitle.textContent.endsWith(' *')) {
-        tabTitle.textContent = activeTab.fileName;
+      if (activeTab.displayMode === 'markdown') {
+        await this.saveMarkdownFile(this.activeTabId);
+      } else if (activeTab.displayMode === 'docx') {
+        await this.saveDocxFile(this.activeTabId);
+      } else if (activeTab.displayMode === 'text') {
+        // 处理普通文本文件
+        const textarea = activeTab.contentElement.querySelector('.txt-editor');
+        if (textarea && activeTab.filePath) {
+          await window.fsAPI.writeFile(activeTab.filePath, textarea.value);
+          // 移除修改标记
+          const tabTitle = activeTab.element.querySelector('.tab-title');
+          if (tabTitle.textContent.endsWith(' *')) {
+            tabTitle.textContent = activeTab.fileName;
+          }
+          console.log('文件已保存');
+        }
       }
-      console.log('文件已保存');
     } catch (error) {
       console.error('保存文件失败:', error);
+      alert('保存文件失败: ' + error.message);
     }
   }
 

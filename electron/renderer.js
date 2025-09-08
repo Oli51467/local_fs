@@ -367,6 +367,20 @@ function createInlineInput(container, parentPath, isFolder = false) {
   }
   
   contentDiv.appendChild(input);
+  
+  // 如果是文件且有扩展名，显示扩展名
+  if (!isFolder && fileExtension) {
+    const extensionSpan = document.createElement('span');
+    extensionSpan.textContent = fileExtension;
+    extensionSpan.style.cssText = `
+      color: ${textColor};
+      font-size: 11px;
+      opacity: 0.7;
+      margin-left: 2px;
+    `;
+    contentDiv.appendChild(extensionSpan);
+  }
+  
   inputContainer.appendChild(contentDiv);
   
   // 插入到容器中
@@ -539,9 +553,19 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
   const paddingLeft = element.style.paddingLeft || '0px';
   const depth = parseInt(paddingLeft) / 12;
   
+  // 分离文件名和扩展名（仅对文件有效）
+  let nameWithoutExt = currentName;
+  let fileExtension = '';
+  
+  if (!isFolder && currentName.includes('.')) {
+    const lastDotIndex = currentName.lastIndexOf('.');
+    nameWithoutExt = currentName.substring(0, lastDotIndex);
+    fileExtension = currentName.substring(lastDotIndex);
+  }
+  
   const input = document.createElement('input');
   input.type = 'text';
-  input.value = currentName;
+  input.value = nameWithoutExt; // 只显示文件名部分，不包含扩展名
   input.className = 'inline-input';
   
   // 根据当前主题设置样式
@@ -617,16 +641,19 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
   
   // 添加标志位防止重复处理
   let isProcessing = false;
+  let isCompleted = false;
   
   // 处理重命名完成
-  const handleComplete = async () => {
-    if (isProcessing) return;
+  const handleComplete = async (source = 'unknown') => {
+    if (isProcessing || isCompleted) return;
     isProcessing = true;
     
-    const newName = input.value.trim();
+    const inputValue = input.value.trim();
+    // 构建完整的新名称（文件需要加上扩展名）
+    const newName = isFolder ? inputValue : inputValue + fileExtension;
     
     // 如果名称为空或与原名称相同，直接取消
-    if (!newName || newName === currentName) {
+    if (!inputValue || newName === currentName) {
       handleCancel();
       return;
     }
@@ -634,48 +661,67 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
     try {
        const result = await window.fsAPI.renameItem(itemPath, newName);
        if (result.success) {
+         isCompleted = true;
          await loadFileTree();
          // 重新选中重命名后的项目
          selectedItemPath = result.newPath;
          // 清理
-         inputContainer.remove();
-         element.style.display = '';
+         cleanup();
        } else {
-         // 重命名失败时立即清理输入框
-         inputContainer.remove();
-         element.style.display = '';
-         return;
+         // 重命名失败时显示错误并重置状态
+         alert(`重命名失败: ${result.error}`);
+         isProcessing = false;
+         input.focus();
+         input.select();
        }
      } catch (error) {
        console.error('重命名失败:', error);
-       // 重命名失败时立即清理输入框
-       inputContainer.remove();
-       element.style.display = '';
-       return;
+       alert(`重命名失败: ${error.message}`);
+       isProcessing = false;
+       input.focus();
+       input.select();
      }
   };
   
   // 处理取消
   const handleCancel = () => {
-    if (isProcessing) return;
-    isProcessing = true;
-    inputContainer.remove();
-    element.style.display = '';
+    if (isCompleted) return;
+    isCompleted = true;
+    cleanup();
+  };
+  
+  // 清理函数
+  const cleanup = () => {
+    if (inputContainer && inputContainer.parentElement) {
+      inputContainer.remove();
+    }
+    if (element) {
+      element.style.display = '';
+    }
   };
   
   // 回车确认，ESC取消
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      handleComplete();
+      e.stopPropagation();
+      handleComplete('keydown');
     } else if (e.key === 'Escape') {
       e.preventDefault();
+      e.stopPropagation();
       handleCancel();
     }
   });
   
-  // 失去焦点确认
-  input.addEventListener('blur', handleComplete);
+  // 失去焦点时不自动确认，避免与回车事件冲突
+  input.addEventListener('blur', (e) => {
+    // 延迟处理，给回车事件优先权
+    setTimeout(() => {
+      if (!isCompleted && !isProcessing) {
+        handleComplete('blur');
+      }
+    }, 100);
+  });
 }
 
 // 加载文件树加载并渲染文件树
@@ -908,7 +954,19 @@ function createDeleteModal(itemPath, isFolder) {
       if (result.success) {
         await loadFileTree(); // 刷新文件树
         selectedItemPath = null; // 清除选中状态
-        fileContentEl.textContent = 'Select a file to view content'; // 清空内容显示
+        
+        // 检查删除的文件是否在FileViewer中打开
+        if (fileViewer && fileViewer.tabs.has(itemPath)) {
+          fileViewer.closeTab(itemPath);
+        }
+        
+        // 如果没有打开的标签页，显示欢迎消息
+        if (fileViewer && fileViewer.tabs.size === 0) {
+          const welcomeMessage = fileViewer.contentContainer.querySelector('.welcome-message');
+          if (welcomeMessage) {
+            welcomeMessage.style.display = 'flex';
+          }
+        }
       } else {
         alert(`删除失败: ${result.error}`);
       }
