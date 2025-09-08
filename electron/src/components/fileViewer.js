@@ -870,14 +870,30 @@ class FileViewer {
     const tab = this.tabs.get(tabId);
     if (!tab) return;
 
-    // 清空容器
+    // 清空容器并移除padding
     tab.contentElement.innerHTML = '';
+    tab.contentElement.style.padding = '0';
     
     // 创建查看器
     const viewer = document.createElement('div');
     viewer.className = 'html-viewer';
-    viewer.innerHTML = content;
-
+    
+    // 创建iframe来隔离HTML内容，防止影响主应用布局
+    const iframe = document.createElement('iframe');
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = 'none';
+    iframe.style.background = 'var(--bg-color)';
+    
+    // 设置iframe内容
+    iframe.onload = () => {
+      const doc = iframe.contentDocument || iframe.contentWindow.document;
+      doc.open();
+      doc.write(content);
+      doc.close();
+    };
+    
+    viewer.appendChild(iframe);
     tab.contentElement.appendChild(viewer);
   }
 

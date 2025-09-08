@@ -105,7 +105,7 @@ python server/main.py
 
 # 启动 Electron 应用
 cd electron
-npm run electron:de
+npm run electron:dev
 ```
 
 ### 打包发布
