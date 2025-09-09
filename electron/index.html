@@ -84,118 +84,7 @@
       height: 20px;
     }
 
-    /* 文件树栏 */
-    #file-tree-container {
-      width: 250px;
-      min-width: 220px;
-      max-width: 500px;
-      background: var(--tree-bg);
-      display: flex;
-      flex-direction: column;
-      border-right: 1px solid var(--tree-border);
-      position: relative;
-    }
-    
-    /* 拖拽调整宽度的把手 */
-    #file-tree-resizer {
-      position: absolute;
-      right: -5px;
-      top: 0;
-      width: 10px;
-      height: 100%;
-      cursor: ew-resize;
-      z-index: 10;
-    }
-
-    /* 顶部工具栏 */
-    #file-tree-header {
-      height: 40px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0 10px;
-      border-bottom: 1px solid var(--tree-border);
-      font-weight: bold;
-    }
-    
-    #resource-title {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 150px;
-      display: flex;
-      align-items: center;
-    }
-
-    #file-tree-header > div {
-      display: flex;
-      flex-direction: row;
-      align-items: center;
-    }
-    
-    #file-tree-header button {
-      background: none;
-      border: none;
-      cursor: pointer;
-      width: 24px;
-      height: 24px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-left: 2px;
-      border-radius: 3px;
-      transition: background-color 0.2s;
-    }
-    
-    #file-tree-header button:hover {
-      background-color: rgba(0, 0, 0, 0.1);
-    }
-    
-    .dark-mode #file-tree-header button:hover {
-      background-color: rgba(255, 255, 255, 0.1);
-    }
-    
-    #file-tree-header button svg {
-      width: 16px;
-      height: 16px;
-      color: var(--text-color);
-      margin-top: 4px;
-    }
-
-    /* 文件树 */
-    #file-tree {
-      flex: 1;
-      overflow-y: auto;
-      padding: 5px 10px;
-    }
-
-    .file-item {
-      cursor: pointer;
-      padding: 3px 5px;
-      border-radius: 3px;
-      font-size: 13px;
-      display: flex;
-      align-items: center;
-      user-select: none;
-    }
-
-    .file-item:hover {
-      background: var(--tree-hover);
-    }
-    
-    .file-item.selected {
-      background-color: rgba(128, 128, 128, 0.2);
-    }
-    
-    .folder-arrow {
-      cursor: pointer;
-      transition: transform 0.2s ease;
-      margin-right: 2px;
-    }
-    
-    .folder-arrow:hover {
-      color: #007acc;
-    }
+    /* 资源管理器相关样式已移至 src/styles/explorer.css */
 
     /* 文件内容展示 */
     #file-content {
@@ -204,76 +93,7 @@
       overflow: auto;
     }
     
-    /* 设置页面 */
-    #settings-page {
-      flex: 1;
-      padding: 20px;
-      display: none;
-      overflow: auto;
-    }
-    
-    .settings-section {
-      margin-bottom: 20px;
-    }
-    
-    .settings-section h2 {
-      margin-bottom: 15px;
-      border-bottom: 1px solid var(--tree-border);
-      padding-bottom: 5px;
-    }
-    
-    .setting-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 0;
-    }
-    
-    /* 开关样式 */
-    .toggle-switch {
-      position: relative;
-      display: inline-block;
-      width: 50px;
-      height: 24px;
-    }
-    
-    .toggle-switch input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    
-    .slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: #ccc;
-      transition: .4s;
-      border-radius: 24px;
-    }
-    
-    .slider:before {
-      position: absolute;
-      content: "";
-      height: 16px;
-      width: 16px;
-      left: 4px;
-      bottom: 4px;
-      background-color: white;
-      transition: .4s;
-      border-radius: 50%;
-    }
-    
-    input:checked + .slider {
-      background-color: #2196F3;
-    }
-    
-    input:checked + .slider:before {
-      transform: translateX(26px);
-    }
+    /* 设置页面样式已移至 src/styles/settings.css */
 
   </style>
 </head>
@@ -318,12 +138,19 @@
       </div>
     </div>
   </div>
+  <!-- 模块化样式文件 -->
+  <link rel="stylesheet" href="./src/styles/settings.css">
+  <link rel="stylesheet" href="./src/styles/explorer.css">
+  
+  <script src="./src/modules/tab-manager.js"></script>
+  <script src="./src/components/fileViewer.js"></script>
+  <script src="./src/modules/settings.js"></script>
+  <script src="./src/modules/explorer.js"></script>
   <script src="./icons.js"></script>
   <script src="./node_modules/jszip/dist/jszip.min.js"></script>
   <script src="./node_modules/docx-preview/dist/docx-preview.min.js"></script>
   <script src="./node_modules/marked/lib/marked.umd.js"></script>
   <script src="./node_modules/highlight.js/lib/index.js"></script>
-  <script src="./src/components/fileViewer.js"></script>
   <script src="./renderer.js"></script>
 </body>
 </html>

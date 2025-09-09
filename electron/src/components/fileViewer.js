@@ -6,18 +6,18 @@
 class FileViewer {
   constructor(container) {
     this.container = container;
-    this.tabs = new Map(); // 存储打开的文件tab
-    this.activeTabId = null;
+    this.contentContainer = null;
+    this.tabManager = null;
+    // 存储tab状态信息
+    this.tabStates = new Map();
     this.init();
   }
 
   init() {
-    // 创建tab容器和内容容器
+    // 创建文件查看器容器
     this.container.innerHTML = `
       <div class="file-viewer">
-        <div class="tabs-container" id="tabs-container" style="display: none;">
-          <div class="tab-list" id="tab-list"></div>
-        </div>
+        <div id="tab-container"></div>
         <div class="content-container" id="content-container">
           <div class="welcome-message">
             <p>选择一个文件开始查看...</p>
@@ -26,9 +26,18 @@ class FileViewer {
       </div>
     `;
 
-    this.tabList = document.getElementById('tab-list');
+    // 初始化TabManager
+    const tabContainer = document.getElementById('tab-container');
+    this.tabManager = new TabManager(tabContainer);
     this.contentContainer = document.getElementById('content-container');
      
+     // 设置TabManager回调
+     this.tabManager.setCallbacks({
+       onTabSwitch: (tabId, tab) => this.handleTabSwitch(tabId, tab),
+       onTabClose: (tabId, tab) => this.handleTabClose(tabId, tab),
+       onTabCreate: (tabId, fileName, filePath) => this.handleTabCreate(tabId, fileName, filePath)
+     });
+ 
      // 初始化键盘快捷键
      this.initKeyboardShortcuts();
  
@@ -46,85 +55,7 @@ class FileViewer {
         width: 100%;
       }
 
-      .tabs-container {
-        border-bottom: 2px solid var(--tree-border);
-        background: var(--tree-bg);
-        min-height: 35px;
-        margin-top:-9px;
-        margin-left: -10px;
-        margin-right: -10px;
-      }
-
-
-
-      .tab-list {
-        display: flex;
-        overflow-x: auto;
-        scrollbar-width: thin;
-        padding: 0;
-        margin: 0;
-      }
-
-      .tab-item {
-          display: flex;
-          align-items: center;
-          padding: 8px 12px;
-          border-right: 1px solid var(--tree-border);
-          cursor: pointer;
-          background: var(--bg-color);
-          color: var(--text-color);
-          font-size: 13px;
-          white-space: nowrap;
-          width: auto;
-          position: relative;
-          border-bottom: 2px solid transparent;
-        }
-
-        .tab-item:first-child {
-          margin-left: 0;
-        }
-        
-        .tab-item:last-child {
-          border-right: none;
-        }
-
-      .tab-item:hover {
-        background: var(--tree-hover);
-      }
-
-      .tab-item.active {
-        background: var(--bg-color);
-        border-bottom: 2px solid #007acc;
-      }
-
-      .tab-title {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        margin-right: 4px;
-        white-space: nowrap;
-      }
-
-      .tab-close {
-        width: 10px;
-        height: 10px;
-        border-radius: 3px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 12px;
-        opacity: 1.7;
-        margin-left: 0px;
-        padding: 0px 0px;
-        font-weight: bold;
-        color: var(--text-color);
-        cursor: pointer;
-        transition: all 0.2s;
-      }
-
-      .tab-close:hover {
-        background: rgba(128, 128, 128, 0.3);
-        opacity: 1;
-      }
+      /* Tab相关样式已移至TabManager模块 */
 
       .content-container {
         flex: 1;
@@ -567,13 +498,13 @@ class FileViewer {
     const tabId = filePath;
 
     // 如果文件已经打开，直接切换到该tab
-    if (this.tabs.has(tabId)) {
-      this.switchTab(tabId);
+    if (this.tabManager.hasTab(tabId)) {
+      this.tabManager.switchTab(tabId);
       return;
     }
 
     // 创建新tab
-    this.createTab(tabId, fileName);
+    this.tabManager.createTab(tabId, fileName, filePath);
     
     // 根据文件类型加载内容
     try {
@@ -627,70 +558,27 @@ class FileViewer {
           this.createErrorView(tabId, `不支持的文件类型: ${fileExt}`);
       }
       
-      // 存储显示模式信息
-      const tab = this.tabs.get(tabId);
-      if (tab) {
-        tab.displayMode = displayMode;
-        tab.isEditable = isEditable;
+      // 存储显示模式信息到内容元素的数据属性
+      const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+      if (contentElement) {
+        contentElement.dataset.displayMode = displayMode;
+        contentElement.dataset.isEditable = isEditable;
       }
     } catch (error) {
       console.error('加载文件失败:', error);
       this.createErrorView(tabId, `加载文件失败: ${error.message}`);
     }
 
-    this.switchTab(tabId);
+    this.tabManager.switchTab(tabId);
   }
 
-  // 创建tab
-  createTab(tabId, fileName) {
-    // 显示标签页容器
-    const tabsContainer = document.getElementById('tabs-container');
-    if (tabsContainer) {
-      tabsContainer.style.display = 'flex';
-    }
-    
-    const tabElement = document.createElement('div');
-    tabElement.className = 'tab-item';
-    tabElement.dataset.tabId = tabId;
-    
-    const tabTitle = document.createElement('span');
-    tabTitle.className = 'tab-title';
-    tabTitle.textContent = fileName;
-    tabTitle.title = fileName;
-    
-    const closeBtn = document.createElement('span');
-    closeBtn.className = 'tab-close';
-    closeBtn.innerHTML = '×';
-    closeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.closeTab(tabId);
-    });
-    
-    tabElement.appendChild(tabTitle);
-    tabElement.appendChild(closeBtn);
-
-    // 点击tab切换
-    tabElement.addEventListener('click', (e) => {
-      if (!e.target.classList.contains('tab-close')) {
-        this.switchTab(tabId);
-      }
-    });
-
-    this.tabList.appendChild(tabElement);
-    
+  // TabManager回调：处理标签页创建
+  handleTabCreate(tabId, fileName, filePath) {
     // 创建内容容器
     const contentElement = document.createElement('div');
     contentElement.className = 'file-content';
     contentElement.dataset.tabId = tabId;
     this.contentContainer.appendChild(contentElement);
-
-    // 存储tab信息
-    this.tabs.set(tabId, {
-      element: tabElement,
-      contentElement: contentElement,
-      fileName: fileName,
-      filePath: tabId
-    });
 
     // 隐藏欢迎消息
     const welcomeMessage = this.contentContainer.querySelector('.welcome-message');
@@ -699,26 +587,26 @@ class FileViewer {
     }
   }
 
-  // 切换tab
-  switchTab(tabId) {
-    // 取消所有tab的激活状态
-    this.tabs.forEach((tab, id) => {
-      tab.element.classList.remove('active');
-      tab.contentElement.classList.remove('active');
+  // TabManager回调：处理标签页切换
+  handleTabSwitch(tabId, tab) {
+    // 取消所有内容的激活状态
+    const allContents = this.contentContainer.querySelectorAll('.file-content');
+    allContents.forEach(content => {
+      content.classList.remove('active');
     });
 
-    // 激活指定tab
-    const tab = this.tabs.get(tabId);
-    if (tab) {
-      tab.element.classList.add('active');
-      tab.contentElement.classList.add('active');
-      this.activeTabId = tabId;
+    // 激活指定内容
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (contentElement) {
+      contentElement.classList.add('active');
       
       // 根据显示模式更新内容区域
-      const fileContent = tab.contentElement.querySelector('.txt-editor');
-      const fileDisplay = tab.contentElement.querySelector('.word-viewer, .error-message');
+      const displayMode = contentElement.dataset.displayMode;
+      const isEditable = contentElement.dataset.isEditable === 'true';
+      const fileContent = contentElement.querySelector('.txt-editor');
+      const fileDisplay = contentElement.querySelector('.word-viewer, .error-message');
       
-      if (tab.displayMode === 'html') {
+      if (displayMode === 'html') {
         // 显示HTML内容
         if (fileContent) {
           fileContent.style.display = 'none';
@@ -733,46 +621,42 @@ class FileViewer {
         }
         if (fileContent) {
           fileContent.style.display = 'block';
-          fileContent.disabled = !tab.isEditable;
+          fileContent.disabled = !isEditable;
         }
       }
     }
   }
 
-  // 关闭tab
-  closeTab(tabId) {
-    const tab = this.tabs.get(tabId);
-    if (!tab) return;
+  // TabManager回调：处理标签页关闭
+  handleTabClose(tabId, tab) {
+    // 查找对应的内容元素
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (contentElement) {
+      // 清理Markdown编辑器的自动保存计时器
+      const autoSaveTimer = contentElement.dataset.autoSaveTimer;
+      if (autoSaveTimer) {
+        clearTimeout(parseInt(autoSaveTimer));
+      }
 
-    // 清理Markdown编辑器的自动保存计时器
-    if (tab.autoSaveTimer) {
-      clearTimeout(tab.autoSaveTimer);
+      // 移除内容元素
+      contentElement.remove();
     }
 
-    // 移除DOM元素
-    tab.element.remove();
-    tab.contentElement.remove();
-    
-    // 从tabs中删除
-    this.tabs.delete(tabId);
+    // 清理tabStates中的状态信息
+    const tabState = this.tabStates.get(tabId);
+    if (tabState) {
+      // 清除自动保存计时器
+      if (tabState.autoSaveTimer) {
+        clearTimeout(tabState.autoSaveTimer);
+      }
+      this.tabStates.delete(tabId);
+    }
 
-    // 如果关闭的是当前激活的tab，切换到其他tab
-    if (this.activeTabId === tabId) {
-      const remainingTabs = Array.from(this.tabs.keys());
-      if (remainingTabs.length > 0) {
-        this.switchTab(remainingTabs[remainingTabs.length - 1]);
-      } else {
-        this.activeTabId = null;
-        // 隐藏标签页容器
-        const tabsContainer = document.getElementById('tabs-container');
-        if (tabsContainer) {
-          tabsContainer.style.display = 'none';
-        }
-        // 显示欢迎消息
-        const welcomeMessage = this.contentContainer.querySelector('.welcome-message');
-        if (welcomeMessage) {
-          welcomeMessage.style.display = 'flex';
-        }
+    // 如果没有剩余标签页，显示欢迎消息
+    if (this.tabManager.getTabCount() === 0) {
+      const welcomeMessage = this.contentContainer.querySelector('.welcome-message');
+      if (welcomeMessage) {
+        welcomeMessage.style.display = 'flex';
       }
     }
   }
@@ -1101,16 +985,16 @@ class FileViewer {
 
   // 创建文本编辑器
   createTextEditor(tabId, content, fileType) {
-    const tab = this.tabs.get(tabId);
-    if (!tab) return;
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) return;
 
     // 为TXT和JSON文件添加特殊类名
-    tab.contentElement.classList.add('txt-content');
+    contentElement.classList.add('txt-content');
 
     // 清空容器并移除padding和margin
-    tab.contentElement.innerHTML = '';
-    tab.contentElement.style.padding = '0';
-    tab.contentElement.style.margin = '0';
+    contentElement.innerHTML = '';
+    contentElement.style.padding = '0';
+    contentElement.style.margin = '0';
 
     const textarea = document.createElement('textarea');
     textarea.className = 'txt-editor';
@@ -1125,17 +1009,17 @@ class FileViewer {
 
     // 键盘快捷键已在全局处理，这里不需要重复添加
 
-    tab.contentElement.appendChild(textarea);
+    contentElement.appendChild(textarea);
   }
 
   // 创建HTML查看器
   createHtmlViewer(tabId, content) {
-    const tab = this.tabs.get(tabId);
-    if (!tab) return;
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) return;
 
     // 清空容器并移除padding
-    tab.contentElement.innerHTML = '';
-    tab.contentElement.style.padding = '0';
+    contentElement.innerHTML = '';
+    contentElement.style.padding = '0';
     
     // 创建查看器
     const viewer = document.createElement('div');
@@ -1230,39 +1114,39 @@ class FileViewer {
     };
     
     viewer.appendChild(iframe);
-    tab.contentElement.appendChild(viewer);
+    contentElement.appendChild(viewer);
   }
 
   // 创建Word查看器
   createWordViewer(tabId, content) {
-    const tab = this.tabs.get(tabId);
-    if (!tab) return;
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) return;
 
     // 为DOCX文件添加特殊类名
-    tab.contentElement.classList.add('docx-content');
+    contentElement.classList.add('docx-content');
 
     // 清空容器并移除padding和margin
-    tab.contentElement.innerHTML = '';
-    tab.contentElement.style.padding = '0';
-    tab.contentElement.style.margin = '0';
+    contentElement.innerHTML = '';
+    contentElement.style.padding = '0';
+    contentElement.style.margin = '0';
 
     const viewer = document.createElement('div');
     viewer.className = 'word-viewer';
     viewer.innerHTML = content;
 
-    tab.contentElement.appendChild(viewer);
+    contentElement.appendChild(viewer);
   }
 
   // 创建Docx编辑器
   createDocxEditor(tabId, wordData, filePath) {
-    const tab = this.tabs.get(tabId);
-    if (!tab) return;
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) return;
 
     // 为Docx内容添加特殊类名
-    tab.contentElement.classList.add('docx-content');
+    contentElement.classList.add('docx-content');
 
     // 创建简化的预览布局
-    tab.contentElement.innerHTML = `
+    contentElement.innerHTML = `
       <div class="docx-preview-full" id="docx-preview-full-${tabId}">
         <div class="docx-preview" id="docx-preview-${tabId}"></div>
       </div>
@@ -1271,15 +1155,15 @@ class FileViewer {
     // 获取预览元素
     const preview = document.getElementById(`docx-preview-${tabId}`);
 
-    // 存储数据到tab
-    if (tab) {
-      tab.filePath = filePath;
-      tab.wordData = wordData;
-      tab.isDirty = false;
-      tab.isEditMode = false;
-      tab.preview = preview;
-      tab.originalContent = '';
-    }
+    // 存储数据到tabStates
+    this.tabStates.set(tabId, {
+      filePath: filePath,
+      wordData: wordData,
+      isDirty: false,
+      isEditMode: false,
+      preview: preview,
+      originalContent: ''
+    });
 
     // 初始渲染预览
     if (wordData && wordData.content) {
@@ -1294,15 +1178,15 @@ class FileViewer {
   }
 
   // 创建Markdown编辑器
-  createMarkdownEditor(tabId, content, filePath) {// 获取tab并设置内容
-    const tab = this.tabs.get(tabId);
-    if (!tab) return;
+  createMarkdownEditor(tabId, content, filePath) {
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) return;
     
     // 为Markdown内容添加特殊类名
-    tab.contentElement.classList.add('markdown-content');
+    contentElement.classList.add('markdown-content');
 
     // 创建分屏布局
-    tab.contentElement.innerHTML = `
+    contentElement.innerHTML = `
       <div class="markdown-editor-container" id="container-${tabId}">
         <div class="markdown-editor-pane" id="editor-pane-${tabId}">
           <textarea class="markdown-editor" id="editor-${tabId}" spellcheck="false">${content}</textarea>
@@ -1318,15 +1202,15 @@ class FileViewer {
     const editor = document.getElementById(`editor-${tabId}`);
     const preview = document.getElementById(`preview-${tabId}`);
 
-    // 存储文件路径和原始内容
-    if (tab) {
-      tab.filePath = filePath;
-      tab.originalContent = content;
-      tab.editor = editor;
-      tab.preview = preview;
-      tab.isDirty = false;
-      tab.autoSaveTimer = null;
-    }
+    // 存储文件路径和原始内容到tabStates
+    this.tabStates.set(tabId, {
+      filePath: filePath,
+      originalContent: content,
+      editor: editor,
+      preview: preview,
+      isDirty: false,
+      autoSaveTimer: null
+    });
 
     // 初始渲染预览
     this.updateMarkdownPreview(tabId, content);
@@ -1349,8 +1233,8 @@ class FileViewer {
     const editor = document.getElementById(`editor-${tabId}`);
     if (!editor) return;
 
-    const tab = this.tabs.get(tabId);
-    if (!tab) return;
+    const tabState = this.tabStates.get(tabId);
+    if (!tabState) return;
 
     // 实时预览更新
     editor.addEventListener('input', () => {
@@ -1358,11 +1242,11 @@ class FileViewer {
       this.updateMarkdownPreview(tabId, content);
       
       // 标记为已修改
-      if (content !== tab.originalContent) {
+      if (content !== tabState.originalContent) {
         this.markTabAsDirty(tabId);
-        tab.isDirty = true;
+        tabState.isDirty = true;
       } else {
-        tab.isDirty = false;
+        tabState.isDirty = false;
         this.updateTabTitle(tabId);
       }
 
@@ -1436,17 +1320,17 @@ class FileViewer {
 
   // 重置自动保存计时器
   resetAutoSaveTimer(tabId) {
-    const tab = this.tabs.get(tabId);
-    if (!tab) return;
+    const tabState = this.tabStates.get(tabId);
+    if (!tabState) return;
 
     // 清除现有计时器
-    if (tab.autoSaveTimer) {
-      clearTimeout(tab.autoSaveTimer);
+    if (tabState.autoSaveTimer) {
+      clearTimeout(tabState.autoSaveTimer);
     }
 
     // 设置新的5秒自动保存计时器
-    tab.autoSaveTimer = setTimeout(() => {
-      if (tab.isDirty) {
+    tabState.autoSaveTimer = setTimeout(() => {
+      if (tabState.isDirty) {
         this.saveMarkdownFile(tabId);
       }
     }, 5000);
@@ -1454,25 +1338,25 @@ class FileViewer {
 
   // 保存Markdown文件
   async saveMarkdownFile(tabId) {
-    const tab = this.tabs.get(tabId);
-    if (!tab || !tab.editor || !tab.filePath) return;
+    const tabState = this.tabStates.get(tabId);
+    if (!tabState || !tabState.editor || !tabState.filePath) return;
 
     try {
-      const content = tab.editor.value;
-      await window.fsAPI.writeFile(tab.filePath, content);
+      const content = tabState.editor.value;
+      await window.fsAPI.writeFile(tabState.filePath, content);
       
       // 更新原始内容和状态
-      tab.originalContent = content;
-      tab.isDirty = false;
+      tabState.originalContent = content;
+      tabState.isDirty = false;
       this.updateTabTitle(tabId);
       
       // 清除自动保存计时器
-      if (tab.autoSaveTimer) {
-        clearTimeout(tab.autoSaveTimer);
-        tab.autoSaveTimer = null;
+      if (tabState.autoSaveTimer) {
+        clearTimeout(tabState.autoSaveTimer);
+        tabState.autoSaveTimer = null;
       }
 
-      console.log('Markdown文件保存成功:', tab.filePath);
+      console.log('Markdown文件保存成功:', tabState.filePath);
     } catch (error) {
       console.error('保存Markdown文件失败:', error);
       alert(`保存文件失败: ${error.message}`);
@@ -1481,21 +1365,21 @@ class FileViewer {
 
   // 保存Docx文件
   async saveDocxFile(tabId) {
-    const tab = this.tabs.get(tabId);
-    if (!tab || !tab.textEditor || !tab.filePath) return;
+    const tabState = this.tabStates.get(tabId);
+    if (!tabState || !tabState.textEditor || !tabState.filePath) return;
 
     try {
-      const textContent = tab.textEditor.value;
+      const textContent = tabState.textEditor.value;
       
       // 注意：这里是简化的保存方式，只保存文本内容
       // 实际的docx文件保存需要更复杂的处理来保持格式
       // 这里我们创建一个简单的文本文件作为备份
-      const backupPath = tab.filePath.replace('.docx', '_backup.txt');
+      const backupPath = tabState.filePath.replace('.docx', '_backup.txt');
       await window.fsAPI.writeFile(backupPath, textContent);
       
       // 更新状态
-      tab.originalContent = textContent;
-      tab.isDirty = false;
+      tabState.originalContent = textContent;
+      tabState.isDirty = false;
       
       // 更新tab标题
       this.updateTabTitle(tabId);
@@ -1528,53 +1412,52 @@ class FileViewer {
 
   // 更新标签标题
   updateTabTitle(tabId) {
-    const tab = this.tabs.get(tabId);
+    const tab = this.tabManager.tabs.get(tabId);
     if (!tab) return;
 
-    const tabElement = document.querySelector(`[data-tab-id="${tabId}"]`);
-    if (tabElement) {
-      const titleElement = tabElement.querySelector('.tab-title');
-      if (titleElement) {
-        const fileName = tab.fileName || 'Untitled';
-        titleElement.textContent = tab.isDirty ? `${fileName} *` : fileName;
-      }
-    }
+    const fileName = tab.fileName || 'Untitled';
+    this.tabManager.updateTabTitle(tabId, fileName);
   }
 
   // 创建错误视图
   createErrorView(tabId, message) {
-    const tab = this.tabs.get(tabId);
-    if (!tab) return;
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) return;
 
     const errorDiv = document.createElement('div');
     errorDiv.className = 'error-message';
     errorDiv.textContent = message;
 
-    tab.contentElement.appendChild(errorDiv);
+    contentElement.appendChild(errorDiv);
   }
 
 
 
   // 保存当前文件
   async saveCurrentFile() {
-    const activeTab = this.getActiveTab();
-    if (!activeTab || !activeTab.isEditable) return;
+    const activeTab = this.tabManager.getActiveTab();
+    if (!activeTab) return;
+
+    const activeTabId = this.tabManager.activeTabId;
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${activeTabId}"]`);
+    if (!contentElement) return;
+
+    const displayMode = contentElement.dataset.displayMode;
+    const isEditable = contentElement.dataset.isEditable === 'true';
+    if (!isEditable) return;
 
     try {
-      if (activeTab.displayMode === 'markdown') {
-        await this.saveMarkdownFile(this.activeTabId);
-      } else if (activeTab.displayMode === 'docx') {
-        await this.saveDocxFile(this.activeTabId);
-      } else if (activeTab.displayMode === 'text') {
+      if (displayMode === 'markdown') {
+        await this.saveMarkdownFile(activeTabId);
+      } else if (displayMode === 'docx') {
+        await this.saveDocxFile(activeTabId);
+      } else if (displayMode === 'text') {
         // 处理普通文本文件
-        const textarea = activeTab.contentElement.querySelector('.txt-editor');
+        const textarea = contentElement.querySelector('.txt-editor');
         if (textarea && activeTab.filePath) {
           await window.fsAPI.writeFile(activeTab.filePath, textarea.value);
           // 移除修改标记
-          const tabTitle = activeTab.element.querySelector('.tab-title');
-          if (tabTitle.textContent.endsWith(' *')) {
-            tabTitle.textContent = activeTab.fileName;
-          }
+          this.tabManager.markTabAsClean(activeTabId);
           console.log('文件已保存');
         }
       }
@@ -1584,52 +1467,24 @@ class FileViewer {
     }
   }
 
-  // 获取当前激活的tab
-  getActiveTab() {
-    return this.activeTabId ? this.tabs.get(this.activeTabId) : null;
-  }
-
-  // 关闭所有标签页
-  closeAllTabs() {
-    const tabIds = Array.from(this.tabs.keys());
-    tabIds.forEach(tabId => {
-      this.closeTab(tabId);
-    });
-  }
-
   // 标记标签页为已修改
-   markTabAsDirty(tabId) {
-     const tab = this.tabs.get(tabId);
-     if (!tab || !tab.isEditable) return;
-     
-     const tabTitle = tab.element.querySelector('.tab-title');
-     if (tabTitle && !tabTitle.textContent.endsWith(' *')) {
-       tabTitle.textContent += ' *';
-     }
+  markTabAsDirty(tabId) {
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) return;
+    
+    const isEditable = contentElement.dataset.isEditable === 'true';
+    if (!isEditable) return;
+    
+    this.tabManager.markTabAsDirty(tabId);
+  }
 
-   }
-
-   // 初始化键盘快捷键
+   // 初始化键盘快捷键（保存文件快捷键）
    initKeyboardShortcuts() {
      document.addEventListener('keydown', (e) => {
        // Ctrl+S 保存文件
        if (e.ctrlKey && e.key === 's') {
          e.preventDefault();
          this.saveCurrentFile();
-       }
-       
-       // Ctrl+W 关闭当前标签
-       if (e.ctrlKey && e.key === 'w') {
-         e.preventDefault();
-         if (this.activeTabId) {
-           this.closeTab(this.activeTabId);
-         }
-       }
-       
-       // Ctrl+Shift+W 关闭所有标签
-       if (e.ctrlKey && e.shiftKey && e.key === 'W') {
-         e.preventDefault();
-         this.closeAllTabs();
        }
      });
    }
