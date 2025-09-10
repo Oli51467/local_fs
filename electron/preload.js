@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('fsAPI', {
   isVideoFile: (filePath) => ipcRenderer.invoke('is-video-file', filePath),
   isAudioFile: (filePath) => ipcRenderer.invoke('is-audio-file', filePath),
   
+  // PDF相关
+  getPdfWorkerPath: () => ipcRenderer.invoke('get-pdf-worker-path'),
+  
   // 设置相关
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   getSettings: () => ipcRenderer.invoke('get-settings'),

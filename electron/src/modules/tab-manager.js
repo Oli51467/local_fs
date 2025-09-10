@@ -51,6 +51,25 @@ class TabManager {
         padding: 0;
         margin: 0;
       }
+      
+      /* Tab栏滚动条样式 - 使用更高优先级确保不被全局样式覆盖 */
+       .tab-container .tab-list::-webkit-scrollbar {
+         height: 1px !important;
+         width: auto !important;
+       }
+      
+      .tab-container .tab-list::-webkit-scrollbar-track {
+        background: var(--tree-bg, #2d2d30) !important;
+      }
+      
+      .tab-container .tab-list::-webkit-scrollbar-thumb {
+        background: var(--tree-border, #464647) !important;
+        border-radius: 3px !important;
+      }
+      
+      .tab-container .tab-list::-webkit-scrollbar-thumb:hover {
+        background: var(--accent-color, #007acc) !important;
+      }
 
       .tab-item {
         display: flex;

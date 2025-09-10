@@ -135,6 +135,12 @@ class FileViewerModule {
       const mimeType = this.getFileMimeType(filePath);
       return mimeType.startsWith('audio/');
     });
+
+    // 获取PDF worker路径
+    ipcMain.handle('get-pdf-worker-path', () => {
+      const workerPath = path.join(__dirname, '..', '..', 'static', 'pdf.worker.min.js');
+      return 'file://' + workerPath.replace(/\\/g, '/');
+    });
   }
 
   // 获取文件MIME类型的内部方法

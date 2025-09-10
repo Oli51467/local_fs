@@ -70,10 +70,10 @@ class FileViewer {
         height: 100%;
         width: 100%;
         display: none;
-        padding: 15px;
+        padding: 0;
         box-sizing: border-box;
         overflow-y: auto;
-        overflow-x: auto;
+        overflow-x: hidden;
         flex: 1;
       }
 
@@ -83,6 +83,12 @@ class FileViewer {
       }
       
       /* Markdown编辑器特殊样式 - 移除padding确保完全占据高度 */
+      .file-content.markdown-content {
+        padding: 0;
+        overflow: hidden;
+      }
+      
+      /* Markdown文件特殊样式 - 移除padding确保完全占据宽度 */
       .file-content.markdown-content {
         padding: 0;
         overflow: hidden;
@@ -111,6 +117,28 @@ class FileViewer {
       }
       
       .file-content.docx-content.active {
+        display: flex;
+        flex-direction: column;
+      }
+      
+      /* PDF文件特殊样式 - 移除padding确保完全占据宽度 */
+      .file-content.pdf-content {
+        padding: 0;
+        overflow: hidden;
+      }
+      
+      .file-content.pdf-content.active {
+        display: flex;
+        flex-direction: column;
+      }
+      
+      /* HTML文件特殊样式 - 移除padding确保完全占据宽度 */
+      .file-content.html-content {
+        padding: 0;
+        overflow: hidden;
+      }
+      
+      .file-content.html-content.active {
         display: flex;
         flex-direction: column;
       }
@@ -163,20 +191,20 @@ class FileViewer {
       
       /* 文本编辑器滚动条样式 */
       .txt-editor::-webkit-scrollbar {
-        width: 3px;
+        width: 2px;
       }
       
       .txt-editor::-webkit-scrollbar-track {
-        background: var(--tree-bg);
+        background: var(--tree-bg, #2d2d30);
       }
       
       .txt-editor::-webkit-scrollbar-thumb {
-        background: var(--tree-border);
-        border-radius: 1.5px;
+        background: var(--tree-border, #464647);
+        border-radius: 3px;
       }
       
       .txt-editor::-webkit-scrollbar-thumb:hover {
-        background: var(--text-color);
+        background: var(--accent-color, #007acc);
       }
 
       .html-viewer {
@@ -191,6 +219,24 @@ class FileViewer {
       .html-viewer iframe {
         background: var(--bg-color) !important;
         color: var(--text-color) !important;
+      }
+      
+      /* HTML查看器滚动条样式 */
+      .html-viewer::-webkit-scrollbar {
+        width: 2px;
+      }
+      
+      .html-viewer::-webkit-scrollbar-track {
+        background: var(--tree-bg, #2d2d30);
+      }
+      
+      .html-viewer::-webkit-scrollbar-thumb {
+        background: var(--tree-border, #464647);
+        border-radius: 3px;
+      }
+      
+      .html-viewer::-webkit-scrollbar-thumb:hover {
+        background: var(--accent-color, #007acc);
       }
 
       .word-viewer {
@@ -233,20 +279,20 @@ class FileViewer {
       
       /* Word查看器滚动条样式 */
       .word-viewer::-webkit-scrollbar {
-        width: 3px;
+        width: 2px;
       }
       
       .word-viewer::-webkit-scrollbar-track {
-        background: var(--tree-bg);
+        background: var(--tree-bg, #2d2d30);
       }
       
       .word-viewer::-webkit-scrollbar-thumb {
-        background: var(--tree-border);
-        border-radius: 1.5px;
+        background: var(--tree-border, #464647);
+        border-radius: 3px;
       }
       
       .word-viewer::-webkit-scrollbar-thumb:hover {
-        background: var(--text-color);
+        background: var(--accent-color, #007acc);
       }
 
       .error-message {
@@ -427,6 +473,7 @@ class FileViewer {
         background: white !important;
         margin: 0 !important;
         position: relative;
+        box-sizing: border-box;
       }
 
       .docx-preview-full {
@@ -441,17 +488,157 @@ class FileViewer {
         left: 0;
         right: 0;
         bottom: 0;
+        box-sizing: border-box;
       }
 
       .docx-preview {
         height: 100% !important;
         width: 100% !important;
         overflow-y: auto;
+        overflow-x: hidden;
         background: white !important;
         color: black;
         margin: 0 !important;
         padding: 0 !important;
         box-sizing: border-box;
+        word-wrap: break-word;
+        max-width: 100%;
+      }
+      
+      /* DOCX预览器滚动条样式 */
+      .docx-preview::-webkit-scrollbar,
+      .docx-preview-full::-webkit-scrollbar {
+        width: 2px;
+      }
+      
+      .docx-preview::-webkit-scrollbar-track,
+      .docx-preview-full::-webkit-scrollbar-track {
+        background: var(--tree-bg, #2d2d30);
+      }
+      
+      .docx-preview::-webkit-scrollbar-thumb,
+      .docx-preview-full::-webkit-scrollbar-thumb {
+        background: var(--tree-border, #464647);
+        border-radius: 3px;
+      }
+      
+      .docx-preview::-webkit-scrollbar-thumb:hover,
+      .docx-preview-full::-webkit-scrollbar-thumb:hover {
+        background: var(--accent-color, #007acc);
+      }
+      
+      /* PDF查看器样式 */
+      .file-content.pdf-content {
+        padding: 0;
+        overflow: hidden;
+      }
+      
+      .file-content.pdf-content.active {
+        display: flex;
+        flex-direction: column;
+      }
+      
+      .pdf-viewer-container {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        width: 100%;
+        background: var(--bg-color);
+      }
+      
+      .pdf-scroll-viewer {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: auto;
+        background: #f5f5f5;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+      }
+      
+      .pdf-pages-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        max-width: 100%;
+      }
+      
+      .pdf-page-container {
+        position: relative;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        border-radius: 4px;
+        background: white;
+        margin-bottom: 20px;
+        width: fit-content;
+      }
+      
+      .pdf-page-container canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      
+      .pdf-text-layer {
+        position: absolute;
+        left: 0;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        overflow: hidden;
+        opacity: 0.2;
+        line-height: 1.0;
+        pointer-events: auto;
+      }
+      
+      .pdf-text-layer > span {
+        color: transparent;
+        position: absolute;
+        white-space: pre;
+        cursor: text;
+        transform-origin: 0% 0%;
+      }
+      
+      .pdf-text-layer .highlight {
+        margin: -1px;
+        padding: 1px;
+        background-color: rgba(180, 0, 170, 0.2);
+        border-radius: 4px;
+      }
+      
+      .pdf-text-layer .highlight.begin {
+        border-radius: 4px 0px 0px 4px;
+      }
+      
+      .pdf-text-layer .highlight.end {
+        border-radius: 0px 4px 4px 0px;
+      }
+      
+      .pdf-text-layer .highlight.middle {
+        border-radius: 0px;
+      }
+      
+      .pdf-text-layer .highlight.selected {
+        background-color: rgba(0, 100, 0, 0.2);
+      }
+      
+      /* PDF滚动查看器滚动条样式 */
+      .pdf-scroll-viewer::-webkit-scrollbar {
+        width: 2px;
+        height: 2px;
+      }
+      
+      .pdf-scroll-viewer::-webkit-scrollbar-track {
+        background: var(--tree-bg, #2d2d30);
+      }
+      
+      .pdf-scroll-viewer::-webkit-scrollbar-thumb {
+        background: var(--tree-border, #464647);
+        border-radius: 3px;
+      }
+      
+      .pdf-scroll-viewer::-webkit-scrollbar-thumb:hover {
+        background: var(--accent-color, #007acc);
       }
 
       /* 强制docx内容占满整个区域 */
@@ -554,6 +741,12 @@ class FileViewer {
           displayMode = 'html';
           isEditable = false;
           break;
+        case 'pdf':
+          content = await this.loadPdfFile(filePath);
+          this.createPdfViewer(tabId, content, filePath);
+          displayMode = 'pdf';
+          isEditable = false;
+          break;
         default:
           this.createErrorView(tabId, `不支持的文件类型: ${fileExt}`);
       }
@@ -649,6 +842,13 @@ class FileViewer {
       if (tabState.autoSaveTimer) {
         clearTimeout(tabState.autoSaveTimer);
       }
+      
+      // 清理PDF相关资源
+      if (tabState.pdfState) {
+        this.cleanupPdfEvents(tabState.pdfState);
+        this.cleanupPdfCanvases(tabState.pdfState);
+      }
+      
       this.tabStates.delete(tabId);
     }
 
@@ -983,6 +1183,48 @@ class FileViewer {
     }
   }
 
+  // 加载PDF文件
+  async loadPdfFile(filePath) {
+    try {
+      // 读取文件为ArrayBuffer
+      const fileBuffer = await window.fsAPI.readFileBuffer(filePath);
+      
+      // 返回ArrayBuffer供PDF.js使用
+      return {
+        buffer: fileBuffer,
+        filePath: filePath
+      };
+    } catch (error) {
+      console.error('加载PDF文件失败:', error);
+      throw new Error(`加载PDF文件失败: ${error.message}`);
+    }
+  }
+
+  // 动态加载PDF.js库
+  async loadPdfJsLibrary() {
+    return new Promise((resolve, reject) => {
+      if (typeof window.pdfjsLib !== 'undefined') {
+        resolve();
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = './node_modules/pdfjs-dist/build/pdf.min.js';
+      script.onload = () => {
+        // PDF.js加载完成后，pdfjsLib会被添加到window对象
+        if (typeof window.pdfjsLib !== 'undefined') {
+          resolve();
+        } else {
+          reject(new Error('PDF.js库加载失败'));
+        }
+      };
+      script.onerror = () => {
+        reject(new Error('无法加载PDF.js库'));
+      };
+      document.head.appendChild(script);
+    });
+  }
+
   // 创建文本编辑器
   createTextEditor(tabId, content, fileType) {
     const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
@@ -1016,6 +1258,9 @@ class FileViewer {
   createHtmlViewer(tabId, content) {
     const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
     if (!contentElement) return;
+
+    // 为HTML文件添加特殊类名
+    contentElement.classList.add('html-content');
 
     // 清空容器并移除padding
     contentElement.innerHTML = '';
@@ -1135,6 +1380,256 @@ class FileViewer {
     viewer.innerHTML = content;
 
     contentElement.appendChild(viewer);
+  }
+
+  // 创建PDF查看器
+  async createPdfViewer(tabId, pdfData, filePath) {
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) return;
+
+    // 为PDF文件添加特殊类名
+    contentElement.classList.add('pdf-content');
+
+    // 清空容器并移除padding和margin
+    contentElement.innerHTML = '';
+    contentElement.style.padding = '0';
+    contentElement.style.margin = '0';
+
+    // 创建PDF查看器容器
+    const pdfContainer = document.createElement('div');
+    pdfContainer.className = 'pdf-viewer-container';
+    pdfContainer.innerHTML = `
+      <div class="pdf-scroll-viewer" id="pdf-scroll-viewer-${tabId}">
+        <div class="pdf-pages-container" id="pdf-pages-${tabId}"></div>
+      </div>
+    `;
+
+    contentElement.appendChild(pdfContainer);
+
+    // 初始化PDF.js并渲染PDF
+    await this.initializePdfViewer(tabId, pdfData);
+  }
+
+  // 初始化PDF查看器
+  async initializePdfViewer(tabId, pdfData) {
+    try {
+      // 确保PDF.js库已加载
+      if (typeof window.pdfjsLib === 'undefined') {
+        await this.loadPdfJsLibrary();
+      }
+      
+      const pdfjsLib = window.pdfjsLib;
+      
+      // 设置worker路径
+      const workerPath = await window.fsAPI.getPdfWorkerPath();
+      pdfjsLib.GlobalWorkerOptions.workerSrc = workerPath;
+
+      // 加载PDF文档
+      const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfData.buffer) }).promise;
+      
+      // 存储PDF文档和状态
+      const pdfState = {
+        pdfDoc: pdfDoc,
+        scale: 1.5, // 提高默认缩放比例以提升清晰度
+        pagesContainer: document.getElementById(`pdf-pages-${tabId}`),
+        scrollViewer: document.getElementById(`pdf-scroll-viewer-${tabId}`),
+        canvases: new Map(), // 存储所有canvas以便内存管理
+        textLayers: new Map() // 存储所有文本层
+      };
+
+      // 渲染所有页面
+      await this.renderAllPdfPages(tabId, pdfState);
+
+      // 绑定缩放和滚动事件
+      this.bindPdfScrollEvents(tabId, pdfState);
+
+      // 存储PDF状态到tabStates
+      this.tabStates.set(tabId, {
+        ...this.tabStates.get(tabId),
+        pdfState: pdfState
+      });
+
+    } catch (error) {
+      console.error('初始化PDF查看器失败:', error);
+      const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+      if (contentElement) {
+        contentElement.innerHTML = `
+          <div class="error-message">
+            <h3>PDF文件加载失败</h3>
+            <p>错误信息: ${error.message}</p>
+            <p>请确保这是一个有效的PDF文件</p>
+          </div>
+        `;
+      }
+    }
+  }
+
+  // 渲染所有PDF页面
+  async renderAllPdfPages(tabId, pdfState) {
+    try {
+      const { pdfDoc, pagesContainer, scale } = pdfState;
+      
+      // 清空容器
+      pagesContainer.innerHTML = '';
+      
+      // 清理之前的canvas和文本层
+      this.cleanupPdfCanvases(pdfState);
+      
+      // 渲染每一页
+      for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+        await this.renderSinglePdfPage(tabId, pdfState, pageNum);
+      }
+      
+    } catch (error) {
+      console.error('渲染PDF页面失败:', error);
+    }
+  }
+
+  // 渲染单个PDF页面
+  async renderSinglePdfPage(tabId, pdfState, pageNum) {
+    try {
+      const page = await pdfState.pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: pdfState.scale });
+      
+      // 创建页面容器
+      const pageContainer = document.createElement('div');
+      pageContainer.className = 'pdf-page-container';
+      pageContainer.style.marginBottom = '20px';
+      
+      // 创建canvas
+      const canvas = document.createElement('canvas');
+      canvas.id = `pdf-canvas-${tabId}-${pageNum}`;
+      
+      // 提高分辨率 - 使用设备像素比
+      const devicePixelRatio = window.devicePixelRatio || 1;
+      const scaledViewport = page.getViewport({ scale: pdfState.scale * devicePixelRatio });
+      
+      canvas.width = scaledViewport.width;
+      canvas.height = scaledViewport.height;
+      canvas.style.width = viewport.width + 'px';
+      canvas.style.height = viewport.height + 'px';
+      
+      // 创建文本层
+      const textLayer = document.createElement('div');
+      textLayer.className = 'pdf-text-layer';
+      textLayer.id = `pdf-text-layer-${tabId}-${pageNum}`;
+      textLayer.style.width = viewport.width + 'px';
+      textLayer.style.height = viewport.height + 'px';
+      textLayer.style.position = 'absolute';
+      textLayer.style.left = '0';
+      textLayer.style.top = '0';
+      
+      // 设置页面容器样式
+      pageContainer.style.position = 'relative';
+      pageContainer.style.width = 'fit-content';
+      pageContainer.style.marginBottom = '20px';
+      
+      pageContainer.appendChild(canvas);
+      pageContainer.appendChild(textLayer);
+      pdfState.pagesContainer.appendChild(pageContainer);
+      
+      // 渲染PDF页面到canvas
+      const ctx = canvas.getContext('2d');
+      ctx.scale(devicePixelRatio, devicePixelRatio);
+      
+      await page.render({ 
+        canvasContext: ctx, 
+        viewport: viewport
+      }).promise;
+      
+      // 渲染文本层
+      const textContent = await page.getTextContent();
+      const pdfjsLib = window.pdfjsLib;
+      if (pdfjsLib.renderTextLayer) {
+        pdfjsLib.renderTextLayer({
+          textContent,
+          container: textLayer,
+          viewport,
+          textDivs: []
+        });
+      }
+      
+      // 存储canvas和文本层引用
+      pdfState.canvases.set(pageNum, canvas);
+      pdfState.textLayers.set(pageNum, textLayer);
+      
+    } catch (error) {
+      console.error(`渲染PDF第${pageNum}页失败:`, error);
+    }
+  }
+
+  // 清理PDF canvas以防止内存泄露
+  cleanupPdfCanvases(pdfState) {
+    // 清理canvas
+    pdfState.canvases.forEach((canvas) => {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      canvas.width = 0;
+      canvas.height = 0;
+    });
+    pdfState.canvases.clear();
+    
+    // 清理文本层
+    pdfState.textLayers.forEach((textLayer) => {
+      textLayer.innerHTML = '';
+    });
+    pdfState.textLayers.clear();
+  }
+
+  // 绑定PDF滚动和缩放事件
+  bindPdfScrollEvents(tabId, pdfState) {
+    const scrollViewer = pdfState.scrollViewer;
+    
+    // 防抖函数
+    const debounce = (func, wait) => {
+      let timeout;
+      return function executedFunction(...args) {
+        const later = () => {
+          clearTimeout(timeout);
+          func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+      };
+    };
+    
+    // Command+滚轮缩放事件
+    const handleZoom = debounce(async (event) => {
+      if (event.metaKey || event.ctrlKey) { // Command键(Mac)或Ctrl键(Windows)
+        event.preventDefault();
+        
+        const zoomFactor = event.deltaY > 0 ? 0.7 : 1.4;
+        const newScale = Math.max(0.5, Math.min(5.0, pdfState.scale * zoomFactor));
+        
+        if (newScale !== pdfState.scale) {
+          pdfState.scale = newScale;
+          await this.renderAllPdfPages(tabId, pdfState);
+        }
+      }
+    }, 30);
+    
+    // 绑定滚轮事件
+    scrollViewer.addEventListener('wheel', handleZoom, { passive: false });
+    
+    // 存储事件处理器以便后续清理
+    if (!pdfState.eventHandlers) {
+      pdfState.eventHandlers = [];
+    }
+    pdfState.eventHandlers.push({
+      element: scrollViewer,
+      event: 'wheel',
+      handler: handleZoom
+    });
+  }
+  
+  // 清理PDF事件监听器
+  cleanupPdfEvents(pdfState) {
+    if (pdfState.eventHandlers) {
+      pdfState.eventHandlers.forEach(({ element, event, handler }) => {
+        element.removeEventListener(event, handler);
+      });
+      pdfState.eventHandlers = [];
+    }
   }
 
   // 创建Docx编辑器
