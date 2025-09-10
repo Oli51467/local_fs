@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('fsAPI', {
   // PDF相关
   getPdfWorkerPath: () => ipcRenderer.invoke('get-pdf-worker-path'),
   
+  // PPTX相关
+  readPptxFile: (filePath) => ipcRenderer.invoke('read-pptx-file', filePath),
+  
   // 设置相关
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   getSettings: () => ipcRenderer.invoke('get-settings'),

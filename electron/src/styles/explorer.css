@@ -93,6 +93,22 @@
   display: flex;
   align-items: center;
   user-select: none;
+  min-width: 0; /* 允许flex子元素收缩 */
+}
+
+/* 文件名显示样式 - 更精确的选择器 */
+.file-item > div > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 确保contentDiv也支持flex收缩 */
+.file-item > div {
+  min-width: 0;
+  flex: 1;
 }
 
 .file-item:hover {

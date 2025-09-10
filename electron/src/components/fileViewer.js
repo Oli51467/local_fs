@@ -142,6 +142,17 @@ class FileViewer {
         display: flex;
         flex-direction: column;
       }
+      
+      /* PPTX文件特殊样式 - 移除padding确保完全占据宽度 */
+      .file-content.pptx-content {
+        padding: 0;
+        overflow: hidden;
+      }
+      
+      .file-content.pptx-content.active {
+        display: flex;
+        flex-direction: column;
+      }
 
       .file-content-wrapper {
         height: 100%;
@@ -673,6 +684,142 @@ class FileViewer {
         box-shadow: none !important;
       }
 
+      /* PPTX查看器样式 */
+      .pptx-viewer {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        width: 100%;
+        background: var(--bg-color);
+      }
+
+      .pptx-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 15px;
+        background: var(--tree-bg, #2d2d30);
+        border-bottom: 1px solid var(--tree-border, #464647);
+        color: var(--text-color);
+        font-size: 14px;
+      }
+
+      .pptx-info {
+        font-weight: 500;
+      }
+
+      .pptx-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .pptx-btn {
+        background: var(--accent-color, #007acc);
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 3px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: background-color 0.2s;
+      }
+
+      .pptx-btn:hover {
+        background: var(--accent-hover, #005a9e);
+      }
+
+      .pptx-zoom-level {
+        min-width: 50px;
+        text-align: center;
+        font-weight: 500;
+      }
+
+      .pptx-content {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 20px;
+        background: var(--bg-color);
+      }
+
+      .pptx-loading,
+      .pptx-error {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 200px;
+        color: var(--text-color);
+        font-size: 16px;
+      }
+
+      .pptx-error {
+        color: #e74c3c;
+      }
+
+      .pptx-slide {
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        margin-bottom: 30px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+        transition: transform 0.2s;
+      }
+
+      .pptx-slide:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      }
+
+      .pptx-slide-header {
+        background: #f8f9fa;
+        padding: 10px 15px;
+        border-bottom: 1px solid #e9ecef;
+        font-weight: 500;
+        color: #495057;
+        font-size: 14px;
+      }
+
+      .pptx-slide-content {
+        padding: 20px;
+        min-height: 300px;
+        background: white;
+        color: #333;
+      }
+
+      .pptx-text {
+        margin: 0 0 10px 0;
+        line-height: 1.6;
+        font-size: 16px;
+        color: #333;
+      }
+
+      .pptx-text.pptx-empty {
+        color: #999;
+        font-style: italic;
+        text-align: center;
+        margin-top: 50px;
+      }
+
+      /* PPTX查看器滚动条样式 */
+      .pptx-content::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      .pptx-content::-webkit-scrollbar-track {
+        background: var(--tree-bg, #2d2d30);
+      }
+
+      .pptx-content::-webkit-scrollbar-thumb {
+        background: var(--tree-border, #464647);
+        border-radius: 4px;
+      }
+
+      .pptx-content::-webkit-scrollbar-thumb:hover {
+        background: var(--accent-color, #007acc);
+      }
+
 
     `;
     document.head.appendChild(style);
@@ -745,6 +892,13 @@ class FileViewer {
           content = await this.loadPdfFile(filePath);
           this.createPdfViewer(tabId, content, filePath);
           displayMode = 'pdf';
+          isEditable = false;
+          break;
+        case 'pptx':
+        case 'ppt':
+          content = await this.loadPptxFile(filePath);
+          this.createPptxViewer(tabId, content, filePath);
+          displayMode = 'pptx';
           isEditable = false;
           break;
         default:
@@ -1197,6 +1351,27 @@ class FileViewer {
     } catch (error) {
       console.error('加载PDF文件失败:', error);
       throw new Error(`加载PDF文件失败: ${error.message}`);
+    }
+  }
+
+  // 加载PPTX文件
+  async loadPptxFile(filePath) {
+    try {
+      // 使用预加载脚本中的API读取PPTX文件
+      const result = await window.fsAPI.readPptxFile(filePath);
+      
+      if (!result.success) {
+        throw new Error(result.error);
+      }
+      
+      return {
+        buffer: result.buffer,
+        fileName: result.fileName,
+        filePath: filePath
+      };
+    } catch (error) {
+      console.error('加载PPTX文件失败:', error);
+      throw new Error(`加载PPTX文件失败: ${error.message}`);
     }
   }
 
@@ -1912,6 +2087,181 @@ class FileViewer {
 
     const fileName = tab.fileName || 'Untitled';
     this.tabManager.updateTabTitle(tabId, fileName);
+  }
+
+  // 创建PPTX查看器
+  async createPptxViewer(tabId, content, filePath) {
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) return;
+
+    try {
+      // 创建PPTX查看器容器
+      const pptxContainer = document.createElement('div');
+      pptxContainer.className = 'pptx-viewer';
+      pptxContainer.innerHTML = `
+        <div class="pptx-content" id="pptx-content-${tabId}">
+          <div class="pptx-loading">正在解析PPTX文件，请稍候...</div>
+        </div>
+      `;
+      
+      contentElement.appendChild(pptxContainer);
+      
+      // 解析并渲染PPTX内容
+      await this.parsePptxContent(tabId, content.buffer, content.fileName);
+      
+    } catch (error) {
+      console.error('创建PPTX查看器失败:', error);
+      this.createErrorView(tabId, `创建PPTX查看器失败: ${error.message}`);
+    }
+  }
+
+  // 解析PPTX内容
+  async parsePptxContent(tabId, buffer, fileName) {
+    try {
+      // 使用JSZip解析PPTX文件
+      const JSZip = window.JSZip;
+      if (!JSZip) {
+        throw new Error('JSZip库未加载');
+      }
+      
+      const zip = await JSZip.loadAsync(buffer);
+      const slides = [];
+      
+      // 获取幻灯片文件列表
+      const slideFiles = Object.keys(zip.files)
+        .filter(name => name.startsWith('ppt/slides/slide') && name.endsWith('.xml'))
+        .sort((a, b) => {
+          const numA = parseInt(a.match(/slide(\d+)\.xml/)[1]);
+          const numB = parseInt(b.match(/slide(\d+)\.xml/)[1]);
+          return numA - numB;
+        });
+      
+      // 解析每个幻灯片
+      for (const slideFile of slideFiles) {
+        const slideXml = await zip.files[slideFile].async('text');
+        const slideContent = this.parseSlideXml(slideXml);
+        slides.push(slideContent);
+      }
+      
+      // 渲染幻灯片
+      this.renderPptxSlides(tabId, slides, fileName);
+      
+    } catch (error) {
+      console.error('解析PPTX内容失败:', error);
+      const contentDiv = document.getElementById(`pptx-content-${tabId}`);
+      if (contentDiv) {
+        contentDiv.innerHTML = `<div class="pptx-error">解析PPTX文件失败: ${error.message}</div>`;
+      }
+    }
+  }
+
+  // 解析幻灯片XML内容
+  parseSlideXml(xmlContent) {
+    try {
+      // 简单的文本提取，提取所有文本内容
+      const textMatches = xmlContent.match(/<a:t[^>]*>([^<]*)<\/a:t>/g) || [];
+      const texts = textMatches.map(match => {
+        const textMatch = match.match(/<a:t[^>]*>([^<]*)<\/a:t>/);
+        return textMatch ? textMatch[1] : '';
+      }).filter(text => text.trim());
+      
+      return {
+        texts: texts,
+        rawXml: xmlContent
+      };
+    } catch (error) {
+      console.error('解析幻灯片XML失败:', error);
+      return {
+        texts: ['解析幻灯片内容失败'],
+        rawXml: xmlContent
+      };
+    }
+  }
+
+  // 渲染PPTX幻灯片
+  renderPptxSlides(tabId, slides, fileName) {
+    const contentDiv = document.getElementById(`pptx-content-${tabId}`);
+    
+    if (!contentDiv) return;
+    
+    // 清空加载提示
+    contentDiv.innerHTML = '';
+    
+    // 创建幻灯片容器
+    slides.forEach((slide, index) => {
+      const slideDiv = document.createElement('div');
+      slideDiv.className = 'pptx-slide';
+      slideDiv.innerHTML = `
+        <div class="pptx-slide-header">
+          <span class="pptx-slide-number">第 ${index + 1} 页</span>
+        </div>
+        <div class="pptx-slide-content">
+          ${slide.texts.map(text => `<p class="pptx-text">${this.escapeHtml(text)}</p>`).join('')}
+          ${slide.texts.length === 0 ? '<p class="pptx-text pptx-empty">此页面暂无文本内容</p>' : ''}
+        </div>
+      `;
+      
+      contentDiv.appendChild(slideDiv);
+    });
+    
+    // 存储状态信息
+    this.tabStates.set(tabId, {
+      ...this.tabStates.get(tabId),
+      pptxState: {
+        slides: slides,
+        currentZoom: 1.0,
+        fileName: fileName
+      }
+    });
+  }
+
+  // 初始化PPTX缩放控制
+  initPptxZoomControls(tabId) {
+    const zoomInBtn = document.getElementById(`pptx-zoom-in-${tabId}`);
+    const zoomOutBtn = document.getElementById(`pptx-zoom-out-${tabId}`);
+    const zoomLevel = document.getElementById(`pptx-zoom-${tabId}`);
+    const contentDiv = document.getElementById(`pptx-content-${tabId}`);
+    
+    if (!zoomInBtn || !zoomOutBtn || !zoomLevel || !contentDiv) return;
+    
+    let currentZoom = 1.0;
+    
+    const updateZoom = (zoom) => {
+      currentZoom = Math.max(0.5, Math.min(3.0, zoom));
+      zoomLevel.textContent = `${Math.round(currentZoom * 100)}%`;
+      contentDiv.style.transform = `scale(${currentZoom})`;
+      contentDiv.style.transformOrigin = 'top center';
+      
+      // 更新状态
+      const tabState = this.tabStates.get(tabId);
+      if (tabState && tabState.pptxState) {
+        tabState.pptxState.currentZoom = currentZoom;
+      }
+    };
+    
+    zoomInBtn.addEventListener('click', () => {
+      updateZoom(currentZoom + 0.1);
+    });
+    
+    zoomOutBtn.addEventListener('click', () => {
+      updateZoom(currentZoom - 0.1);
+    });
+    
+    // 鼠标滚轮缩放
+    contentDiv.addEventListener('wheel', (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        updateZoom(currentZoom + delta);
+      }
+    });
+  }
+
+  // HTML转义
+  escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   // 创建错误视图

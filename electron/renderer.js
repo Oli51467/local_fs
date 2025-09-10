@@ -44,20 +44,23 @@ function getFileIcon(fileName, isFolder = false, isExpanded = false) {
   
   switch (ext) {
     case 'txt':
-      return '<img src="./dist/assets/txt.png" style="width: 12px; height: 12px;" />';
+      return '<img src="./dist/assets/txt.png" style="width: 13px; height: 13px;" />';
     case 'html':
     case 'htm':
-      return '<img src="./dist/assets/html.png" style="width: 12px; height: 12px;" />';
+      return '<img src="./dist/assets/html.png" style="width: 13px; height: 13px;" />';
     case 'md':
     case 'markdown':
-      return '<img src="./dist/assets/markdown.png" style="width: 12px; height: 12px;" />';
+      return '<img src="./dist/assets/markdown.png" style="width: 13px; height: 13px;" />';
     case 'pdf':
-      return '<img src="./dist/assets/pdf.png" style="width: 12px; height: 12px;" />';
+      return '<img src="./dist/assets/pdf.png" style="width: 13px; height: 13px;" />';
     case 'docx':
     case 'doc':
-      return '<img src="./dist/assets/docx.png" style="width: 12px; height: 12px;" />';
+      return '<img src="./dist/assets/docx.png" style="width: 13px; height: 13px;" />';
+    case 'pptx':
+    case 'ppt':
+      return '<img src="./dist/assets/ppt.png" style="width: 13px; height: 13px;" />';
     case 'json':
-      return '<img src="./dist/assets/json.png" style="width: 12px; height: 12px;" />';
+      return '<img src="./dist/assets/json.png" style="width: 13px; height: 13px;" />';
     default:
       // 其他文件类型使用默认文件图标
       return window.icons.file;
