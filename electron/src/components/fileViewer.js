@@ -72,7 +72,7 @@ class FileViewer {
         display: none;
         padding: 0;
         box-sizing: border-box;
-        overflow-y: auto;
+        overflow-y: hidden;
         overflow-x: hidden;
         flex: 1;
       }
@@ -146,7 +146,7 @@ class FileViewer {
       /* PPTX文件特殊样式 - 移除padding确保完全占据宽度 */
       .file-content.pptx-content {
         padding: 0;
-        overflow: hidden;
+        overflow: visible;
       }
       
       .file-content.pptx-content.active {
@@ -561,7 +561,7 @@ class FileViewer {
         flex: 1;
         overflow-y: auto;
         overflow-x: auto;
-        background: #f5f5f5;
+        background: transparent;
         padding: 0;
         display: flex;
         justify-content: center;
@@ -661,7 +661,7 @@ class FileViewer {
         height: auto !important;
         min-height: 100% !important;
         margin: 0 !important;
-        padding: 20px !important;
+        padding: 10px !important;
         background: white !important;
         box-sizing: border-box !important;
       }
@@ -679,149 +679,145 @@ class FileViewer {
       .docx-preview-content section {
         width: 100% !important;
         margin: 0 !important;
-        padding: 20px !important;
+        padding: 10px !important;
         background: white !important;
         box-shadow: none !important;
       }
 
       /* PPTX查看器样式 */
       .pptx-viewer {
+        width: 100%;
+        height: 100%;
         display: flex;
         flex-direction: column;
-        height: 100%;
-        width: 100%;
-        background: var(--bg-color);
-      }
-
-      .pptx-toolbar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 10px 15px;
-        background: var(--tree-bg, #2d2d30);
-        border-bottom: 1px solid var(--tree-border, #464647);
-        color: var(--text-color);
-        font-size: 14px;
-      }
-
-      .pptx-info {
-        font-weight: 500;
-      }
-
-      .pptx-controls {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-
-      .pptx-btn {
-        background: var(--accent-color, #007acc);
-        color: white;
-        border: none;
-        padding: 5px 10px;
-        border-radius: 3px;
-        cursor: pointer;
-        font-size: 12px;
-        transition: background-color 0.2s;
-      }
-
-      .pptx-btn:hover {
-        background: var(--accent-hover, #005a9e);
-      }
-
-      .pptx-zoom-level {
-        min-width: 50px;
-        text-align: center;
-        font-weight: 500;
+        background: transparent;
       }
 
       .pptx-content {
         flex: 1;
-        overflow-y: auto;
-        overflow-x: hidden;
-        padding: 20px;
-        background: var(--bg-color);
+        overflow: hidden;
+        padding: 10px;
+        background: transparent;
+        text-align: center;
+        padding-left: 0;
       }
 
       .pptx-loading,
       .pptx-error {
         display: flex;
-        align-items: center;
         justify-content: center;
+        align-items: center;
         height: 200px;
-        color: var(--text-color);
         font-size: 16px;
+        color: #666;
+        text-align: center;
       }
 
       .pptx-error {
-        color: #e74c3c;
+        color: #d32f2f;
       }
 
-      .pptx-slide {
-        background: white;
-        border: 1px solid #ddd;
+      /* pptx-preview库生成的幻灯片样式优化 */
+      .pptx-content .ppt-slide {
+        margin: 20px auto;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
         border-radius: 8px;
-        margin-bottom: 30px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         overflow: hidden;
-        transition: transform 0.2s;
-      }
-
-      .pptx-slide:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      }
-
-      .pptx-slide-header {
-        background: #f8f9fa;
-        padding: 10px 15px;
-        border-bottom: 1px solid #e9ecef;
-        font-weight: 500;
-        color: #495057;
-        font-size: 14px;
-      }
-
-      .pptx-slide-content {
-        padding: 20px;
-        min-height: 300px;
         background: white;
-        color: #333;
+        transition: transform 0.2s, box-shadow 0.2s;
       }
 
-      .pptx-text {
-        margin: 0 0 10px 0;
-        line-height: 1.6;
-        font-size: 16px;
-        color: #333;
+      .pptx-content .ppt-slide:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.25);
       }
 
-      .pptx-text.pptx-empty {
-        color: #999;
-        font-style: italic;
-        text-align: center;
-        margin-top: 50px;
+      /* 确保幻灯片内容正确显示且居中 */
+      .pptx-content svg {
+        max-width: 100%;
+        height: auto;
+        display: block;
+        margin: 0 auto;
       }
 
-      /* PPTX查看器滚动条样式 */
-      .pptx-content::-webkit-scrollbar {
-        width: 8px;
+      /* 确保pptx-preview生成的内容正确显示 */
+      .pptx-content > div {
+        display: inline-block;
+        text-align: left;
       }
 
-      .pptx-content::-webkit-scrollbar-track {
-        background: var(--tree-bg, #2d2d30);
+      /* PPTX内容不再需要内部滚动条样式 */
+
+      /* PPTX容器样式 - 自定义垂直滚动条为1px粗度 */
+      .pptx-container {
+        overflow-x: hidden;
+        overflow-y: auto;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        position: relative;
       }
-
-      .pptx-content::-webkit-scrollbar-thumb {
-        background: var(--tree-border, #464647);
-        border-radius: 4px;
-      }
-
-      .pptx-content::-webkit-scrollbar-thumb:hover {
-        background: var(--accent-color, #007acc);
-      }
-
-
-    `;
+      
+      /* PPTX容器滚动条样式 - 针对所有可能的滚动元素 */
+       .pptx-container::-webkit-scrollbar,
+       .pptx-container *::-webkit-scrollbar,
+       .pptx-container div::-webkit-scrollbar,
+       .pptx-container .pptx-slide::-webkit-scrollbar,
+       .pptx-container .slide-container::-webkit-scrollbar {
+         width: 1px !important;
+         height: 1px !important;
+       }
+       
+       .pptx-container::-webkit-scrollbar-track,
+       .pptx-container *::-webkit-scrollbar-track,
+       .pptx-container div::-webkit-scrollbar-track,
+       .pptx-container .pptx-slide::-webkit-scrollbar-track,
+       .pptx-container .slide-container::-webkit-scrollbar-track {
+         background: var(--tree-bg, #2d2d30) !important;
+       }
+       
+       .pptx-container::-webkit-scrollbar-thumb,
+       .pptx-container *::-webkit-scrollbar-thumb,
+       .pptx-container div::-webkit-scrollbar-thumb,
+       .pptx-container .pptx-slide::-webkit-scrollbar-thumb,
+       .pptx-container .slide-container::-webkit-scrollbar-thumb {
+         background: var(--tree-border, #464647) !important;
+         border-radius: 3px !important;
+       }
+       
+       .pptx-container::-webkit-scrollbar-thumb:hover,
+       .pptx-container *::-webkit-scrollbar-thumb:hover,
+       .pptx-container div::-webkit-scrollbar-thumb:hover,
+       .pptx-container .pptx-slide::-webkit-scrollbar-thumb:hover,
+       .pptx-container .slide-container::-webkit-scrollbar-thumb:hover {
+          background: var(--accent-color, #007acc) !important;
+        }
+        
+        /* 全局PPTX滚动条样式 - 最高优先级 */
+        [class*="pptx"]::-webkit-scrollbar,
+        [id*="pptx"]::-webkit-scrollbar {
+          width: 2px !important;
+          height: 2px !important;
+        }
+        
+        [class*="pptx"]::-webkit-scrollbar-track,
+        [id*="pptx"]::-webkit-scrollbar-track {
+          background: var(--tree-bg, #2d2d30) !important;
+        }
+        
+        [class*="pptx"]::-webkit-scrollbar-thumb,
+        [id*="pptx"]::-webkit-scrollbar-thumb {
+          background: var(--tree-border, #464647) !important;
+          border-radius: 3px !important;
+        }
+        
+        [class*="pptx"]::-webkit-scrollbar-thumb:hover,
+        [id*="pptx"]::-webkit-scrollbar-thumb:hover {
+          background: var(--accent-color, #007acc) !important;
+        }
+ 
+     `;
     document.head.appendChild(style);
   }
 
@@ -1503,7 +1499,7 @@ class FileViewer {
               color: ${isDarkMode ? '#4fc3f7' : '#0066cc'} !important;
             }
             pre, code {
-              background-color: ${isDarkMode ? '#2d2d2d' : '#f5f5f5'} !important;
+              background-color: ${isDarkMode ? '#2d2d2d' : '#f8f8f8'} !important;
               color: ${isDarkMode ? '#d4d4d4' : '#000000'} !important;
               padding: 4px 8px;
               border-radius: 4px;
@@ -1518,7 +1514,7 @@ class FileViewer {
               background-color: ${isDarkMode ? '#1e1e1e' : '#ffffff'} !important;
             }
             th {
-              background-color: ${isDarkMode ? '#2d2d2d' : '#f5f5f5'} !important;
+              background-color: ${isDarkMode ? '#2d2d2d' : '#f8f8f8'} !important;
               font-weight: bold;
             }
           </style>
@@ -2097,7 +2093,7 @@ class FileViewer {
     try {
       // 创建PPTX查看器容器
       const pptxContainer = document.createElement('div');
-      pptxContainer.className = 'pptx-viewer';
+      pptxContainer.className = 'pptx-viewer pptx-container';
       pptxContainer.innerHTML = `
         <div class="pptx-content" id="pptx-content-${tabId}">
           <div class="pptx-loading">正在解析PPTX文件，请稍候...</div>
@@ -2106,8 +2102,8 @@ class FileViewer {
       
       contentElement.appendChild(pptxContainer);
       
-      // 解析并渲染PPTX内容
-      await this.parsePptxContent(tabId, content.buffer, content.fileName);
+      // 使用pptx-preview库解析并渲染PPTX内容
+      await this.renderPptxWithPreview(tabId, content.buffer, content.fileName);
       
     } catch (error) {
       console.error('创建PPTX查看器失败:', error);
@@ -2115,147 +2111,63 @@ class FileViewer {
     }
   }
 
-  // 解析PPTX内容
-  async parsePptxContent(tabId, buffer, fileName) {
+  // 使用pptx-preview库渲染PPTX内容
+  async renderPptxWithPreview(tabId, buffer, fileName) {
     try {
-      // 使用JSZip解析PPTX文件
-      const JSZip = window.JSZip;
-      if (!JSZip) {
-        throw new Error('JSZip库未加载');
+      // 检查pptx-preview全局变量
+      if (!window.pptxPreview) {
+        throw new Error('pptx-preview库未正确加载');
       }
       
-      const zip = await JSZip.loadAsync(buffer);
-      const slides = [];
-      
-      // 获取幻灯片文件列表
-      const slideFiles = Object.keys(zip.files)
-        .filter(name => name.startsWith('ppt/slides/slide') && name.endsWith('.xml'))
-        .sort((a, b) => {
-          const numA = parseInt(a.match(/slide(\d+)\.xml/)[1]);
-          const numB = parseInt(b.match(/slide(\d+)\.xml/)[1]);
-          return numA - numB;
-        });
-      
-      // 解析每个幻灯片
-      for (const slideFile of slideFiles) {
-        const slideXml = await zip.files[slideFile].async('text');
-        const slideContent = this.parseSlideXml(slideXml);
-        slides.push(slideContent);
+      const contentDiv = document.getElementById(`pptx-content-${tabId}`);
+      if (!contentDiv) {
+        throw new Error('找不到PPTX内容容器');
       }
       
-      // 渲染幻灯片
-      this.renderPptxSlides(tabId, slides, fileName);
+      // 清空加载提示
+      contentDiv.innerHTML = '';
+      
+      // 使用pptx-preview解析并渲染PPTX
+      // 获取容器的实际尺寸
+      const containerRect = contentDiv.getBoundingClientRect();
+      const containerWidth = containerRect.width || contentDiv.offsetWidth || window.innerWidth - 100;
+      const containerHeight = containerRect.height || contentDiv.offsetHeight || window.innerHeight - 200;
+      
+      // 使用init方法创建预览器实例，让内容自适应容器
+      const previewer = window.pptxPreview.init(contentDiv, {
+        width: containerWidth,  // 使用完整容器宽度
+        height: containerHeight,  // 使用完整容器高度
+        slidesScale: "fit",  // 自适应缩放确保内容完全适配
+        backgroundColor: "#fff"
+      });
+      
+      // 调用preview方法渲染PPTX内容
+      await previewer.preview(buffer);
+      
+      // 存储状态信息
+      this.tabStates.set(tabId, {
+        ...this.tabStates.get(tabId),
+        pptxState: {
+          fileName: fileName,
+          currentZoom: 1.0,
+          isLoaded: true,
+          previewer: previewer
+        }
+      });
       
     } catch (error) {
-      console.error('解析PPTX内容失败:', error);
+      console.error('渲染PPTX内容失败:', error);
       const contentDiv = document.getElementById(`pptx-content-${tabId}`);
       if (contentDiv) {
-        contentDiv.innerHTML = `<div class="pptx-error">解析PPTX文件失败: ${error.message}</div>`;
+        contentDiv.innerHTML = `<div class="pptx-error">渲染PPTX文件失败: ${error.message}<br/>请确保文件格式正确且未损坏。</div>`;
       }
     }
   }
 
-  // 解析幻灯片XML内容
-  parseSlideXml(xmlContent) {
-    try {
-      // 简单的文本提取，提取所有文本内容
-      const textMatches = xmlContent.match(/<a:t[^>]*>([^<]*)<\/a:t>/g) || [];
-      const texts = textMatches.map(match => {
-        const textMatch = match.match(/<a:t[^>]*>([^<]*)<\/a:t>/);
-        return textMatch ? textMatch[1] : '';
-      }).filter(text => text.trim());
-      
-      return {
-        texts: texts,
-        rawXml: xmlContent
-      };
-    } catch (error) {
-      console.error('解析幻灯片XML失败:', error);
-      return {
-        texts: ['解析幻灯片内容失败'],
-        rawXml: xmlContent
-      };
-    }
-  }
 
-  // 渲染PPTX幻灯片
-  renderPptxSlides(tabId, slides, fileName) {
-    const contentDiv = document.getElementById(`pptx-content-${tabId}`);
-    
-    if (!contentDiv) return;
-    
-    // 清空加载提示
-    contentDiv.innerHTML = '';
-    
-    // 创建幻灯片容器
-    slides.forEach((slide, index) => {
-      const slideDiv = document.createElement('div');
-      slideDiv.className = 'pptx-slide';
-      slideDiv.innerHTML = `
-        <div class="pptx-slide-header">
-          <span class="pptx-slide-number">第 ${index + 1} 页</span>
-        </div>
-        <div class="pptx-slide-content">
-          ${slide.texts.map(text => `<p class="pptx-text">${this.escapeHtml(text)}</p>`).join('')}
-          ${slide.texts.length === 0 ? '<p class="pptx-text pptx-empty">此页面暂无文本内容</p>' : ''}
-        </div>
-      `;
-      
-      contentDiv.appendChild(slideDiv);
-    });
-    
-    // 存储状态信息
-    this.tabStates.set(tabId, {
-      ...this.tabStates.get(tabId),
-      pptxState: {
-        slides: slides,
-        currentZoom: 1.0,
-        fileName: fileName
-      }
-    });
-  }
 
   // 初始化PPTX缩放控制
-  initPptxZoomControls(tabId) {
-    const zoomInBtn = document.getElementById(`pptx-zoom-in-${tabId}`);
-    const zoomOutBtn = document.getElementById(`pptx-zoom-out-${tabId}`);
-    const zoomLevel = document.getElementById(`pptx-zoom-${tabId}`);
-    const contentDiv = document.getElementById(`pptx-content-${tabId}`);
-    
-    if (!zoomInBtn || !zoomOutBtn || !zoomLevel || !contentDiv) return;
-    
-    let currentZoom = 1.0;
-    
-    const updateZoom = (zoom) => {
-      currentZoom = Math.max(0.5, Math.min(3.0, zoom));
-      zoomLevel.textContent = `${Math.round(currentZoom * 100)}%`;
-      contentDiv.style.transform = `scale(${currentZoom})`;
-      contentDiv.style.transformOrigin = 'top center';
-      
-      // 更新状态
-      const tabState = this.tabStates.get(tabId);
-      if (tabState && tabState.pptxState) {
-        tabState.pptxState.currentZoom = currentZoom;
-      }
-    };
-    
-    zoomInBtn.addEventListener('click', () => {
-      updateZoom(currentZoom + 0.1);
-    });
-    
-    zoomOutBtn.addEventListener('click', () => {
-      updateZoom(currentZoom - 0.1);
-    });
-    
-    // 鼠标滚轮缩放
-    contentDiv.addEventListener('wheel', (e) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        updateZoom(currentZoom + delta);
-      }
-    });
-  }
+
 
   // HTML转义
   escapeHtml(text) {
