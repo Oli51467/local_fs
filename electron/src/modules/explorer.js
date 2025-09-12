@@ -295,7 +295,7 @@ class ExplorerModule {
     const contentDiv = document.createElement('div');
     contentDiv.style.display = 'flex';
     contentDiv.style.alignItems = 'center';
-    contentDiv.style.gap = '3px';
+    contentDiv.style.gap = '4px';
     
     if (isFolder) {
       // 添加箭头图标（文件夹）
@@ -311,8 +311,8 @@ class ExplorerModule {
       folderIcon.style.display = 'flex';
       folderIcon.style.alignItems = 'center';
       folderIcon.style.fontSize = '10px';
-      folderIcon.style.width = '12px';
-      folderIcon.style.height = '12px';
+      folderIcon.style.width = '13px';
+      folderIcon.style.height = '13px';
       contentDiv.appendChild(folderIcon);
     } else {
       // 添加文件图标

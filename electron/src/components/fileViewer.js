@@ -33,7 +33,7 @@ class FileViewer {
         <div id="tab-container"></div>
         <div class="content-container" id="content-container">
           <div class="welcome-message">
-            <p>选择一个文件开始查看...</p>
+            <p>请选择一个文件打开</p>
           </div>
         </div>
       </div>
@@ -311,6 +311,12 @@ class FileViewer {
 
   // TabManager回调：处理标签页切换
   handleTabSwitch(tabId, tab) {
+    // 隐藏欢迎消息
+    const welcomeMessage = this.contentContainer.querySelector('.welcome-message');
+    if (welcomeMessage) {
+      welcomeMessage.style.display = 'none';
+    }
+
     // 取消所有内容的激活状态
     const allContents = this.contentContainer.querySelectorAll('.file-content');
     allContents.forEach(content => {
@@ -406,7 +412,8 @@ class FileViewer {
     }
 
     // 如果没有剩余标签页，显示欢迎消息
-    if (this.tabManager.getTabCount() === 0) {
+    // 注意：此时标签页还未从TabManager中删除，所以需要检查是否只剩1个标签页
+    if (this.tabManager.getTabCount() === 1) {
       const welcomeMessage = this.contentContainer.querySelector('.welcome-message');
       if (welcomeMessage) {
         welcomeMessage.style.display = 'flex';

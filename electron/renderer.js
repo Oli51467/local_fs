@@ -82,7 +82,7 @@ function renderTree(node, container, isRoot = false, depth = 0) {
   const contentDiv = document.createElement('div');
   contentDiv.style.display = 'flex';
   contentDiv.style.alignItems = 'center';
-  contentDiv.style.gap = '3px';
+  contentDiv.style.gap = '4px';
   
   // 设置选中状态
   if (selectedItemPath === node.path) {
@@ -90,7 +90,6 @@ function renderTree(node, container, isRoot = false, depth = 0) {
   }
 
   if (node.children) {
-    div.style.fontWeight = 'bold';
     div.classList.add('folder-item');
     
     // 添加箭头图标
@@ -110,8 +109,8 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     folderIcon.style.display = 'flex';
     folderIcon.style.alignItems = 'center';
     folderIcon.style.fontSize = '10px';
-    folderIcon.style.width = '12px';
-    folderIcon.style.height = '12px';
+    folderIcon.style.width = '13px';
+    folderIcon.style.height = '13px';
     folderIcon.className = 'folder-icon';
     contentDiv.appendChild(folderIcon);
     
@@ -318,7 +317,7 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
   const contentDiv = document.createElement('div');
   contentDiv.style.display = 'flex';
   contentDiv.style.alignItems = 'center';
-  contentDiv.style.gap = '3px';
+  contentDiv.style.gap = '4px';
   
   if (isFolder) {
     // 添加箭头图标（文件夹）
@@ -335,8 +334,8 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
     folderIcon.style.display = 'flex';
     folderIcon.style.alignItems = 'center';
     folderIcon.style.fontSize = '10px';
-    folderIcon.style.width = '12px';
-    folderIcon.style.height = '12px';
+    folderIcon.style.width = '13px';
+    folderIcon.style.height = '13px';
     contentDiv.appendChild(folderIcon);
   } else {
     // 添加文件图标

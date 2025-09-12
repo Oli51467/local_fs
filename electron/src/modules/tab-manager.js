@@ -18,72 +18,196 @@ class TabManager {
     // 创建tab容器
     this.container.innerHTML = `
       <div class="tabs-container" id="tabs-container" style="display: none;">
-        <div class="tab-list" id="tab-list"></div>
+        <div class="tab-wrapper">
+          <div class="tab-list" id="tab-list"></div>
+          <div class="tab-extension" id="tab-extension" style="display: none;">
+            <button class="tab-extension-btn" id="tab-extension-btn" title="更多标签页">
+              <span>⋯</span>
+            </button>
+            <div class="tab-dropdown" id="tab-dropdown" style="display: none;"></div>
+          </div>
+        </div>
       </div>
     `;
 
     this.tabsContainer = document.getElementById('tabs-container');
     this.tabList = document.getElementById('tab-list');
+    this.tabExtension = document.getElementById('tab-extension');
+    this.tabExtensionBtn = document.getElementById('tab-extension-btn');
+    this.tabDropdown = document.getElementById('tab-dropdown');
+    
+    // 初始化扩展按钮事件
+    this.initExtensionButton();
     
     // 初始化键盘快捷键
     this.initKeyboardShortcuts();
     
     // 添加样式
     this.addStyles();
+    
+    // 存储可见和隐藏的tab
+    this.visibleTabs = new Set();
+    this.hiddenTabs = new Set();
   }
 
   addStyles() {
     const style = document.createElement('style');
     style.textContent = `
       .tabs-container {
-        border-bottom: 2px solid var(--tree-border);
+        border-bottom: 1px solid var(--tree-border);
         background: var(--tree-bg);
-        min-height: 35px;
+        min-height: 40px;
         margin-top: -9px;
         margin-left: -10px;
         margin-right: -10px;
       }
 
+      .tab-wrapper {
+        display: flex;
+        width: 100%;
+        height: 100%;
+      }
+
       .tab-list {
         display: flex;
-        overflow-x: auto;
-        scrollbar-width: thin;
+        flex: 1;
+        overflow: hidden;
         padding: 0;
+        margin: 0;
+        min-width: 0;
+      }
+      
+      .tab-extension {
+        flex-shrink: 0;
+        position: relative;
+        display: flex;
+        align-items: center;
+      }
+      
+      .tab-extension-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 4px;
+        border-radius: 3px;
+        transition: background-color 0.2s;
+        color: var(--text-color);
+        font-size: 16px;
+        font-weight: bold;
+      }
+      
+      .tab-extension-btn:hover {
+        background-color: rgba(0, 0, 0, 0.1);
+      }
+      
+      .dark-mode .tab-extension-btn:hover {
+        background-color: rgba(255, 255, 255, 0.1);
+      }
+      
+      .tab-dropdown {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        background: white;
+        border: 1px solid var(--tree-border);
+        border-radius: 4px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        min-width: 200px;
+        max-width: 250px;
+        max-height: 300px;
+        overflow-y: auto;
+        z-index: 1000;
+      }
+      
+      .tab-dropdown-item {
+        display: flex;
+        align-items: center;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 13px;
+        color: black;
+        background: white;
+      }
+      
+      .tab-dropdown-item:hover {
+        background: var(--tree-hover);
+      }
+      
+      .tab-dropdown-item.active {
+        background: #f0f0f0;
+        color: black;
+        font-weight: 500;
+      }
+      
+      .tab-dropdown-title {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        margin-right: 8px;
+        text-decoration: none;
+      }
+      
+      .tab-dropdown-close {
+        width: 16px;
+        height: 16px;
+        border-radius: 2px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        opacity: 0.7;
+        transition: all 0.2s;
+      }
+      
+      .tab-dropdown-close:hover {
+        background: rgba(255, 255, 255, 0.2);
+        opacity: 1;
+      }
+      
+      .tab-dropdown-separator {
+        height: 1px;
+        background: black;
         margin: 0;
       }
       
-      /* Tab栏滚动条样式 - 使用更高优先级确保不被全局样式覆盖 */
-       .tab-container .tab-list::-webkit-scrollbar {
-         height: 1px !important;
-         width: auto !important;
-       }
+      .tab-dropdown-action {
+          display: flex;
+          align-items: center;
+          padding: 8px 12px;
+          cursor: pointer;
+          font-size: 13px;
+          color: black;
+          border: none;
+          background: white;
+          width: 100%;
+          text-align: left;
+          font-family: '宋体', SimSun, serif;
+        }
       
-      .tab-container .tab-list::-webkit-scrollbar-track {
-        background: var(--tree-bg, #2d2d30) !important;
-      }
-      
-      .tab-container .tab-list::-webkit-scrollbar-thumb {
-        background: var(--tree-border, #464647) !important;
-        border-radius: 3px !important;
-      }
-      
-      .tab-container .tab-list::-webkit-scrollbar-thumb:hover {
-        background: var(--accent-color, #007acc) !important;
+      .tab-dropdown-action:hover {
+        background: var(--tree-hover);
       }
 
       .tab-item {
         display: flex;
         align-items: center;
-        padding: 8px 12px;
+        padding: 10px 12px;
         border-right: 1px solid var(--tree-border);
         cursor: pointer;
         background: var(--bg-color);
         color: var(--text-color);
         font-size: 13px;
         white-space: nowrap;
-        width: auto;
+        flex-shrink: 0;
         position: relative;
         border-bottom: 2px solid transparent;
+        max-width: calc(80% - 50px);
       }
 
       .tab-item:first-child {
@@ -104,10 +228,12 @@ class TabManager {
       }
 
       .tab-title {
-        overflow: hidden;
-        text-overflow: ellipsis;
         margin-right: 4px;
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        flex: 1;
+        min-width: 0;
       }
 
       .tab-close {
@@ -133,6 +259,150 @@ class TabManager {
       }
     `;
     document.head.appendChild(style);
+  }
+
+  // 初始化扩展按钮事件
+  initExtensionButton() {
+    this.tabExtensionBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleDropdown();
+    });
+    
+    // 点击其他地方关闭下拉菜单
+    document.addEventListener('click', (e) => {
+      if (!this.tabExtension.contains(e.target)) {
+        this.hideDropdown();
+      }
+    });
+  }
+  
+  // 切换下拉菜单显示状态
+  toggleDropdown() {
+    const isVisible = this.tabDropdown.style.display !== 'none';
+    if (isVisible) {
+      this.hideDropdown();
+    } else {
+      this.showDropdown();
+    }
+  }
+  
+  // 显示下拉菜单
+  showDropdown() {
+    this.updateDropdownContent();
+    this.tabDropdown.style.display = 'block';
+  }
+  
+  // 隐藏下拉菜单
+  hideDropdown() {
+    this.tabDropdown.style.display = 'none';
+  }
+  
+  // 更新下拉菜单内容
+  updateDropdownContent() {
+    this.tabDropdown.innerHTML = '';
+    
+    // 添加隐藏的标签页
+    this.hiddenTabs.forEach(tabId => {
+      const tab = this.tabs.get(tabId);
+      if (!tab) return;
+      
+      const dropdownItem = document.createElement('div');
+      dropdownItem.className = 'tab-dropdown-item';
+      if (this.activeTabId === tabId) {
+        dropdownItem.classList.add('active');
+      }
+      
+      const title = document.createElement('span');
+      title.className = 'tab-dropdown-title';
+      title.textContent = tab.fileName;
+      title.title = tab.fileName;
+      
+      const closeBtn = document.createElement('span');
+      closeBtn.className = 'tab-dropdown-close';
+      closeBtn.innerHTML = '×';
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.closeTab(tabId);
+      });
+      
+      dropdownItem.appendChild(title);
+      dropdownItem.appendChild(closeBtn);
+      
+      dropdownItem.addEventListener('click', (e) => {
+        if (!e.target.classList.contains('tab-dropdown-close')) {
+          this.switchTab(tabId);
+          this.hideDropdown();
+        }
+      });
+      
+      this.tabDropdown.appendChild(dropdownItem);
+    });
+    
+    // 如果有隐藏的标签页，添加分隔线和关闭所有文件按钮
+    if (this.hiddenTabs.size > 0 || this.tabs.size > 0) {
+      // 添加分隔线
+      const separator = document.createElement('div');
+      separator.className = 'tab-dropdown-separator';
+      this.tabDropdown.appendChild(separator);
+      
+      // 添加关闭所有文件按钮
+       const closeAllBtn = document.createElement('button');
+       closeAllBtn.className = 'tab-dropdown-action';
+       closeAllBtn.textContent = '全部关闭';
+      closeAllBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.closeSavedTabs();
+        this.hideDropdown();
+      });
+      
+      this.tabDropdown.appendChild(closeAllBtn);
+    }
+  }
+  
+  // 检查文本是否需要省略号
+  // 检查tab栏是否溢出
+  checkTabOverflow() {
+    const tabListWidth = this.tabList.clientWidth;
+    const extensionWidth = this.tabExtension.clientWidth;
+    const availableWidth = this.tabsContainer.clientWidth - extensionWidth - 10; // 留10px边距
+    
+    let totalTabWidth = 0;
+    const visibleTabIds = [];
+    const hiddenTabIds = [];
+    
+    // 计算每个tab的宽度
+    this.tabs.forEach((tab, tabId) => {
+      const tabWidth = tab.element.offsetWidth || 150; // 默认150px
+      if (totalTabWidth + tabWidth <= availableWidth) {
+        totalTabWidth += tabWidth;
+        visibleTabIds.push(tabId);
+      } else {
+        hiddenTabIds.push(tabId);
+      }
+    });
+    
+    // 更新可见和隐藏的tab集合
+    this.visibleTabs = new Set(visibleTabIds);
+    this.hiddenTabs = new Set(hiddenTabIds);
+    
+    // 显示/隐藏tab元素
+    this.tabs.forEach((tab, tabId) => {
+      if (this.visibleTabs.has(tabId)) {
+        tab.element.style.display = 'flex';
+      } else {
+        tab.element.style.display = 'none';
+      }
+    });
+    
+    // 显示/隐藏扩展按钮
+    if (this.hiddenTabs.size > 0) {
+      this.tabExtension.style.display = 'flex';
+      // 更新扩展菜单内容
+      this.updateDropdownContent();
+    } else {
+      this.tabExtension.style.display = 'none';
+      this.hideDropdown();
+    }
   }
 
   // 创建新标签页
@@ -190,6 +460,11 @@ class TabManager {
       this.onTabCreate(tabId, fileName, filePath);
     }
 
+    // 检查溢出并更新显示
+    setTimeout(() => {
+      this.checkTabOverflow();
+    }, 0);
+
     // 自动切换到新创建的标签页
     this.switchTab(tabId);
   }
@@ -213,6 +488,14 @@ class TabManager {
       }
     }
   }
+  
+  // 将tab移动到可见区域
+  moveTabToVisible(tabId) {
+    if (!this.hiddenTabs.has(tabId)) return;
+    
+    // 简单切换到该tab
+    this.switchTab(tabId);
+  }
 
   // 关闭标签页
   closeTab(tabId) {
@@ -229,6 +512,10 @@ class TabManager {
     
     // 从tabs中删除
     this.tabs.delete(tabId);
+    
+    // 从可见和隐藏集合中移除
+    this.visibleTabs.delete(tabId);
+    this.hiddenTabs.delete(tabId);
 
     // 如果关闭的是当前激活的tab，切换到其他tab
     if (this.activeTabId === tabId) {
@@ -243,6 +530,11 @@ class TabManager {
         }
       }
     }
+    
+    // 重新检查溢出状态
+    setTimeout(() => {
+      this.checkTabOverflow();
+    }, 0);
   }
 
   // 关闭所有标签页
@@ -250,6 +542,18 @@ class TabManager {
     const tabIds = Array.from(this.tabs.keys());
     tabIds.forEach(tabId => {
       this.closeTab(tabId);
+    });
+  }
+  
+  // 关闭所有已保存的文件（保留未保存的文件）
+  closeSavedTabs() {
+    const tabIds = Array.from(this.tabs.keys());
+    tabIds.forEach(tabId => {
+      const tab = this.tabs.get(tabId);
+      // 只关闭已保存的文件（isDirty为false或undefined）
+      if (tab && !tab.isDirty) {
+        this.closeTab(tabId);
+      }
     });
   }
 
