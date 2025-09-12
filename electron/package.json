@@ -68,6 +68,7 @@
   },
   "dependencies": {
     "axios": "^1.6.0",
+    "docx": "^9.5.1",
     "docx-preview": "^0.1.22",
     "github-markdown-css": "^5.8.1",
     "highlight.js": "^11.11.1",

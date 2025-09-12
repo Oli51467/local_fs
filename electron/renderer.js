@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // 获取ExplorerModule中的fileViewer实例
   fileViewer = explorerModule.getFileViewer();
+  console.log('FileViewer初始化状态:', fileViewer ? '成功' : '失败');
   
   // 绑定剩余的事件监听器
   bindEventListeners();
@@ -196,8 +197,16 @@ function renderTree(node, container, isRoot = false, depth = 0) {
       }
       
       // 使用文件查看器打开文件
+      console.log('尝试打开文件:', node.path, 'FileViewer状态:', fileViewer ? '可用' : '不可用');
       if (fileViewer) {
-        await fileViewer.openFile(node.path);
+        try {
+          await fileViewer.openFile(node.path);
+          console.log('文件打开成功:', node.path);
+        } catch (error) {
+          console.error('文件打开失败:', error);
+        }
+      } else {
+        console.error('FileViewer未初始化');
       }
     });
     container.appendChild(div);
@@ -488,6 +497,22 @@ async function testPythonBackend() {
 function bindEventListeners() {
   // 资源管理器相关事件绑定已移至 ExplorerModule
   // 这里只保留其他模块的事件绑定
+  
+  // 添加文件树容器点击事件，实现点击空白处取消选中
+  if (fileTreeEl) {
+    fileTreeEl.addEventListener('click', (e) => {
+      // 如果点击的是文件树容器本身（空白处），而不是文件项
+      if (e.target === fileTreeEl) {
+        // 清除所有选中状态
+        document.querySelectorAll('.file-item.selected').forEach(el => el.classList.remove('selected'));
+        selectedItemPath = null;
+        // 同步到ExplorerModule
+        if (explorerModule) {
+          explorerModule.setSelectedItemPath(null);
+        }
+      }
+    });
+  }
 }
 
 // 初始化应用

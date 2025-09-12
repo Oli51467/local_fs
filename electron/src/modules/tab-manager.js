@@ -306,6 +306,18 @@ class TabManager {
     return this.tabs.has(tabId);
   }
 
+  // 根据文件路径关闭标签页
+  closeTabByFilePath(filePath) {
+    // 遍历所有tab，找到匹配的文件路径
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.filePath === filePath) {
+        this.closeTab(tabId);
+        return true; // 找到并关闭了对应的tab
+      }
+    }
+    return false; // 没有找到对应的tab
+  }
+
   // 获取标签页数量
   getTabCount() {
     return this.tabs.size;
@@ -333,25 +345,31 @@ class TabManager {
         if (this.activeTabId) {
           this.closeTab(this.activeTabId);
         }
+        return; // 明确返回，避免继续处理
       }
       
       // Ctrl+Shift+W 关闭所有标签
       if (e.ctrlKey && e.shiftKey && e.key === 'W') {
         e.preventDefault();
         this.closeAllTabs();
+        return; // 明确返回，避免继续处理
       }
 
       // Ctrl+Tab 切换到下一个标签
       if (e.ctrlKey && e.key === 'Tab') {
         e.preventDefault();
         this.switchToNextTab();
+        return; // 明确返回，避免继续处理
       }
 
       // Ctrl+Shift+Tab 切换到上一个标签
       if (e.ctrlKey && e.shiftKey && e.key === 'Tab') {
         e.preventDefault();
         this.switchToPrevTab();
+        return; // 明确返回，避免继续处理
       }
+      
+      // 对于其他键盘事件，不阻止传播，让其他监听器处理
     });
   }
 

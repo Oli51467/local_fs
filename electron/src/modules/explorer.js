@@ -70,9 +70,17 @@ class ExplorerModule {
     // 添加键盘事件监听器
     document.addEventListener('keydown', (e) => {
       // 当按下回车键且有选中的文件/文件夹时触发重命名
+      // 但只在文件树区域内且没有活动的编辑器时才处理
       if (e.key === 'Enter' && this.selectedItemPath && !document.querySelector('.inline-input')) {
-        e.preventDefault();
-        this.startRename(this.selectedItemPath);
+        // 检查焦点是否在文件树区域内
+        const activeElement = document.activeElement;
+        const isInFileTree = activeElement && (activeElement.closest('#file-tree') || activeElement.closest('.file-tree-container'));
+        
+        // 只有在文件树区域内才处理回车键
+        if (isInFileTree) {
+          e.preventDefault();
+          this.startRename(this.selectedItemPath);
+        }
       }
     });
   }
@@ -154,7 +162,10 @@ class ExplorerModule {
         // 如果选中的是文件，在其父目录创建
         const parentContainer = selectedElement.parentElement;
         targetContainer = parentContainer;
-        targetPath = parentContainer.dataset.parent || this.selectedItemPath;
+        // 获取文件的父目录路径
+        const filePath = this.selectedItemPath;
+        const lastSlashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+        targetPath = lastSlashIndex > 0 ? filePath.substring(0, lastSlashIndex) : parentContainer.dataset.parent;
       }
     } else {
       // 在data目录下创建（资源管理器最下方）
@@ -209,7 +220,11 @@ class ExplorerModule {
         // 如果选中的是文件，在其父目录创建
         const parentContainer = selectedElement.parentElement;
         targetContainer = parentContainer;
-        targetPath = parentContainer.dataset.parent || this.selectedItemPath;
+        // 获取文件的父目录路径
+        const filePath = this.selectedItemPath;
+        // 使用字符串操作获取父目录路径，避免require问题
+        const lastSlashIndex = filePath.lastIndexOf('/');
+        targetPath = lastSlashIndex > 0 ? filePath.substring(0, lastSlashIndex) : filePath;
       }
     } else {
       // 在data目录下创建（资源管理器最下方）
@@ -322,7 +337,11 @@ class ExplorerModule {
     input.focus();
     
     // 处理输入完成
+    let isCompleting = false;
     const handleComplete = async () => {
+      if (isCompleting) return; // 防止重复执行
+      isCompleting = true;
+      
       const name = input.value.trim();
       if (name) {
         try {
@@ -343,6 +362,8 @@ class ExplorerModule {
     // 回车确认
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
+        e.preventDefault();
+        input.removeEventListener('blur', handleComplete); // 移除blur监听器
         handleComplete();
       } else if (e.key === 'Escape') {
         inputContainer.remove();
@@ -384,9 +405,16 @@ class ExplorerModule {
           if (selectedElement && selectedElement.classList.contains('folder-item')) {
             targetPath = this.selectedItemPath;
           } else {
-            // 如果选中的是文件，获取其父目录
-            const parentContainer = selectedElement.parentElement;
-            targetPath = parentContainer.dataset.parent || this.selectedItemPath;
+            // 如果选中的是文件，获取其父目录路径
+            const filePath = this.selectedItemPath;
+            const lastSlashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+            if (lastSlashIndex > 0) {
+              targetPath = filePath.substring(0, lastSlashIndex);
+            } else {
+              // 如果文件在根目录，获取根目录路径
+              const tree = await window.fsAPI.getFileTree();
+              targetPath = tree.path;
+            }
           }
         } else {
           // 如果没有选中项，导入到根目录
@@ -555,8 +583,14 @@ class ExplorerModule {
       try {
         if (isFolder) {
           await window.fsAPI.deleteItem(itemPath);
+          // 对于文件夹，需要关闭文件夹内所有打开的文件tab
+          this.closeTabsInFolder(itemPath);
         } else {
           await window.fsAPI.deleteItem(itemPath);
+          // 对于单个文件，关闭对应的tab
+          if (this.fileViewer) {
+            this.fileViewer.closeTabByFilePath(itemPath);
+          }
         }
         
         // 清除选中状态
@@ -611,5 +645,36 @@ class ExplorerModule {
   // 获取文件查看器实例
   getFileViewer() {
     return this.fileViewer;
+  }
+
+  // 关闭文件夹内所有打开的文件tab
+  closeTabsInFolder(folderPath) {
+    if (!this.fileViewer || !this.fileViewer.tabManager) {
+      return;
+    }
+
+    // 获取所有打开的tab
+    const allTabs = this.fileViewer.tabManager.getAllTabs();
+    
+    // 遍历所有tab，找到在被删除文件夹内的文件
+    allTabs.forEach(tab => {
+      if (tab.filePath && this.isFileInFolder(tab.filePath, folderPath)) {
+        this.fileViewer.closeTabByFilePath(tab.filePath);
+      }
+    });
+  }
+
+  // 检查文件是否在指定文件夹内
+  isFileInFolder(filePath, folderPath) {
+    // 标准化路径分隔符
+    const normalizedFilePath = filePath.replace(/\\/g, '/');
+    const normalizedFolderPath = folderPath.replace(/\\/g, '/');
+    
+    // 确保文件夹路径以/结尾
+    const folderPathWithSlash = normalizedFolderPath.endsWith('/') ? 
+      normalizedFolderPath : normalizedFolderPath + '/';
+    
+    // 检查文件路径是否以文件夹路径开头
+    return normalizedFilePath.startsWith(folderPathWithSlash);
   }
 }
