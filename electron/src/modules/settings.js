@@ -107,6 +107,12 @@ class SettingsModule {
     this.fileContentEl.style.display = 'block';
     this.settingsPageEl.style.display = 'none';
     
+    // 隐藏测试页面
+    const testPage = document.getElementById('test-page');
+    if (testPage) {
+      testPage.style.display = 'none';
+    }
+    
     // 显示文件树容器
     const fileTreeContainer = document.getElementById('file-tree-container');
     if (fileTreeContainer) {
@@ -120,6 +126,12 @@ class SettingsModule {
   showSettingsPage() {
     this.fileContentEl.style.display = 'none';
     this.settingsPageEl.style.display = 'block';
+    
+    // 隐藏测试页面
+    const testPage = document.getElementById('test-page');
+    if (testPage) {
+      testPage.style.display = 'none';
+    }
     
     // 折叠操作栏，隐藏左侧的文件树容器
     const fileTreeContainer = document.getElementById('file-tree-container');

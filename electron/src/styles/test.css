@@ -1,0 +1,167 @@
+/* 测试页面样式 */
+#test-page {
+  flex: 1;
+  padding: 20px;
+  display: none;
+  overflow: auto;
+  background: var(--bg-color);
+}
+
+.test-section {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.test-section h2 {
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--tree-border);
+  padding-bottom: 10px;
+  color: var(--text-color);
+}
+
+.test-form {
+  background: var(--bg-color);
+  border: 1px solid var(--tree-border);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: bold;
+  color: var(--text-color);
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--tree-border);
+  border-radius: 4px;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 14px;
+}
+
+.form-group input,
+.form-group select {
+  height: 40px;
+}
+
+.form-group textarea {
+  min-height: 80px;
+  resize: vertical;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+}
+
+.send-btn {
+  background: var(--accent-color);
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  transition: background-color 0.2s;
+}
+
+.send-btn:hover {
+  background: var(--accent-hover);
+}
+
+.send-btn:active {
+  transform: translateY(1px);
+}
+
+.response-section {
+  background: var(--bg-color);
+  border: 1px solid var(--tree-border);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.response-section h3 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  color: var(--text-color);
+}
+
+.response-status {
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  font-weight: bold;
+}
+
+.response-status.success {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.response-status.error {
+  background: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+.response-content {
+  background: var(--bg-color);
+  border: 1px solid var(--tree-border);
+  border-radius: 4px;
+  padding: 15px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  color: var(--text-color);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* 深色模式适配 */
+.dark-mode .response-status.success {
+  background: #1e4620;
+  color: #75dd79;
+  border: 1px solid #2d5a2f;
+}
+
+.dark-mode .response-status.error {
+  background: #4a1e1e;
+  color: #f5a3a3;
+  border: 1px solid #5a2d2d;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  #test-page {
+    padding: 10px;
+  }
+  
+  .test-section {
+    max-width: 100%;
+  }
+  
+  .test-form,
+  .response-section {
+    padding: 15px;
+  }
+}

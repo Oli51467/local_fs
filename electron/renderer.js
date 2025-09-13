@@ -12,6 +12,7 @@ function renderIcons() {
   document.getElementById('file-icon').innerHTML = icons.file;
   document.getElementById('search-icon').innerHTML = icons.search;
   document.getElementById('settings-icon').innerHTML = icons.settings;
+  document.getElementById('test-icon').innerHTML = icons.test;
   // 资源管理器相关图标渲染已移至资源管理器模块
 }
 
@@ -33,9 +34,10 @@ const styleSheet = document.createElement('style');
 styleSheet.textContent = dragStyles;
 document.head.appendChild(styleSheet);
 
-// 初始化设置模块、资源管理器模块和事件绑定
+// 初始化设置模块、资源管理器模块、测试模块和事件绑定
 let settingsModule;
 let explorerModule;
+let testModule;
 document.addEventListener('DOMContentLoaded', async () => {
   settingsModule = new SettingsModule();
   await settingsModule.init();
@@ -44,6 +46,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   settingsModule.showSettingsPage();
   
   explorerModule = new ExplorerModule();
+  
+  // 初始化测试模块
+  testModule = new TestModule();
+  await testModule.init();
   
   // 获取ExplorerModule中的fileViewer实例
   fileViewer = explorerModule.getFileViewer();
@@ -676,6 +682,11 @@ function switchToSearchMode() {
     settingsModule.showFilePage();
   }
   
+  // 隐藏测试页面
+  if (testModule) {
+    testModule.hideTestPage();
+  }
+  
   // 隐藏文件树
   document.getElementById('file-tree').style.display = 'none';
   
@@ -701,6 +712,11 @@ function switchToSearchMode() {
 // 切换到文件模式
 function switchToFileMode() {
   isSearchMode = false;
+  
+  // 隐藏测试页面
+  if (testModule) {
+    testModule.hideTestPage();
+  }
   
   // 显示文件树
   document.getElementById('file-tree').style.display = 'block';

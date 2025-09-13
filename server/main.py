@@ -13,6 +13,14 @@ async def root():
 async def health():
     return {"status": "ok1"}
 
+@app.get("/hello")
+async def hello():
+    return {"message": "Hello World!", "status": "success"}
+
+@app.post("/hello")
+async def hello_post(data: dict = None):
+    return {"message": "Hello from POST!", "received_data": data, "status": "success"}
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
