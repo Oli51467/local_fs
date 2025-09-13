@@ -60,8 +60,13 @@ app.whenReady().then(() => {
 
 // 应用退出时的清理工作 
 app.on('will-quit', () => {
-  if (modules && modules.pythonBackendModule) {
-    modules.pythonBackendModule.stopPythonBackend();
+  if (modules) {
+    if (modules.pythonBackendModule) {
+      modules.pythonBackendModule.stopPythonBackend();
+    }
+    if (modules.settingsBackendModule) {
+      modules.settingsBackendModule.destroy();
+    }
   }
 });
 

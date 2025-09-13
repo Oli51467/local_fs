@@ -36,8 +36,13 @@ document.head.appendChild(styleSheet);
 // 初始化设置模块、资源管理器模块和事件绑定
 let settingsModule;
 let explorerModule;
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   settingsModule = new SettingsModule();
+  await settingsModule.init();
+  
+  // 默认显示设置页面
+  settingsModule.showSettingsPage();
+  
   explorerModule = new ExplorerModule();
   
   // 获取ExplorerModule中的fileViewer实例
@@ -665,6 +670,11 @@ let isSearchMode = false;
 // 切换到搜索模式
 function switchToSearchMode() {
   isSearchMode = true;
+  
+  // 如果当前在设置页面，先切换到文件页面
+  if (settingsModule) {
+    settingsModule.showFilePage();
+  }
   
   // 隐藏文件树
   document.getElementById('file-tree').style.display = 'none';

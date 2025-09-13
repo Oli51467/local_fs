@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { ipcMain } = require('electron');
+const ConfigManager = require('./config-manager');
 
 class SettingsBackendModule {
   constructor() {
@@ -8,6 +9,19 @@ class SettingsBackendModule {
     this.defaultSettings = {
       darkMode: false
     };
+    
+    // 初始化配置管理器
+    this.configManager = new ConfigManager();
+    
+    // 监听配置变化
+    this.configManager.on('configChanged', (newConfig, oldConfig) => {
+      console.log('配置已更新，通知渲染进程...');
+      // 通知所有渲染进程配置已更新
+      const { BrowserWindow } = require('electron');
+      BrowserWindow.getAllWindows().forEach(win => {
+        win.webContents.send('settings-updated', newConfig);
+      });
+    });
     
     this.registerIpcHandlers();
   }
@@ -26,7 +40,7 @@ class SettingsBackendModule {
 
   saveSettings(settings) {
     try {
-      fs.writeFileSync(this.settingsPath, JSON.stringify(settings, null, 2));
+      this.configManager.update(settings);
       return { success: true };
     } catch (error) {
       console.error('保存设置失败:', error);
@@ -36,14 +50,17 @@ class SettingsBackendModule {
 
   getSettings() {
     try {
-      if (fs.existsSync(this.settingsPath)) {
-        const settings = JSON.parse(fs.readFileSync(this.settingsPath, 'utf-8'));
-        return settings;
-      }
-      return this.defaultSettings;
+      return this.configManager.getAll();
     } catch (error) {
       console.error('获取设置失败:', error);
       return this.defaultSettings;
+    }
+  }
+
+  // 销毁方法
+  destroy() {
+    if (this.configManager) {
+      this.configManager.destroy();
     }
   }
 }

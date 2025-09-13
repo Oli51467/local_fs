@@ -5,7 +5,9 @@
   "main": "main.js",
   "scripts": {
     "start": "electronmon .",
-    "dev": "npm run start",
+    "dev": "NODE_ENV=development electronmon .",
+    "dev:no-reload": "NODE_ENV=development DEV_IGNORE_SETTINGS=true electronmon .",
+    "prod": "NODE_ENV=production electron .",
     "electron:dev": "electronmon .",
     "build": "electron-builder build",
     "build:mac": "electron-builder build --mac",

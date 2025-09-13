@@ -1,0 +1,20 @@
+{
+  "ignore": [
+    "settings.json",
+    "node_modules/**/*",
+    "dist/**/*",
+    "*.log"
+  ],
+  "watch": [
+    "main.js",
+    "preload.js",
+    "renderer.js",
+    "src/**/*",
+    "index.html"
+  ],
+  "ext": "js,html,css,json",
+  "env": {
+    "NODE_ENV": "development"
+  },
+  "delay": 1000
+}

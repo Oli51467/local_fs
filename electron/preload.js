@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('fsAPI', {
   // 设置相关
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   getSettings: () => ipcRenderer.invoke('get-settings'),
+  onSettingsUpdated: (callback) => ipcRenderer.on('settings-updated', (event, config) => callback(config)),
   
   // 文件导入相关
   selectFiles: () => ipcRenderer.invoke('select-files'),

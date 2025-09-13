@@ -21,6 +21,22 @@ class SettingsModule {
   async init() {
     await this.loadSettings();
     this.bindEvents();
+    this.setupConfigListener();
+  }
+
+  /**
+   * 设置配置更新监听器
+   */
+  setupConfigListener() {
+    // 监听来自主进程的配置更新事件
+    if (window.fsAPI && window.fsAPI.onSettingsUpdated) {
+      window.fsAPI.onSettingsUpdated((newConfig) => {
+        console.log('收到配置更新:', newConfig);
+        this.isDarkMode = newConfig.darkMode || false;
+        this.applyTheme();
+        // 不需要保存，因为配置已经在主进程中更新了
+      });
+    }
   }
 
   /**
@@ -44,17 +60,7 @@ class SettingsModule {
       this.showFilePage();
     });
     
-    // 搜索按钮点击事件
-    const searchBtn = document.getElementById('search-btn');
-    if (searchBtn) {
-      searchBtn.addEventListener('click', () => {
-        this.showFilePage();
-        // 切换到搜索模式
-        if (typeof switchToSearchMode === 'function') {
-          switchToSearchMode();
-        }
-      });
-    }
+    // 搜索按钮点击事件已在renderer.js中处理，这里不需要重复绑定
   }
 
   /**
