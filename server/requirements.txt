@@ -1,3 +1,12 @@
 fastapi
 uvicorn[standard]
 pyinstaller
+chromadb
+sentence-transformers
+numpy
+pandas
+python-multipart
+aiofiles
+jieba
+transformers
+torch

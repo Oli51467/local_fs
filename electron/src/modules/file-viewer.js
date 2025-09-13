@@ -138,7 +138,7 @@ class FileViewerModule {
 
     // PDF Worker路径
     ipcMain.handle('get-pdf-worker-path', () => {
-      const workerPath = path.join(__dirname, '..', '..', 'static', 'pdf.worker.min.js');
+      const workerPath = path.join(__dirname, '..', '..', 'static', 'libs', 'pdf.worker.min.js');
       return 'file://' + workerPath.replace(/\\/g, '/');
     });
 

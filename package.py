@@ -284,6 +284,11 @@ def create_electron_builder_config():
         "from": "python_backend",
         "to": "python_backend",
         "filter": ["**/*"]
+      },
+      {
+        "from": "static",
+        "to": "static",
+        "filter": ["**/*"]
       }
     ],
     "mac": {

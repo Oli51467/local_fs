@@ -162,7 +162,7 @@ class PdfViewer {
       }
 
       const script = document.createElement('script');
-      script.src = './node_modules/pdfjs-dist/build/pdf.min.js';
+      script.src = './static/libs/pdf.js';
       script.onload = () => {
         // PDF.js加载完成后，pdfjsLib会被添加到window对象
         if (typeof window.pdfjsLib !== 'undefined') {

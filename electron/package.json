@@ -5,10 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electronmon .",
-    "dev": "NODE_ENV=development electronmon .",
-    "dev:no-reload": "NODE_ENV=development DEV_IGNORE_SETTINGS=true electronmon .",
-    "prod": "NODE_ENV=production electron .",
-    "electron:dev": "electronmon .",
+    "dev": "npm run start",
     "build": "electron-builder build",
     "build:mac": "electron-builder build --mac",
     "build:win": "electron-builder build --win",
@@ -38,6 +35,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "static",
+        "to": "static",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
@@ -64,20 +68,11 @@
     }
   },
   "devDependencies": {
-    "electron": "^38.0.0",
+    "electron": "^26.0.0",
     "electron-builder": "^24.13.3",
     "electronmon": "^2.0.2"
   },
   "dependencies": {
-    "axios": "^1.6.0",
-    "docx": "^9.5.1",
-    "docx-preview": "^0.1.22",
-    "github-markdown-css": "^5.8.1",
-    "highlight.js": "^11.11.1",
-    "jszip": "^3.10.1",
-    "marked": "^16.2.1",
-    "pdfjs-dist": "^3.6.172",
-    "pptx-preview": "^1.0.6",
-    "xml2js": "^0.6.2"
+    "axios": "^1.6.0"
   }
 }

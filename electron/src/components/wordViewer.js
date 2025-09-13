@@ -204,6 +204,12 @@ class WordViewer {
       
       // 检查docx-preview是否可用
       console.log('检查docx对象:', typeof window.docx, window.docx);
+      console.log('检查JSZip对象:', typeof window.JSZip, window.JSZip);
+      if (window.JSZip && typeof window.JSZip.loadAsync === 'function') {
+        console.log('JSZip.loadAsync方法可用');
+      } else {
+        console.error('JSZip.loadAsync方法不可用:', window.JSZip);
+      }
       if (typeof window.docx !== 'undefined' && window.docx.renderAsync) {
         // 创建一个临时容器来渲染Word文档
         const tempContainer = document.createElement('div');
