@@ -277,7 +277,7 @@ class FileViewer {
           isEditable = false;
           break;
         default:
-          this.createErrorView(tabId, `不支持的文件类型: ${fileExt}`);
+          this.createErrorView(tabId, '不支持的文件类型');
       }
       
       // 存储显示模式信息到内容元素的数据属性

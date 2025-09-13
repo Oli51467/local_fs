@@ -22,15 +22,15 @@ class FileTreeModule {
     const ext = path.extname(fileName).toLowerCase();
     const priorityMap = {
       '.pdf': 1,
-      '.docx': 2,
-      '.doc': 2,
-      '.md': 3,
-      '.markdown': 3,
-      '.pptx': 4,
-      '.ppt': 4,
+      '.pptx': 2,
+      '.ppt': 2,
+      '.html': 3,
+      '.htm': 3,
+      '.docx': 4,
+      '.doc': 4,
       '.txt': 5,
-      '.html': 6,
-      '.htm': 6,
+      '.md': 6,
+      '.markdown': 6,
       '.json': 7
     };
     return priorityMap[ext] || 999; // 其他文件类型排在最后

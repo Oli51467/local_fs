@@ -43,6 +43,18 @@ class SettingsModule {
     this.toggleTreeBtn.addEventListener('click', () => {
       this.showFilePage();
     });
+    
+    // 搜索按钮点击事件
+    const searchBtn = document.getElementById('search-btn');
+    if (searchBtn) {
+      searchBtn.addEventListener('click', () => {
+        this.showFilePage();
+        // 切换到搜索模式
+        if (typeof switchToSearchMode === 'function') {
+          switchToSearchMode();
+        }
+      });
+    }
   }
 
   /**
@@ -88,6 +100,12 @@ class SettingsModule {
   showFilePage() {
     this.fileContentEl.style.display = 'block';
     this.settingsPageEl.style.display = 'none';
+    
+    // 显示文件树容器
+    const fileTreeContainer = document.getElementById('file-tree-container');
+    if (fileTreeContainer) {
+      fileTreeContainer.style.display = 'block';
+    }
   }
 
   /**
@@ -96,6 +114,12 @@ class SettingsModule {
   showSettingsPage() {
     this.fileContentEl.style.display = 'none';
     this.settingsPageEl.style.display = 'block';
+    
+    // 折叠操作栏，隐藏左侧的文件树容器
+    const fileTreeContainer = document.getElementById('file-tree-container');
+    if (fileTreeContainer) {
+      fileTreeContainer.style.display = 'none';
+    }
   }
 
   /**

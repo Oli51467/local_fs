@@ -112,6 +112,7 @@
     <!-- 左侧 sidebar -->
     <div id="sidebar">
       <button id="toggle-tree"><div id="file-icon"></div></button>
+      <button id="search-btn"><div id="search-icon"></div></button>
       <button id="settings-btn"><div id="settings-icon"></div></button>
     </div>
 
@@ -129,6 +130,13 @@
         </div>
       </div>
       <div id="file-tree">Loading...</div>
+      
+      <!-- 搜索区域 -->
+      <div id="search-area" style="display: none;">
+        <div id="search-input-container">
+          <input type="text" id="search-input" placeholder="搜索文件内容" />
+        </div>
+      </div>
     </div>
 
     <!-- 文件内容展示 -->

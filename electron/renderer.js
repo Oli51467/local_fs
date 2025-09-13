@@ -10,6 +10,7 @@ let fileViewer = null;
 // 渲染SVG图标
 function renderIcons() {
   document.getElementById('file-icon').innerHTML = icons.file;
+  document.getElementById('search-icon').innerHTML = icons.search;
   document.getElementById('settings-icon').innerHTML = icons.settings;
   // 资源管理器相关图标渲染已移至资源管理器模块
 }
@@ -658,10 +659,84 @@ async function testPythonBackend() {
   // 资源管理器相关初始化已移至 ExplorerModule
 })();
 
+// 搜索模式状态
+let isSearchMode = false;
+
+// 切换到搜索模式
+function switchToSearchMode() {
+  isSearchMode = true;
+  
+  // 隐藏文件树
+  document.getElementById('file-tree').style.display = 'none';
+  
+  // 显示搜索区域
+  document.getElementById('search-area').style.display = 'block';
+  
+  // 更改资源管理器标题
+  document.getElementById('resource-title').textContent = '搜索';
+  
+  // 隐藏顶部banner的五个操作按钮
+  const headerButtons = document.querySelectorAll('#file-tree-header > div > button');
+  headerButtons.forEach(btn => {
+    btn.style.display = 'none';
+  });
+  
+  // 聚焦搜索输入框
+  const searchInput = document.getElementById('search-input');
+  if (searchInput) {
+    searchInput.focus();
+  }
+}
+
+// 切换到文件模式
+function switchToFileMode() {
+  isSearchMode = false;
+  
+  // 显示文件树
+  document.getElementById('file-tree').style.display = 'block';
+  
+  // 隐藏搜索区域
+  document.getElementById('search-area').style.display = 'none';
+  
+  // 恢复资源管理器标题
+  document.getElementById('resource-title').textContent = '资源管理器';
+  
+  // 显示顶部banner的五个操作按钮
+  const headerButtons = document.querySelectorAll('#file-tree-header > div > button');
+  headerButtons.forEach(btn => {
+    btn.style.display = 'inline-block';
+  });
+  
+  // 清空搜索输入框
+  const searchInput = document.getElementById('search-input');
+  if (searchInput) {
+    searchInput.value = '';
+  }
+}
+
 // 绑定剩余事件监听器的函数
 function bindEventListeners() {
   // 资源管理器相关事件绑定已移至 ExplorerModule
   // 这里只保留其他模块的事件绑定
+  
+  // 搜索按钮事件
+  const searchBtn = document.getElementById('search-btn');
+  if (searchBtn) {
+    searchBtn.addEventListener('click', () => {
+      switchToSearchMode();
+    });
+  }
+  
+  // 文件按钮事件（切换回文件模式）
+  const toggleTreeBtn = document.getElementById('toggle-tree');
+  if (toggleTreeBtn) {
+    toggleTreeBtn.addEventListener('click', () => {
+      if (isSearchMode) {
+        switchToFileMode();
+      }
+      // 原有的文件树切换逻辑由ExplorerModule处理
+    });
+  }
   
   // 添加文件树容器点击事件，实现点击空白处取消选中
   if (fileTreeEl) {

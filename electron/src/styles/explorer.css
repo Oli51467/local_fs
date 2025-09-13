@@ -156,3 +156,36 @@
   border-color: var(--accent-color);
   box-shadow: 0 0 0 1px var(--accent-color);
 }
+
+/* 搜索区域样式 */
+#search-area {
+  flex: 1;
+  padding: 10px;
+  overflow: auto;
+}
+
+#search-input-container {
+  margin-bottom: 10px;
+}
+
+#search-input {
+  width: 100%;
+  padding: 4px 12px;
+  border: 1px solid var(--tree-border);
+  border-radius: 4px;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+#search-input:focus {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 1px var(--accent-color);
+}
+
+#search-input::placeholder {
+  color: var(--text-color);
+  opacity: 0.6;
+}
