@@ -337,6 +337,8 @@ class MarkdownViewer {
             font-size: 16px;
             line-height: 1.5;
             word-wrap: break-word;
+            background-color: var(--bg-color) !important;
+            color: var(--text-color) !important;
           }
           
           .markdown-body table {
@@ -353,21 +355,23 @@ class MarkdownViewer {
           .markdown-body table th,
           .markdown-body table td {
             padding: 6px 13px;
-            border: 1px solid #d0d7de;
+            border: 1px solid var(--tree-border) !important;
+            background-color: var(--bg-color) !important;
+            color: var(--text-color) !important;
           }
           
           .markdown-body table th {
             font-weight: 600;
-            background-color: #f6f8fa;
+            background-color: var(--tree-bg) !important;
           }
           
           .markdown-body table tr {
-            background-color: #ffffff;
-            border-top: 1px solid #c6cbd1;
+            background-color: var(--bg-color) !important;
+            border-top: 1px solid var(--tree-border) !important;
           }
           
           .markdown-body table tr:nth-child(2n) {
-            background-color: #f6f8fa;
+            background-color: var(--tree-bg) !important;
           }
           
           .markdown-body pre {
@@ -375,7 +379,9 @@ class MarkdownViewer {
             overflow: auto;
             font-size: 85%;
             line-height: 1.45;
-            background-color: #f6f8fa;
+            background-color: var(--tree-bg) !important;
+            color: var(--text-color) !important;
+            border: 1px solid var(--tree-border) !important;
             border-radius: 6px;
             margin-top: 0;
             margin-bottom: 16px;
@@ -385,7 +391,8 @@ class MarkdownViewer {
             padding: 0.2em 0.4em;
             margin: 0;
             font-size: 85%;
-            background-color: rgba(175,184,193,0.2);
+            background-color: var(--tree-bg) !important;
+            color: var(--accent-color) !important;
             border-radius: 6px;
             font-family: ui-monospace,SFMono-Regular,"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;
           }
@@ -398,7 +405,8 @@ class MarkdownViewer {
             overflow: visible;
             line-height: inherit;
             word-wrap: normal;
-            background-color: transparent;
+            background-color: transparent !important;
+            color: var(--text-color) !important;
             border: 0;
           }
           
@@ -406,7 +414,7 @@ class MarkdownViewer {
             height: 0.25em;
             padding: 0;
             margin: 24px 0;
-            background-color: #d0d7de;
+            background-color: var(--tree-border) !important;
             border: 0;
           }
           
@@ -415,12 +423,17 @@ class MarkdownViewer {
             padding-left: 2em;
             margin-top: 0;
             margin-bottom: 16px;
+            color: var(--text-color) !important;
+          }
+          
+          .markdown-body li {
+            color: var(--text-color) !important;
           }
           
           .markdown-body blockquote {
             padding: 0 1em;
-            color: #656d76;
-            border-left: 0.25em solid #d0d7de;
+            color: var(--text-muted) !important;
+            border-left: 0.25em solid var(--accent-color) !important;
             margin-top: 0;
             margin-bottom: 16px;
           }
@@ -435,18 +448,33 @@ class MarkdownViewer {
             margin-bottom: 16px;
             font-weight: 600;
             line-height: 1.25;
+            color: var(--text-color) !important;
           }
           
           .markdown-body h1 {
             font-size: 2em;
-            border-bottom: 1px solid #d0d7de;
+            border-bottom: 1px solid var(--tree-border) !important;
             padding-bottom: 0.3em;
           }
           
           .markdown-body h2 {
             font-size: 1.5em;
-            border-bottom: 1px solid #d0d7de;
+            border-bottom: 1px solid var(--tree-border) !important;
             padding-bottom: 0.3em;
+          }
+          
+          .markdown-body p {
+            color: var(--text-color) !important;
+            margin-bottom: 16px;
+          }
+          
+          .markdown-body a {
+            color: var(--accent-color) !important;
+            text-decoration: none;
+          }
+          
+          .markdown-body a:hover {
+            text-decoration: underline;
           }
         </style>
         

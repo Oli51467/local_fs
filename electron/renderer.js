@@ -15,6 +15,23 @@ function renderIcons() {
 }
 
 // 主题设置
+// 拖拽相关CSS样式
+const dragStyles = `
+  .file-item.drag-over {
+    border: 1px dashed #007acc;
+    background-color: transparent !important;
+  }
+  .file-item.drag-over-folder {
+    border: 1px solid #007acc;
+    background-color: rgba(0, 122, 204, 0.1) !important;
+  }
+`;
+
+// 添加拖拽样式到页面
+const styleSheet = document.createElement('style');
+styleSheet.textContent = dragStyles;
+document.head.appendChild(styleSheet);
+
 // 初始化设置模块、资源管理器模块和事件绑定
 let settingsModule;
 let explorerModule;
@@ -33,6 +50,149 @@ document.addEventListener('DOMContentLoaded', () => {
 // 当前选中的文件或文件夹路径
 let selectedItemPath = null;
 let expandedFolders = new Set(); // 记录展开的文件夹路径
+
+// 拖拽相关变量
+let draggedElement = null;
+let draggedPath = null;
+let dropIndicator = null;
+
+// 添加拖拽和放置支持
+function addDragAndDropSupport(element, node, isFolder) {
+  // 设置元素可拖拽
+  element.draggable = true;
+  
+  // 拖拽开始事件
+  element.addEventListener('dragstart', (e) => {
+    draggedElement = element;
+    draggedPath = node.path;
+    element.style.opacity = '0.5';
+    
+    // 设置拖拽数据
+    e.dataTransfer.setData('text/plain', node.path);
+    e.dataTransfer.effectAllowed = 'move';
+    
+    // 创建拖拽指示器
+    if (!dropIndicator) {
+      dropIndicator = document.createElement('div');
+      dropIndicator.style.cssText = `
+        position: absolute;
+        height: 2px;
+        background-color: #007acc;
+        border-radius: 1px;
+        pointer-events: none;
+        z-index: 1000;
+        display: none;
+      `;
+      document.body.appendChild(dropIndicator);
+    }
+  });
+  
+  // 拖拽结束事件
+  element.addEventListener('dragend', (e) => {
+    element.style.opacity = '1';
+    draggedElement = null;
+    draggedPath = null;
+    
+    // 清理所有拖拽样式
+    document.querySelectorAll('.file-item').forEach(item => {
+      item.classList.remove('drag-over', 'drag-over-folder');
+    });
+    
+    // 隐藏拖拽指示器
+    if (dropIndicator) {
+      dropIndicator.style.display = 'none';
+    }
+  });
+  
+  // 拖拽进入事件
+  element.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    if (draggedElement && draggedElement !== element) {
+      if (isFolder) {
+        element.classList.add('drag-over-folder');
+      } else {
+        element.classList.add('drag-over');
+      }
+    }
+  });
+  
+  // 拖拽悬停事件
+  element.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    
+    if (draggedElement && draggedElement !== element && dropIndicator) {
+      const rect = element.getBoundingClientRect();
+      const mouseY = e.clientY;
+      const elementMiddle = rect.top + rect.height / 2;
+      
+      if (isFolder) {
+        // 文件夹：显示整个文件夹高亮
+        dropIndicator.style.display = 'none';
+      } else {
+        // 文件：根据鼠标位置显示插入线
+        dropIndicator.style.display = 'block';
+        dropIndicator.style.left = rect.left + 'px';
+        dropIndicator.style.width = rect.width + 'px';
+        
+        if (mouseY < elementMiddle) {
+          // 插入到文件上方（移动到文件的父目录）
+          dropIndicator.style.top = rect.top - 1 + 'px';
+        } else {
+          // 插入到文件下方（移动到文件的父目录）
+          dropIndicator.style.top = rect.bottom - 1 + 'px';
+        }
+      }
+    }
+  });
+  
+  // 拖拽离开事件
+  element.addEventListener('dragleave', (e) => {
+    // 只有当鼠标真正离开元素时才移除样式
+    if (!element.contains(e.relatedTarget)) {
+      element.classList.remove('drag-over', 'drag-over-folder');
+    }
+  });
+  
+  // 放置事件
+  element.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // 清理拖拽样式
+    element.classList.remove('drag-over', 'drag-over-folder');
+    
+    if (draggedPath && draggedPath !== node.path) {
+      let targetPath;
+      
+      if (isFolder) {
+        // 放置到文件夹中
+        targetPath = node.path;
+      } else {
+        // 放置到文件的父目录中
+        targetPath = node.path.substring(0, node.path.lastIndexOf('/')) || node.path.substring(0, node.path.lastIndexOf('\\'));
+      }
+      
+      try {
+        const result = await window.fsAPI.moveItem(draggedPath, targetPath);
+        if (result.success) {
+          // 移动成功，刷新文件树
+          await loadFileTree();
+          // 选中移动后的文件
+          selectedItemPath = result.newPath;
+          if (explorerModule) {
+            explorerModule.setSelectedItemPath(result.newPath);
+          }
+        } else {
+          alert(`移动失败: ${result.error}`);
+        }
+      } catch (error) {
+        console.error('移动文件失败:', error);
+        alert(`移动失败: ${error.message}`);
+      }
+    }
+  });
+}
 
 // 获取文件图标
 function getFileIcon(fileName, isFolder = false, isExpanded = false) {
@@ -123,6 +283,9 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     div.appendChild(contentDiv);
     container.appendChild(div);
     
+    // 添加拖拽功能
+    addDragAndDropSupport(div, node, true);
+    
     const childContainer = document.createElement('div');
     childContainer.dataset.parent = node.path;
     // 根据expandedFolders状态决定是否展开
@@ -182,6 +345,9 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     contentDiv.appendChild(nameSpan);
     
     div.appendChild(contentDiv);
+    
+    // 添加拖拽功能
+    addDragAndDropSupport(div, node, false);
     
     div.addEventListener('click', async (e) => {
       e.stopPropagation(); // 防止事件冒泡

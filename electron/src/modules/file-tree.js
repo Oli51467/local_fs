@@ -7,7 +7,6 @@ const path = require('path');
 let docxLib = null;
 try {
   docxLib = require('docx');
-  console.log('docx库加载成功');
 } catch (error) {
   console.warn('docx库加载失败:', error.message);
 }
@@ -16,6 +15,25 @@ class FileTreeModule {
   constructor(dataRoot) {
     this.dataRoot = dataRoot;
     this.initializeIpcHandlers();
+  }
+
+  // 获取文件类型的排序优先级
+  getFileTypePriority(fileName) {
+    const ext = path.extname(fileName).toLowerCase();
+    const priorityMap = {
+      '.pdf': 1,
+      '.docx': 2,
+      '.doc': 2,
+      '.md': 3,
+      '.markdown': 3,
+      '.pptx': 4,
+      '.ppt': 4,
+      '.txt': 5,
+      '.html': 6,
+      '.htm': 6,
+      '.json': 7
+    };
+    return priorityMap[ext] || 999; // 其他文件类型排在最后
   }
 
   // 递归获取文件树
@@ -31,6 +49,22 @@ class FileTreeModule {
         // 文件夹排在前面
         if (a.children && !b.children) return -1;
         if (!a.children && b.children) return 1;
+        
+        // 如果都是文件，按文件类型优先级排序
+        if (!a.children && !b.children) {
+          const aPriority = this.getFileTypePriority(a.name);
+          const bPriority = this.getFileTypePriority(b.name);
+          
+          // 如果优先级不同，按优先级排序
+          if (aPriority !== bPriority) {
+            return aPriority - bPriority;
+          }
+          
+          // 如果优先级相同，按文件名排序
+          return a.name.localeCompare(b.name);
+        }
+        
+        // 如果都是文件夹，按名称排序
         return a.name.localeCompare(b.name);
       });
     return { name: path.basename(dir), path: dir, children };
@@ -191,6 +225,52 @@ class FileTreeModule {
         return { success: true, newPath: newPath };
       } catch (error) {
         console.error('重命名失败:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    // 移动文件或文件夹
+    ipcMain.handle('move-item', (event, sourcePath, targetPath) => {
+      try {
+        // 检查源文件是否存在
+        if (!fs.existsSync(sourcePath)) {
+          return { success: false, error: '源文件不存在' };
+        }
+        
+        // 检查目标路径是否存在
+        if (!fs.existsSync(targetPath)) {
+          return { success: false, error: '目标路径不存在' };
+        }
+        
+        // 确保目标路径是目录
+        const targetStats = fs.statSync(targetPath);
+        if (!targetStats.isDirectory()) {
+          return { success: false, error: '目标路径必须是文件夹' };
+        }
+        
+        // 获取源文件名
+        const fileName = path.basename(sourcePath);
+        const newPath = path.join(targetPath, fileName);
+        
+        // 检查目标位置是否已存在同名文件
+        if (fs.existsSync(newPath)) {
+          return { success: false, error: '目标位置已存在同名文件' };
+        }
+        
+        // 检查是否试图将文件夹移动到自己的子目录中
+        const sourceStats = fs.statSync(sourcePath);
+        if (sourceStats.isDirectory()) {
+          const relativePath = path.relative(sourcePath, targetPath);
+          if (!relativePath || !relativePath.startsWith('..')) {
+            return { success: false, error: '不能将文件夹移动到自己的子目录中' };
+          }
+        }
+        
+        // 执行移动操作
+        fs.renameSync(sourcePath, newPath);
+        return { success: true, newPath: newPath };
+      } catch (error) {
+        console.error('移动文件失败:', error);
         return { success: false, error: error.message };
       }
     });

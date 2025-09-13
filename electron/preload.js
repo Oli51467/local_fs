@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('fsAPI', {
   createFile: (parentPath, fileName) => ipcRenderer.invoke('create-file', parentPath, fileName),
   deleteItem: (itemPath) => ipcRenderer.invoke('delete-item', itemPath),
   renameItem: (itemPath, newName) => ipcRenderer.invoke('rename-item', itemPath, newName),
+  moveItem: (sourcePath, targetPath) => ipcRenderer.invoke('move-item', sourcePath, targetPath),
   
   // 文件展示相关
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),

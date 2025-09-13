@@ -77,7 +77,7 @@ class WordViewer {
         height: 100% !important;
         width: 100% !important;
         overflow: hidden;
-        background: white !important;
+        background: var(--bg-color) !important;
         margin: 0 !important;
         position: relative;
         box-sizing: border-box;
@@ -87,7 +87,7 @@ class WordViewer {
         height: 100% !important;
         width: 100% !important;
         overflow: auto;
-        background: white !important;
+        background: var(--bg-color) !important;
         margin: 0 !important;
         padding: 0 !important;
         position: absolute;
@@ -103,8 +103,8 @@ class WordViewer {
         width: 100% !important;
         overflow-y: auto;
         overflow-x: hidden;
-        background: white !important;
-        color: black;
+        background: var(--bg-color) !important;
+        color: var(--text-color) !important;
         margin: 0 !important;
         padding: 0 !important;
         box-sizing: border-box;
@@ -144,15 +144,16 @@ class WordViewer {
         min-height: 100% !important;
         margin: 0 !important;
         padding: 10px !important;
-        background: white !important;
+        background: var(--bg-color) !important;
         box-sizing: border-box !important;
       }
 
-      /* 移除所有可能的灰色背景 */
+      /* 移除所有可能的灰色背景，适配深色模式 */
       .docx-preview *,
       .docx-preview-content *,
       .docx-content * {
-        background-color: white !important;
+        background-color: var(--bg-color) !important;
+        color: var(--text-color) !important;
         max-width: 100% !important;
       }
 
@@ -162,7 +163,7 @@ class WordViewer {
         width: 100% !important;
         margin: 0 !important;
         padding: 10px !important;
-        background: white !important;
+        background: var(--bg-color) !important;
         box-shadow: none !important;
       }
     `;
@@ -207,8 +208,8 @@ class WordViewer {
         // 创建一个临时容器来渲染Word文档
         const tempContainer = document.createElement('div');
         tempContainer.style.padding = '20px';
-        tempContainer.style.backgroundColor = 'white';
-        tempContainer.style.color = 'black';
+        tempContainer.style.backgroundColor = 'var(--bg-color)';
+        tempContainer.style.color = 'var(--text-color)';
         tempContainer.style.fontFamily = 'Times New Roman, serif';
         tempContainer.style.lineHeight = '1.6';
         tempContainer.style.maxWidth = '100%';

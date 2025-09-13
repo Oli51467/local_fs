@@ -64,11 +64,11 @@
 }
 
 #file-tree-header button:hover {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: var(--tree-hover);
 }
 
 .dark-mode #file-tree-header button:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+  background-color: var(--tree-hover);
 }
 
 #file-tree-header button svg {
@@ -116,7 +116,12 @@
 }
 
 .file-item.selected {
-  background-color: rgba(128, 128, 128, 0.2);
+  background-color: var(--accent-color);
+  color: #ffffff;
+}
+
+.file-item.selected:hover {
+  background-color: var(--accent-hover);
 }
 
 .folder-arrow {
@@ -137,10 +142,17 @@
 }
 
 .inline-input {
-  border: 1px solid;
+  border: 1px solid var(--tree-border);
   padding: 2px 4px;
   font-size: 11px;
   outline: none;
   width: 120px;
   border-radius: 2px;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+}
+
+.inline-input:focus {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 1px var(--accent-color);
 }

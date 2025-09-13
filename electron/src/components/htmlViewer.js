@@ -94,7 +94,7 @@ class HtmlViewer {
       doc.open();
       
       // 检查当前是否为深色模式
-      const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
+      const isDarkMode = document.body.classList.contains('dark-mode');
       
       // 为HTML内容添加深色模式样式
       const styledContent = `
@@ -104,8 +104,8 @@ class HtmlViewer {
           <meta charset="utf-8">
           <style>
             body {
-              background-color: ${isDarkMode ? '#1e1e1e' : '#ffffff'} !important;
-              color: ${isDarkMode ? '#d4d4d4' : '#000000'} !important;
+              background-color: ${isDarkMode ? 'var(--tree-bg)' : '#ffffff'} !important;
+              color: ${isDarkMode ? '#ffffff' : '#000000'} !important;
               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
               margin: 0;
               padding: 20px;
@@ -119,18 +119,18 @@ class HtmlViewer {
               width: 3px;
             }
             body::-webkit-scrollbar-track {
-              background: ${isDarkMode ? '#2d2d2d' : '#f1f1f1'};
+              background: ${isDarkMode ? 'var(--tree-bg)' : '#f1f1f1'};
             }
             body::-webkit-scrollbar-thumb {
-              background: ${isDarkMode ? '#555' : '#888'};
+              background: ${isDarkMode ? '#404040' : '#888'};
               border-radius: 1.5px;
             }
             body::-webkit-scrollbar-thumb:hover {
-              background: ${isDarkMode ? '#777' : '#555'};
+              background: ${isDarkMode ? '#606060' : '#555'};
             }
             * {
               background-color: transparent !important;
-              color: ${isDarkMode ? '#d4d4d4' : '#000000'} !important;
+              color: ${isDarkMode ? '#ffffff' : '#000000'} !important;
             }
             h1, h2, h3, h4, h5, h6 {
               color: ${isDarkMode ? '#ffffff' : '#000000'} !important;
@@ -139,8 +139,8 @@ class HtmlViewer {
               color: ${isDarkMode ? '#4fc3f7' : '#0066cc'} !important;
             }
             pre, code {
-              background-color: ${isDarkMode ? '#2d2d2d' : '#f8f8f8'} !important;
-              color: ${isDarkMode ? '#d4d4d4' : '#000000'} !important;
+              background-color: ${isDarkMode ? '#1a1a1a' : '#f8f8f8'} !important;
+              color: ${isDarkMode ? '#ffffff' : '#000000'} !important;
               padding: 4px 8px;
               border-radius: 4px;
             }
@@ -151,10 +151,11 @@ class HtmlViewer {
             th, td {
               border: 1px solid ${isDarkMode ? '#404040' : '#cccccc'} !important;
               padding: 8px 12px;
-              background-color: ${isDarkMode ? '#1e1e1e' : '#ffffff'} !important;
+              background-color: ${isDarkMode ? '#000000' : '#ffffff'} !important;
+              color: ${isDarkMode ? '#ffffff' : '#000000'} !important;
             }
             th {
-              background-color: ${isDarkMode ? '#2d2d2d' : '#f8f8f8'} !important;
+              background-color: ${isDarkMode ? '#1a1a1a' : '#f8f8f8'} !important;
               font-weight: bold;
             }
           </style>

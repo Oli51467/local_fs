@@ -55,8 +55,8 @@ class TabManager {
     style.textContent = `
       .tabs-container {
         border-bottom: 1px solid var(--tree-border);
-        background: var(--tree-bg);
-        min-height: 40px;
+        background: var(--bg-color);
+        min-height: 35px;
         margin-top: -9px;
         margin-left: -10px;
         margin-right: -10px;
@@ -102,21 +102,17 @@ class TabManager {
       }
       
       .tab-extension-btn:hover {
-        background-color: rgba(0, 0, 0, 0.1);
-      }
-      
-      .dark-mode .tab-extension-btn:hover {
-        background-color: rgba(255, 255, 255, 0.1);
+        background-color: var(--tree-hover);
       }
       
       .tab-dropdown {
         position: absolute;
         top: 100%;
         right: 0;
-        background: white;
+        background: var(--bg-color);
         border: 1px solid var(--tree-border);
-        border-radius: 4px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        border-radius: 3px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
         min-width: 200px;
         max-width: 250px;
         max-height: 300px;
@@ -127,11 +123,12 @@ class TabManager {
       .tab-dropdown-item {
         display: flex;
         align-items: center;
-        padding: 6px 12px;
+        padding: 8px 12px;
         cursor: pointer;
         font-size: 13px;
-        color: black;
-        background: white;
+        color: var(--text-color);
+        background: var(--bg-color);
+        transition: background-color 0.15s ease;
       }
       
       .tab-dropdown-item:hover {
@@ -139,8 +136,8 @@ class TabManager {
       }
       
       .tab-dropdown-item.active {
-        background: #f0f0f0;
-        color: black;
+        background: var(--accent-color);
+        color: #ffffff;
         font-weight: 500;
       }
       
@@ -172,7 +169,7 @@ class TabManager {
       
       .tab-dropdown-separator {
         height: 1px;
-        background: black;
+        background: var(--tree-border);
         margin: 0;
       }
       
@@ -182,12 +179,13 @@ class TabManager {
           padding: 8px 12px;
           cursor: pointer;
           font-size: 13px;
-          color: black;
+          color: var(--text-color);
           border: none;
-          background: white;
+          background: var(--bg-color);
           width: 100%;
           text-align: left;
-          font-family: '宋体', SimSun, serif;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          transition: background-color 0.15s ease;
         }
       
       .tab-dropdown-action:hover {
@@ -197,17 +195,18 @@ class TabManager {
       .tab-item {
         display: flex;
         align-items: center;
-        padding: 10px 12px;
+        padding: 8px 12px;
         border-right: 1px solid var(--tree-border);
         cursor: pointer;
-        background: var(--bg-color);
-        color: var(--text-color);
+        background: var(--tree-bg);
+        color: var(--text-muted);
         font-size: 13px;
         white-space: nowrap;
         flex-shrink: 0;
         position: relative;
         border-bottom: 2px solid transparent;
         max-width: calc(80% - 50px);
+        transition: all 0.15s ease;
       }
 
       .tab-item:first-child {
@@ -219,12 +218,14 @@ class TabManager {
       }
 
       .tab-item:hover {
-        background: var(--tree-hover);
+        background: var(--bg-color);
+        color: var(--text-color);
       }
 
       .tab-item.active {
         background: var(--bg-color);
-        border-bottom: 2px solid #007acc;
+        color: var(--text-color);
+        border-bottom: 2px solid var(--accent-color);
       }
 
       .tab-title {
@@ -254,7 +255,7 @@ class TabManager {
       }
 
       .tab-close:hover {
-        background: rgba(128, 128, 128, 0.3);
+        background: var(--tree-hover);
         opacity: 1;
       }
     `;
