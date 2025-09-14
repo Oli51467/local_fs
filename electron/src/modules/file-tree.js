@@ -3,13 +3,6 @@ const { ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
-// 尝试加载docx库
-let docxLib = null;
-try {
-  docxLib = require('docx');
-} catch (error) {
-  console.warn('docx库加载失败:', error.message);
-}
 
 class FileTreeModule {
   constructor(dataRoot) {
@@ -128,56 +121,10 @@ class FileTreeModule {
           counter++;
         }
         
-        // 根据文件扩展名提供初始内容
-         const fileExt = path.extname(finalFileName).toLowerCase();
+        // 创建空文件
+        fs.writeFileSync(finalFilePath, '');
          
-         if (fileExt === '.docx') {
-            // 使用docx库创建Word文档
-            if (docxLib) {
-              try {
-                const { Document, Packer, Paragraph, TextRun } = docxLib;
-                
-                const doc = new Document({
-                  sections: [
-                    {
-                      properties: {},
-                      children: [
-                        new Paragraph({
-                          children: [
-                            new TextRun(""),
-                          ],
-                        }),
-                      ],
-                    },
-                  ],
-                });
-                
-                // 同步创建Word文档，避免重复创建问题
-                try {
-                  const buffer = await Packer.toBuffer(doc);
-                  fs.writeFileSync(finalFilePath, buffer);
-                  console.log('Word文档创建成功:', finalFilePath);
-                } catch (error) {
-                  console.error('创建Word文档失败:', error);
-                  // 如果docx库创建失败，回退到文本方式
-                  fs.writeFileSync(finalFilePath, '');
-                }
-                
-              } catch (error) {
-                console.error('docx库使用失败，使用文本方式:', error);
-                // 如果docx库不可用，回退到文本方式
-                fs.writeFileSync(finalFilePath, '');
-              }
-            } else {
-              console.warn('docx库未加载，使用文本方式创建.docx文件');
-              fs.writeFileSync(finalFilePath, '');
-            }
-          } else {
-            // 其他文件类型创建空文件
-            fs.writeFileSync(finalFilePath, '');
-          }
-         
-         return { success: true, path: finalFilePath, actualName: finalFileName };
+        return { success: true, path: finalFilePath, actualName: finalFileName };
       } catch (error) {
         console.error('创建文件失败:', error);
         return { success: false, error: error.message };

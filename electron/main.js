@@ -1,6 +1,23 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 
+// 禁用硬件加速以避免GPU相关的Mach端口问题
+app.disableHardwareAcceleration();
+
+// 修复 macOS 上的 Mach 端口权限错误
+if (process.platform === 'darwin') {
+  app.commandLine.appendSwitch('--no-sandbox');
+  app.commandLine.appendSwitch('--disable-dev-shm-usage');
+  app.commandLine.appendSwitch('--disable-web-security');
+  app.commandLine.appendSwitch('--disable-gpu');
+  app.commandLine.appendSwitch('--disable-gpu-sandbox');
+  app.commandLine.appendSwitch('--disable-software-rasterizer');
+  app.commandLine.appendSwitch('--disable-background-timer-throttling');
+  app.commandLine.appendSwitch('--disable-renderer-backgrounding');
+  app.commandLine.appendSwitch('--disable-backgrounding-occluded-windows');
+  app.commandLine.appendSwitch('--disable-ipc-flooding-protection');
+}
+
 // 引入各个功能模块
 const FileTreeModule = require('./src/modules/file-tree');
 const FileViewerModule = require('./src/modules/file-viewer');
@@ -18,7 +35,12 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      webSecurity: false,
+      allowRunningInsecureContent: true,
+      experimentalFeatures: false,
+      enableBlinkFeatures: '',
+      disableBlinkFeatures: 'Auxclick'
     }
   });
 

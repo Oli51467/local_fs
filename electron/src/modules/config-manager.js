@@ -23,7 +23,7 @@ class ConfigManager extends EventEmitter {
       if (fs.existsSync(this.settingsPath)) {
         const configData = fs.readFileSync(this.settingsPath, 'utf-8');
         this.config = JSON.parse(configData);
-        console.log('配置已加载:', this.config);
+        //console.log('配置已加载:', this.config);
       } else {
         // 创建默认配置
         this.config = {

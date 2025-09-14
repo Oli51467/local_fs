@@ -113,6 +113,12 @@ class SettingsModule {
       testPage.style.display = 'none';
     }
     
+    // 隐藏数据库页面
+    const databasePage = document.getElementById('database-page');
+    if (databasePage) {
+      databasePage.style.display = 'none';
+    }
+    
     // 显示文件树容器
     const fileTreeContainer = document.getElementById('file-tree-container');
     if (fileTreeContainer) {
@@ -131,6 +137,12 @@ class SettingsModule {
     const testPage = document.getElementById('test-page');
     if (testPage) {
       testPage.style.display = 'none';
+    }
+    
+    // 隐藏数据库页面
+    const databasePage = document.getElementById('database-page');
+    if (databasePage) {
+      databasePage.style.display = 'none';
     }
     
     // 折叠操作栏，隐藏左侧的文件树容器

@@ -8,3 +8,5 @@
 /electron/.DS_Store
 /server/__pycache__
 /backend
+**__pycache__
+/meta/*

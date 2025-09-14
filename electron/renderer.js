@@ -13,6 +13,7 @@ function renderIcons() {
   document.getElementById('search-icon').innerHTML = icons.search;
   document.getElementById('settings-icon').innerHTML = icons.settings;
   document.getElementById('test-icon').innerHTML = icons.test;
+  document.getElementById('database-icon').innerHTML = icons.database;
   // 资源管理器相关图标渲染已移至资源管理器模块
 }
 
@@ -34,29 +35,43 @@ const styleSheet = document.createElement('style');
 styleSheet.textContent = dragStyles;
 document.head.appendChild(styleSheet);
 
-// 初始化设置模块、资源管理器模块、测试模块和事件绑定
+// 初始化设置模块、资源管理器模块、测试模块、数据库模块和事件绑定
 let settingsModule;
 let explorerModule;
 let testModule;
+let databaseModule;
+let splashScreen;
+
 document.addEventListener('DOMContentLoaded', async () => {
-  settingsModule = new SettingsModule();
-  await settingsModule.init();
+  // 初始化启动页面
+  splashScreen = new SplashScreen();
   
-  // 默认显示设置页面
-  settingsModule.showSettingsPage();
-  
-  explorerModule = new ExplorerModule();
-  
-  // 初始化测试模块
-  testModule = new TestModule();
-  await testModule.init();
-  
-  // 获取ExplorerModule中的fileViewer实例
-  fileViewer = explorerModule.getFileViewer();
-  console.log('FileViewer初始化状态:', fileViewer ? '成功' : '失败');
-  
-  // 绑定剩余的事件监听器
-  bindEventListeners();
+  // 监听应用准备就绪事件
+  document.addEventListener('appReady', async () => {
+    // 渲染侧边栏图标
+    renderIcons();
+    
+    settingsModule = new SettingsModule();
+    await settingsModule.init();
+    
+    databaseModule = new DatabaseModule();
+    
+    // 默认显示文件页面
+    settingsModule.showFilePage();
+    
+    explorerModule = new ExplorerModule();
+    
+    // 初始化测试模块
+    testModule = new TestModule();
+    await testModule.init();
+    
+    // 获取ExplorerModule中的fileViewer实例
+    fileViewer = explorerModule.getFileViewer();
+    console.log('FileViewer初始化状态:', fileViewer ? '成功' : '失败');
+    
+    // 绑定剩余的事件监听器
+    bindEventListeners();
+  });
 });
 
 // 当前选中的文件或文件夹路径
@@ -687,6 +702,12 @@ function switchToSearchMode() {
     testModule.hideTestPage();
   }
   
+  // 隐藏数据库页面
+  const databasePage = document.getElementById('database-page');
+  if (databasePage) {
+    databasePage.style.display = 'none';
+  }
+  
   // 隐藏文件树
   document.getElementById('file-tree').style.display = 'none';
   
@@ -716,6 +737,12 @@ function switchToFileMode() {
   // 隐藏测试页面
   if (testModule) {
     testModule.hideTestPage();
+  }
+  
+  // 隐藏数据库页面
+  const databasePage = document.getElementById('database-page');
+  if (databasePage) {
+    databasePage.style.display = 'none';
   }
   
   // 显示文件树
@@ -750,6 +777,16 @@ function bindEventListeners() {
   if (searchBtn) {
     searchBtn.addEventListener('click', () => {
       switchToSearchMode();
+    });
+  }
+  
+  // 数据库按钮事件
+  const databaseBtn = document.getElementById('database-btn');
+  if (databaseBtn) {
+    databaseBtn.addEventListener('click', () => {
+      if (databaseModule) {
+        databaseModule.showDatabasePage();
+      }
     });
   }
   

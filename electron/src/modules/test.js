@@ -95,6 +95,12 @@ class TestModule {
     this.fileContent.style.display = 'none';
     this.fileTreeContainer.style.display = 'none';
     
+    // 隐藏数据库页面
+    const databasePage = document.getElementById('database-page');
+    if (databasePage) {
+      databasePage.style.display = 'none';
+    }
+    
     // 显示测试页面
     this.testPage.style.display = 'block';
     
