@@ -1,7 +1,7 @@
 from FlagEmbedding import BGEM3FlagModel
 from typing import List
 import logging
-from config.server_config import ServerConfig
+from config.config import ServerConfig
 
 logger = logging.getLogger(__name__)
 

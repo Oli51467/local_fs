@@ -38,6 +38,11 @@ class DatabaseModule {
       this.selectedTable = e.target.value;
     });
 
+    // 删除所有数据按钮事件
+    document.getElementById('delete-all-data').addEventListener('click', () => {
+      this.deleteAllTableData();
+    });
+
     // Faiss数据库事件
     document.getElementById('test-faiss-connection').addEventListener('click', () => {
       this.testFaissConnection();
@@ -107,7 +112,7 @@ class DatabaseModule {
       const data = await response.json();
 
       if (response.ok && data.status === 'success') {
-        statusEl.textContent = `连接成功！数据库路径: ${data.database_path}`;
+        statusEl.textContent = '连接成功！';
         statusEl.className = 'status-indicator status-success';
         
         // 连接成功后自动获取表列表
@@ -173,6 +178,9 @@ class DatabaseModule {
         const tableName = item.dataset.table;
         this.selectedTable = tableName;
         document.getElementById('table-select').value = tableName;
+        
+        // 显示删除按钮
+        document.getElementById('delete-all-data').style.display = 'inline-block';
         
         // 自动查询表数据
         this.queryTableData();
@@ -265,6 +273,44 @@ class DatabaseModule {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  async deleteAllTableData() {
+    if (!this.selectedTable) {
+      alert('请先选择一个表');
+      return;
+    }
+
+    // 确认删除
+    const confirmed = confirm(`确定要删除表 "${this.selectedTable}" 中的所有数据吗？此操作不可撤销！`);
+    if (!confirmed) {
+      return;
+    }
+
+    const statusEl = document.getElementById('db-status');
+    statusEl.textContent = '正在删除数据...';
+    statusEl.className = 'status-indicator status-info';
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/database/table/${this.selectedTable}/data`, {
+        method: 'DELETE'
+      });
+      const data = await response.json();
+
+      if (response.ok && data.status === 'success') {
+        statusEl.textContent = `删除成功！已删除 ${data.deleted_rows} 行数据`;
+        statusEl.className = 'status-indicator status-success';
+        
+        // 重新查询表数据以显示空表
+        setTimeout(() => this.queryTableData(), 500);
+      } else {
+        throw new Error(data.detail || '删除失败');
+      }
+    } catch (error) {
+      console.error('删除表数据失败:', error);
+      statusEl.textContent = `删除失败: ${error.message}`;
+      statusEl.className = 'status-indicator status-error';
+    }
   }
 
   // 工具方法：格式化JSON
@@ -424,16 +470,25 @@ class DatabaseModule {
     html += '</tr></thead><tbody>';
 
     vectors.forEach(vector => {
-      html += '<tr>';
-      html += `<td>${vector.vector_id || 'N/A'}</td>`;
-      html += `<td>${this.escapeHtml(vector.type || 'N/A')}</td>`;
-      html += `<td>${this.escapeHtml(vector.filename || 'N/A')}</td>`;
-      html += `<td>${this.escapeHtml(this.truncateText(vector.content || 'N/A', 100))}</td>`;
+      // 确定文件类型（优先使用file_type字段）
+      const fileType = vector.file_type || 'unknown';
       
-      // 显示其他元数据
+      // 确定文件名（优先使用filename字段）
+      const filename = vector.filename || 'N/A';
+      
+      // 确定内容（优先使用chunk_text，其次使用text字段）
+      const content = vector.chunk_text || vector.text || 'N/A';
+      
+      html += '<tr>';
+      html += `<td>${vector.vector_id ?? 'N/A'}</td>`;
+      html += `<td>${this.escapeHtml(fileType)}</td>`;
+      html += `<td>${this.escapeHtml(filename)}</td>`;
+      html += `<td>${this.escapeHtml(this.truncateText(content, 100))}</td>`;
+      
+      // 显示其他元数据（只显示核心字段，排除已显示的内容）
       const otherInfo = [];
       for (const [key, value] of Object.entries(vector)) {
-        if (!['vector_id', 'type', 'filename', 'content'].includes(key)) {
+        if (!['vector_id', 'file_type', 'filename', 'chunk_text', 'text'].includes(key)) {
           otherInfo.push(`${key}: ${value}`);
         }
       }

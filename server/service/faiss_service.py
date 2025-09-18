@@ -1,22 +1,21 @@
-import sqlite3
 import json
 import faiss
 import numpy as np
-from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 from config.config import DatabaseConfig
 from .sqlite_service import SQLiteManager
 
 class FaissManager:
     """Faiss向量数据库管理器"""
     
-    def __init__(self, dimension: int = 384):
+    def __init__(self, dimension: int = 1024):
         self.dimension = dimension
         self.index_path = DatabaseConfig.VECTOR_INDEX_PATH
         self.metadata_path = DatabaseConfig.VECTOR_METADATA_PATH
         self.index = None
         self.metadata = []
         DatabaseConfig.ensure_directories()
+        self.init_index()  # 自动初始化索引
     
     def init_index(self):
         """初始化Faiss索引"""
@@ -60,27 +59,33 @@ class FaissManager:
         self.save_index()
         return vector_ids
     
-    def search_vectors(self, query_vector: np.ndarray, k: int = 10) -> List[Dict]:
+    def search_vectors(self, query_vectors: List[List[float]], k: int = 10) -> List[List[Dict]]:
         """搜索相似向量"""
-        if query_vector.shape[0] != self.dimension:
-            raise ValueError(f"查询向量维度不匹配，期望 {self.dimension}，实际 {query_vector.shape[0]}")
+        # 转换为numpy数组
+        query_array = np.array(query_vectors, dtype=np.float32)
+        
+        if query_array.shape[1] != self.dimension:
+            raise ValueError(f"查询向量维度不匹配，期望 {self.dimension}，实际 {query_array.shape[1]}")
         
         # 标准化查询向量
-        query_vector = query_vector.reshape(1, -1)
-        faiss.normalize_L2(query_vector)
+        faiss.normalize_L2(query_array)
         
         # 搜索
-        scores, indices = self.index.search(query_vector, k)
+        scores, indices = self.index.search(query_array, k)
         
         # 返回结果
-        results = []
-        for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
-            if idx != -1 and idx < len(self.metadata):
-                result = self.metadata[idx].copy()
-                result['similarity_score'] = float(score)
-                results.append(result)
+        all_results = []
+        for query_idx in range(len(query_vectors)):
+            results = []
+            for i, (score, idx) in enumerate(zip(scores[query_idx], indices[query_idx])):
+                if idx != -1 and idx < len(self.metadata):
+                    result = self.metadata[idx].copy()
+                    result['score'] = float(score)
+                    result['rank'] = i + 1
+                    results.append(result)
+            all_results.append(results)
         
-        return results
+        return all_results
     
     def save_index(self):
         """保存索引和元数据"""
@@ -88,18 +93,17 @@ class FaissManager:
         with open(self.metadata_path, 'w', encoding='utf-8') as f:
             json.dump(self.metadata, f, ensure_ascii=False, indent=2)
     
+    def add_vector(self, vector: List[float], metadata: Dict) -> int:
+        """添加单个向量到索引"""
+        vectors = np.array([vector], dtype=np.float32)
+        vector_ids = self.add_vectors(vectors, [metadata])
+        return vector_ids[0]
+    
     def get_total_vectors(self) -> int:
         """获取向量总数"""
         return self.index.ntotal if self.index else 0
 
 def init_databases():
-    """初始化所有数据库"""
-    # 初始化SQLite数据库
     sqlite_manager = SQLiteManager()
-    sqlite_manager.init_database()
-    
-    # 初始化Faiss向量数据库
     faiss_manager = FaissManager()
-    faiss_manager.init_index()
-    
     return sqlite_manager, faiss_manager

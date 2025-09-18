@@ -10,6 +10,7 @@ class SQLiteManager:
     def __init__(self):
         self.db_path = DatabaseConfig.SQLITE_DB_PATH
         DatabaseConfig.ensure_directories()
+        self.init_database()
     
     def init_database(self):
         """初始化数据库表结构"""
@@ -53,7 +54,7 @@ class SQLiteManager:
             conn.commit()
     
     def insert_document(self, filename: str, file_path: str, file_type: str, 
-                       file_size: int, content_hash: str) -> int:
+                       file_size: int, file_hash: str, content: str = None, metadata: dict = None) -> int:
         """插入文档记录"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -61,10 +62,10 @@ class SQLiteManager:
                 INSERT OR REPLACE INTO documents 
                 (filename, file_path, file_type, file_size, content_hash)
                 VALUES (?, ?, ?, ?, ?)
-            """, (filename, file_path, file_type, file_size, content_hash))
+            """, (filename, file_path, file_type, file_size, file_hash))
             return cursor.lastrowid
     
-    def insert_chunk(self, document_id: int, chunk_index: int, content: str, vector_id: int = None) -> int:
+    def insert_chunk(self, document_id: int, chunk_index: int, content: str, vector_id: int = None, metadata: dict = None) -> int:
         """插入文档块记录"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -74,6 +75,32 @@ class SQLiteManager:
                 VALUES (?, ?, ?, ?)
             """, (document_id, chunk_index, content, vector_id))
             return cursor.lastrowid
+    
+    def get_documents_by_filename(self, filename: str) -> List[Dict]:
+        """根据文件名获取文档"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, filename, file_path, file_type, file_size, 
+                       upload_time, content_hash, total_chunks
+                FROM documents 
+                WHERE filename = ?
+                ORDER BY upload_time DESC
+            """, (filename,))
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append({
+                    'id': row[0],
+                    'filename': row[1],
+                    'file_path': row[2],
+                    'file_type': row[3],
+                    'file_size': row[4],
+                    'upload_time': row[5],
+                    'file_hash': row[6],
+                    'total_chunks': row[7]
+                })
+            return results
     
     def update_document_chunks_count(self, document_id: int, total_chunks: int):
         """更新文档的总块数"""

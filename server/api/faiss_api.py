@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, List, Optional
 import numpy as np
 from service.faiss_service import FaissManager
+from service.embedding_service import EmbeddingService
+from model.faiss_request_model import SearchRequest
 import logging
 
 logger = logging.getLogger(__name__)
@@ -9,11 +11,13 @@ router = APIRouter(prefix="/api/faiss", tags=["faiss"])
 
 # 全局faiss管理器实例
 faiss_manager = None
+embedding_service = None
 
-def init_faiss_api(faiss_mgr: FaissManager):
+def init_faiss_api(faiss_mgr: FaissManager, embedding_svc: EmbeddingService = None):
     """初始化Faiss API"""
-    global faiss_manager
+    global faiss_manager, embedding_service
     faiss_manager = faiss_mgr
+    embedding_service = embedding_svc
     logger.info("Faiss API initialized")
 
 @router.get("/test-connection")
@@ -49,10 +53,15 @@ async def get_faiss_statistics() -> Dict[str, Any]:
         # 统计元数据信息
         metadata_count = len(faiss_manager.metadata)
         
-        # 按类型统计
+        # 按类型统计 - 优先使用file_type字段，如果没有则使用text/chunk_text判断
         type_stats = {}
         for meta in faiss_manager.metadata:
-            doc_type = meta.get('type', 'unknown')
+            # 优先使用file_type字段
+            if 'file_type' in meta:
+                doc_type = meta['file_type']
+            else:
+                # 如果没有file_type，根据内容判断或默认为unknown
+                doc_type = 'unknown'
             type_stats[doc_type] = type_stats.get(doc_type, 0) + 1
         
         return {
@@ -97,6 +106,32 @@ async def get_all_vectors(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
         logger.error(f"Failed to get vectors: {str(e)}")
         raise HTTPException(status_code=500, detail=f"获取向量数据失败: {str(e)}")
 
+@router.post("/search")
+async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
+    """搜索相似向量（POST方法）"""
+    try:
+        if faiss_manager is None:
+            raise HTTPException(status_code=500, detail="Faiss manager not initialized")
+        
+        if embedding_service is None:
+            raise HTTPException(status_code=500, detail="Embedding service not initialized")
+        
+        # 将查询文本转换为向量
+        query_vector = embedding_service.encode_text(request.query)
+        
+        # 搜索相似向量
+        results = faiss_manager.search_vectors([query_vector], k=request.top_k)
+        
+        return {
+            "status": "success",
+            "query": request.query,
+            "results": results,
+            "total_found": len(results[0]) if results else 0
+        }
+    except Exception as e:
+        logger.error(f"Failed to search vectors: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
+
 @router.get("/vectors/search")
 async def search_vectors(query: str, k: int = 10) -> Dict[str, Any]:
     """搜索相似向量（需要提供查询文本）"""
@@ -124,10 +159,16 @@ async def get_vectors_by_type(doc_type: str, limit: int = 100, offset: int = 0) 
         if faiss_manager is None:
             raise HTTPException(status_code=500, detail="Faiss manager not initialized")
         
-        # 筛选指定类型的向量
+        # 筛选指定类型的向量 - 优先使用file_type字段
         filtered_vectors = []
         for meta in faiss_manager.metadata:
-            if meta.get('type') == doc_type:
+            # 优先使用file_type字段，如果没有则使用unknown
+            if 'file_type' in meta:
+                meta_type = meta['file_type']
+            else:
+                meta_type = 'unknown'
+            
+            if meta_type == doc_type:
                 filtered_vectors.append(meta)
         
         total_count = len(filtered_vectors)

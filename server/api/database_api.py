@@ -107,6 +107,46 @@ async def get_table_data(table_name: str, limit: int = 100):
         logger.error(f"获取表数据失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"获取表数据失败: {str(e)}")
 
+@router.delete("/table/{table_name}/data")
+async def delete_all_table_data(table_name: str):
+    """删除指定表中的所有数据"""
+    try:
+        if sqlite_manager is None:
+            raise HTTPException(status_code=500, detail="数据库管理器未初始化")
+        
+        # 验证表名是否存在（防止SQL注入）
+        with sqlite3.connect(sqlite_manager.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail=f"表 '{table_name}' 不存在")
+            
+            # 获取删除前的行数
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count_before = cursor.fetchone()[0]
+            
+            # 删除所有数据
+            cursor.execute(f"DELETE FROM {table_name}")
+            conn.commit()
+            
+            # 获取删除后的行数（应该为0）
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count_after = cursor.fetchone()[0]
+            
+        logger.info(f"已删除表 '{table_name}' 中的所有数据，删除了 {count_before} 行")
+        
+        return {
+            "status": "success",
+            "message": f"成功删除表 '{table_name}' 中的所有数据",
+            "deleted_rows": count_before,
+            "remaining_rows": count_after
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除表数据失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"删除表数据失败: {str(e)}")
+
 @router.get("/statistics")
 async def get_database_statistics():
     """获取数据库统计信息"""
