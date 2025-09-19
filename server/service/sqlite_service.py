@@ -1,8 +1,11 @@
 import sqlite3
 import json
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from config.config import DatabaseConfig
+
+logger = logging.getLogger(__name__)
 
 class SQLiteManager:
     """SQLite数据库管理器"""
@@ -212,3 +215,46 @@ class SQLiteManager:
                 'total_chunks': chunk_count,
                 'file_types': file_types
             }
+    
+    def get_document_count(self) -> int:
+        """获取文档总数"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM documents")
+                return cursor.fetchone()[0]
+        except:
+            return 0
+    
+    def cleanup_all(self):
+        """清理所有数据"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # 删除所有数据（保留表结构）
+                cursor.execute("DELETE FROM document_chunks")
+                cursor.execute("DELETE FROM documents")
+                
+                # 重置自增ID
+                cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('documents', 'document_chunks')")
+                
+                conn.commit()
+                logger.info("SQLite数据库清理完成")
+                
+        except Exception as e:
+            logger.error(f"SQLite数据库清理失败: {str(e)}")
+            raise e
+
+# 全局SQLite管理器实例
+sqlite_manager_instance = None
+
+def init_sqlite_manager():
+    """初始化全局SQLite管理器"""
+    global sqlite_manager_instance
+    sqlite_manager_instance = SQLiteManager()
+    return sqlite_manager_instance
+
+def get_sqlite_manager():
+    """获取全局SQLite管理器实例"""
+    return sqlite_manager_instance

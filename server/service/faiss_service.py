@@ -1,9 +1,12 @@
 import json
 import faiss
 import numpy as np
+import logging
 from typing import List, Dict
 from config.config import DatabaseConfig
 from .sqlite_service import SQLiteManager
+
+logger = logging.getLogger(__name__)
 
 class FaissManager:
     """Faiss向量数据库管理器"""
@@ -102,8 +105,30 @@ class FaissManager:
     def get_total_vectors(self) -> int:
         """获取向量总数"""
         return self.index.ntotal if self.index else 0
+    
+    def cleanup_all(self):
+        """清理所有向量数据"""
+        try:
+            # 重置索引
+            self.index = faiss.IndexFlatIP(self.dimension)
+            self.metadata = []
+            self.save_index()
+            
+            logger.info("Faiss向量索引清理完成")
+            
+        except Exception as e:
+            logger.error(f"Faiss向量索引清理失败: {str(e)}")
+            raise e
 
-def init_databases():
-    sqlite_manager = SQLiteManager()
-    faiss_manager = FaissManager()
-    return sqlite_manager, faiss_manager
+# 全局Faiss管理器实例
+faiss_manager_instance = None
+
+def init_faiss_manager():
+    """初始化全局Faiss管理器"""
+    global faiss_manager_instance
+    faiss_manager_instance = FaissManager()
+    return faiss_manager_instance
+
+def get_faiss_manager():
+    """获取全局Faiss管理器实例"""
+    return faiss_manager_instance

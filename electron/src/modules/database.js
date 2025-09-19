@@ -43,6 +43,16 @@ class DatabaseModule {
       this.deleteAllTableData();
     });
 
+    // 清空SQLite数据按钮事件
+    document.getElementById('cleanup-sqlite-data').addEventListener('click', () => {
+      this.cleanupSQLiteData();
+    });
+
+    // 清空Faiss向量按钮事件
+    document.getElementById('cleanup-faiss-vectors').addEventListener('click', () => {
+      this.cleanupFaissVectors();
+    });
+
     // Faiss数据库事件
     document.getElementById('test-faiss-connection').addEventListener('click', () => {
       this.testFaissConnection();
@@ -281,35 +291,98 @@ class DatabaseModule {
       return;
     }
 
-    // 确认删除
-    const confirmed = confirm(`确定要删除表 "${this.selectedTable}" 中的所有数据吗？此操作不可撤销！`);
-    if (!confirmed) {
+    if (!confirm(`确定要删除表 "${this.selectedTable}" 中的所有数据吗？此操作不可恢复。`)) {
       return;
     }
 
-    const statusEl = document.getElementById('db-status');
-    statusEl.textContent = '正在删除数据...';
-    statusEl.className = 'status-indicator status-info';
+    const tableDataContent = document.getElementById('table-data-content');
+    tableDataContent.innerHTML = '<div class="loading">正在删除数据...</div>';
 
     try {
-      const response = await fetch(`${this.baseUrl}/api/database/table/${this.selectedTable}/data`, {
-        method: 'DELETE'
+      const response = await fetch(`${this.baseUrl}/api/database/delete-all/${this.selectedTable}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json'
+        }
       });
+
       const data = await response.json();
 
       if (response.ok && data.status === 'success') {
-        statusEl.textContent = `删除成功！已删除 ${data.deleted_rows} 行数据`;
-        statusEl.className = 'status-indicator status-success';
-        
-        // 重新查询表数据以显示空表
-        setTimeout(() => this.queryTableData(), 500);
+        tableDataContent.innerHTML = `<div class="success-message">成功删除 ${data.deleted_count} 条数据</div>`;
+        // 重新查询表数据
+        setTimeout(() => this.queryTableData(), 1500);
       } else {
         throw new Error(data.detail || '删除失败');
       }
     } catch (error) {
       console.error('删除表数据失败:', error);
-      statusEl.textContent = `删除失败: ${error.message}`;
-      statusEl.className = 'status-indicator status-error';
+      tableDataContent.innerHTML = `<div class="error-message">删除失败: ${error.message}</div>`;
+    }
+  }
+
+  async cleanupSQLiteData() {
+    if (!confirm('确定要清空SQLite数据库中的所有数据吗？此操作将删除所有文档和分块数据，但保留表结构。')) {
+      return;
+    }
+
+    const tableDataContent = document.getElementById('table-data-content');
+    tableDataContent.innerHTML = '<div class="loading">正在清空SQLite数据...</div>';
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/cleanup/sqlite-data`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.status === 'success') {
+        tableDataContent.innerHTML = `<div class="success-message">${data.message}</div>`;
+        // 重新获取表列表和数据
+        setTimeout(() => {
+          this.getAllTables();
+          this.queryTableData();
+        }, 1500);
+      } else {
+        throw new Error(data.detail || '清空失败');
+      }
+    } catch (error) {
+      console.error('清空SQLite数据失败:', error);
+      tableDataContent.innerHTML = `<div class="error-message">清空失败: ${error.message}</div>`;
+    }
+  }
+
+  async cleanupFaissVectors() {
+    if (!confirm('确定要清空Faiss向量数据库中的所有向量吗？此操作将删除所有向量数据，但保留索引结构。')) {
+      return;
+    }
+
+    const vectorsDataContent = document.getElementById('vectors-data-content');
+    vectorsDataContent.innerHTML = '<div class="loading">正在清空Faiss向量...</div>';
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/cleanup/faiss-vectors`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.status === 'success') {
+        vectorsDataContent.innerHTML = `<div class="success-message">${data.message}</div>`;
+        // 重新获取统计信息
+        setTimeout(() => this.getFaissStatistics(), 1500);
+      } else {
+        throw new Error(data.detail || '清空失败');
+      }
+    } catch (error) {
+      console.error('清空Faiss向量失败:', error);
+      vectorsDataContent.innerHTML = `<div class="error-message">清空失败: ${error.message}</div>`;
     }
   }
 

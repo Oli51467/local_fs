@@ -6,8 +6,8 @@ from datetime import datetime
 from service.embedding_service import get_embedding_service
 from service.faiss_service import FaissManager
 from service.sqlite_service import SQLiteManager
-from service.langchain_embedding_service import BGEM3LangChainWrapper
-from langchain_experimental.text_splitter import SemanticChunker
+from service.text_splitter_service import init_text_splitter_service, get_text_splitter_service
+from config.config import ServerConfig
 from model.document_request_model import (
     FileUploadRequest,
     FileUploadResponse
@@ -20,27 +20,32 @@ router = APIRouter(prefix="/api/document", tags=["document"])
 # 全局变量
 faiss_manager = None
 sqlite_manager = None
-semantic_chunker = None
+text_splitter_service = None
 
 def init_document_api(faiss_mgr: FaissManager, sqlite_mgr: SQLiteManager):
     """初始化文档API"""
-    global faiss_manager, sqlite_manager, semantic_chunker
+    global faiss_manager, sqlite_manager, text_splitter_service
     faiss_manager = faiss_mgr
     sqlite_manager = sqlite_mgr
     
-    # 初始化语义分割器
-    from pathlib import Path
-    PROJECT_ROOT = Path(__file__).parent.parent.parent
-    BGE_M3_MODEL_PATH = PROJECT_ROOT / "meta" / "embedding" / "bge-m3"
+    # 初始化文本分割服务
+    if ServerConfig.TEXT_SPLITTER_TYPE == "recursive":
+        init_text_splitter_service(
+            "recursive",
+            chunk_size=ServerConfig.RECURSIVE_CHUNK_SIZE,
+            chunk_overlap=ServerConfig.RECURSIVE_CHUNK_OVERLAP,
+            separators=ServerConfig.RECURSIVE_SEPARATORS
+        )
+    else:  # semantic
+        init_text_splitter_service(
+            "semantic",
+            breakpoint_threshold_type=ServerConfig.SEMANTIC_BREAKPOINT_THRESHOLD_TYPE,
+            breakpoint_threshold_amount=ServerConfig.SEMANTIC_BREAKPOINT_THRESHOLD_AMOUNT
+        )
     
-    embedding_model = BGEM3LangChainWrapper(BGE_M3_MODEL_PATH, use_fp16=True)
-    semantic_chunker = SemanticChunker(
-        embedding_model, 
-        breakpoint_threshold_type="percentile",
-        breakpoint_threshold_amount=90.0
-    )
+    text_splitter_service = get_text_splitter_service()
     
-    logger.info("Document API initialized with SemanticChunker")
+    logger.info(f"Document API initialized with {text_splitter_service.get_splitter_info()['type']} text splitter")
 
 
 @router.post("/upload", response_model=FileUploadResponse)
@@ -119,12 +124,13 @@ async def upload_file(request: FileUploadRequest):
         logger.info(f"文本提取完成，长度: {len(text_content)}")
         
         # 5. 分割文本
-        if not semantic_chunker:
-            raise HTTPException(status_code=500, detail="语义分割器未初始化")
+        if not text_splitter_service:
+            raise HTTPException(status_code=500, detail="文本分割器未初始化")
         
-        # 使用语义分割器分割文本
-        chunks = semantic_chunker.split_text(text_content)
-        logger.info(f"语义分割完成，共 {len(chunks)} 个块")
+        # 使用配置的文本分割器分割文本
+        chunks = text_splitter_service.split_text(text_content)
+        splitter_info = text_splitter_service.get_splitter_info()
+        logger.info(f"文本分割完成，共 {len(chunks)} 个块，分割器类型: {splitter_info['type']}")
         
         if not chunks:
             raise HTTPException(status_code=400, detail="文本分割后无有效内容")
