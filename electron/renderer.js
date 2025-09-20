@@ -323,7 +323,7 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     
     // 文件夹点击事件 - 负责选中和展开/收起
     div.addEventListener('click', (e) => {
-      e.stopPropagation(); // 防止事件冒泡
+      e.stopPropagation(); // 防止事件冒泡到文件树容器
       
       // 清除所有选中状态
       document.querySelectorAll('.file-item.selected').forEach(el => el.classList.remove('selected'));
@@ -334,6 +334,10 @@ function renderTree(node, container, isRoot = false, depth = 0) {
       if (explorerModule) {
         explorerModule.setSelectedItemPath(node.path);
       }
+      
+      // 确保文件夹项获得焦点，以便键盘事件能正常工作
+      div.focus();
+      div.tabIndex = 0; // 确保元素可以获得焦点
       
       // 切换展开/收起状态
       const isCurrentlyExpanded = expandedFolders.has(node.path);
@@ -377,7 +381,7 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     addDragAndDropSupport(div, node, false);
     
     div.addEventListener('click', async (e) => {
-      e.stopPropagation(); // 防止事件冒泡
+      e.stopPropagation(); // 防止事件冒泡到文件树容器
       // 清除所有选中状态
       document.querySelectorAll('.file-item.selected').forEach(el => el.classList.remove('selected'));
       // 设置当前选中状态
@@ -388,17 +392,17 @@ function renderTree(node, container, isRoot = false, depth = 0) {
         explorerModule.setSelectedItemPath(node.path);
       }
       
+      // 确保文件项获得焦点，以便键盘事件能正常工作
+      div.setAttribute('tabindex', '0'); // 确保元素可以获得焦点
+      div.focus();
+      
       // 使用文件查看器打开文件
-      console.log('尝试打开文件:', node.path, 'FileViewer状态:', fileViewer ? '可用' : '不可用');
       if (fileViewer) {
         try {
           await fileViewer.openFile(node.path);
-          console.log('文件打开成功:', node.path);
         } catch (error) {
           console.error('文件打开失败:', error);
         }
-      } else {
-        console.error('FileViewer未初始化');
       }
     });
     container.appendChild(div);
@@ -557,6 +561,11 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
   let isProcessing = false;
   let isCompleted = false;
   
+  // 设置重命名状态
+  if (explorerModule) {
+    explorerModule.isRenaming = true;
+  }
+  
   // 处理重命名完成
   const handleComplete = async (source = 'unknown') => {
     if (isProcessing || isCompleted) return;
@@ -612,6 +621,10 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
     if (element) {
       element.style.display = '';
     }
+    // 重置重命名状态
+    if (explorerModule) {
+      explorerModule.isRenaming = false;
+    }
   };
   
   // 回车确认，ESC取消
@@ -619,7 +632,10 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
     if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      handleComplete('keydown');
+      // 延迟处理，确保输入框完全聚焦
+      setTimeout(() => {
+        handleComplete('keydown');
+      }, 50);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -826,4 +842,7 @@ function bindEventListeners() {
   // 获取并显示文件树
   await loadFileTree();
 })();
+
+// 将 createRenameInput 函数暴露到全局作用域
+window.createRenameInput = createRenameInput;
 

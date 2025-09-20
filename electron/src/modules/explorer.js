@@ -9,6 +9,7 @@ class ExplorerModule {
     this.fileTreeEl = document.getElementById('file-tree');
     this.fileContentEl = document.getElementById('file-content');
     this.fileViewer = null;
+    this.isRenaming = false; // 添加重命名状态标志
     
     // 将全局变量绑定到模块实例
     window.selectedItemPath = null;
@@ -69,18 +70,26 @@ class ExplorerModule {
 
     // 添加键盘事件监听器
     document.addEventListener('keydown', (e) => {
-      // 当按下回车键且有选中的文件/文件夹时触发重命名
-      // 但只在文件树区域内且没有活动的编辑器时才处理
-      if (e.key === 'Enter' && this.selectedItemPath && !document.querySelector('.inline-input')) {
-        // 检查焦点是否在文件树区域内
-        const activeElement = document.activeElement;
-        const isInFileTree = activeElement && (activeElement.closest('#file-tree') || activeElement.closest('.file-tree-container'));
+      // 检查是否有选中的文件项，这是处理Enter键的前提条件
+      if (!this.selectedItemPath) {
+        return;
+      }
+      
+      // 只有在不在重命名状态时才处理键盘事件
+      if (this.isRenaming) {
+        return;
+      }
+      
+      // 检查是否按下了Enter键
+      if (e.key === 'Enter') {
+        // 阻止事件冒泡，防止与其他键盘事件冲突
+        e.stopPropagation();
+        e.preventDefault();
         
-        // 只有在文件树区域内才处理回车键
-        if (isInFileTree) {
-          e.preventDefault();
+        // 延迟处理，确保状态稳定
+        setTimeout(() => {
           this.startRename(this.selectedItemPath);
-        }
+        }, 50);
       }
     });
   }
@@ -472,20 +481,39 @@ class ExplorerModule {
   }
 
   // 开始重命名
-  startRename(itemPath) {
-    const element = document.querySelector(`[data-path="${itemPath}"]`);
+  startRename(itemPath = null) {
+    // 如果已经在重命名状态，直接返回
+    if (this.isRenaming) {
+      return;
+    }
+    
+    const targetPath = itemPath || this.selectedItemPath;
+    if (!targetPath) {
+      console.warn('没有选中的文件或文件夹');
+      return;
+    }
+    
+    const element = document.querySelector(`[data-path="${targetPath}"]`);
     if (!element) return;
+    
+    // 设置重命名状态
+    this.isRenaming = true;
     
     const isFolder = element.classList.contains('folder-item');
     const currentName = element.textContent.trim();
     
-    this.createRenameInput(element, itemPath, currentName, isFolder);
+    this.createRenameInput(element, targetPath, currentName, isFolder);
   }
 
   // 创建重命名输入框
   createRenameInput(element, itemPath, currentName, isFolder) {
-    // 实现重命名输入框逻辑
-    // 这里可以复用原有的重命名逻辑
+    // 调用全局的 createRenameInput 函数
+    if (typeof window.createRenameInput === 'function') {
+      window.createRenameInput(element, itemPath, currentName, isFolder);
+    } else {
+      console.error('createRenameInput 函数未找到');
+      alert('重命名功能初始化失败');
+    }
   }
 
   // 创建删除确认弹窗
