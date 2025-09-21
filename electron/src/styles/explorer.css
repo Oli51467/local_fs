@@ -196,3 +196,101 @@
   color: var(--text-color);
   opacity: 0.6;
 }
+
+/* 右键菜单样式 */
+.context-menu {
+  position: absolute;
+  background: var(--bg-color);
+  border: 1px solid var(--tree-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 3px 0;
+  min-width: 120px;
+  z-index: 1000;
+  backdrop-filter: blur(10px);
+  background-color: rgba(var(--bg-color-rgb, 255, 255, 255), 0.95);
+}
+
+.dark-mode .context-menu {
+  background-color: rgba(var(--bg-color-rgb, 45, 45, 45), 0.95);
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-color);
+  transition: background-color 0.15s ease;
+  user-select: none;
+  gap: 6px;
+}
+
+.context-menu-item:hover {
+  background-color: var(--tree-hover);
+}
+
+.context-menu-item:active {
+  background-color: var(--accent-color);
+  color: #ffffff;
+}
+
+.context-menu-item.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.context-menu-item.disabled:hover {
+  background-color: transparent;
+}
+
+.context-menu-icon {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.context-menu-icon svg {
+  width: 14px;
+  height: 14px;
+  color: var(--text-color);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.context-menu-separator {
+  height: 1px;
+  background-color: var(--tree-border);
+  margin: 3px 0;
+}
+
+/* 上传状态标记 - 固定在文件栏最右边 */
+.upload-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #10b981;
+  margin-left: auto; /* 推到最右边 */
+  margin-right: 8px; /* 右边距 */
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.3);
+}
+
+.upload-indicator.uploading {
+  background-color: #f59e0b;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}

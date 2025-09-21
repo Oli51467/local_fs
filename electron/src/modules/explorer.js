@@ -516,6 +516,17 @@ class ExplorerModule {
     }
   }
 
+  // 删除项目（公开接口）
+  deleteItem(itemPath) {
+    if (!itemPath) {
+      console.warn('没有提供要删除的项目路径');
+      return;
+    }
+    
+    const isFolder = itemPath.includes('.') ? false : true; // 简单判断是否为文件夹
+    this.createDeleteModal(itemPath, isFolder);
+  }
+
   // 创建删除确认弹窗
   createDeleteModal(itemPath, isFolder) {
     // 创建遮罩层

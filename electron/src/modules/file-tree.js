@@ -2,6 +2,7 @@
 const { ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 
 
 class FileTreeModule {
@@ -132,16 +133,49 @@ class FileTreeModule {
     });
 
     // 删除文件或文件夹
-    ipcMain.handle('delete-item', (event, itemPath) => {
+    ipcMain.handle('delete-item', async (event, itemPath) => {
       try {
+        // 获取项目根目录路径
+        const projectRoot = path.join(__dirname, '../..');
+        const relativePath = path.relative(projectRoot, itemPath).replace(/\\/g, '/');
+        
+        // 确保路径格式正确（移除开头的../）
+        const cleanRelativePath = relativePath.startsWith('../') ? relativePath.substring(3) : relativePath;
+        
+        // 检查是否为文件夹
         const stats = fs.statSync(itemPath);
-        if (stats.isDirectory()) {
+        const isFolder = stats.isDirectory();
+        
+        // 1. 首先调用后端API删除数据库中的数据
+        try {
+          const axios = require('axios');
+          const response = await axios.delete('http://localhost:8000/api/document/delete', {
+            data: {
+              file_path: cleanRelativePath,
+              is_folder: isFolder
+            }
+          });
+          
+          if (response.data.status === 'success') {
+            console.log('数据库删除成功:', response.data);
+          } else {
+            console.warn('数据库删除警告:', response.data.message);
+          }
+        } catch (dbError) {
+          console.error('数据库删除失败:', dbError.message);
+          // 数据库删除失败，可以选择是否继续文件删除操作
+          // 这里选择继续文件删除，但记录错误日志
+        }
+        
+        // 2. 删除文件系统上的文件或文件夹
+        if (isFolder) {
           // 递归删除文件夹及其内容
           fs.rmSync(itemPath, { recursive: true, force: true });
         } else {
           // 删除文件
           fs.unlinkSync(itemPath);
         }
+        
         return { success: true };
       } catch (error) {
         console.error('删除失败:', error);
@@ -150,7 +184,7 @@ class FileTreeModule {
     });
 
     // 重命名文件或文件夹
-    ipcMain.handle('rename-item', (event, itemPath, newName) => {
+    ipcMain.handle('rename-item', async (event, itemPath, newName) => {
       try {
         // 获取父目录路径
         const parentDir = path.dirname(itemPath);
@@ -169,6 +203,34 @@ class FileTreeModule {
         
         // 重命名文件或文件夹
         fs.renameSync(itemPath, newPath);
+        
+        // 获取项目根目录路径
+        const projectRoot = path.join(__dirname, '../..');
+        const relativeOldPath = path.relative(projectRoot, itemPath).replace(/\\/g, '/');
+        const relativeNewPath = path.relative(projectRoot, newPath).replace(/\\/g, '/');
+        
+        // 确保路径格式正确（移除开头的../）
+        const cleanRelativeOldPath = relativeOldPath.startsWith('../') ? relativeOldPath.substring(3) : relativeOldPath;
+        const cleanRelativeNewPath = relativeNewPath.startsWith('../') ? relativeNewPath.substring(3) : relativeNewPath;
+        
+        // 检查是否为文件夹
+        const isFolder = fs.statSync(newPath).isDirectory();
+        
+        // 更新数据库中的文件路径
+        try {
+          const response = await axios.post('http://localhost:8000/api/document/update-path', {
+            old_path: cleanRelativeOldPath,
+            new_path: cleanRelativeNewPath,
+            is_folder: isFolder
+          });
+          
+          console.log('数据库路径更新成功:', response.data);
+        } catch (dbError) {
+          console.error('更新数据库路径失败:', dbError.message);
+          // 数据库更新失败不影响文件重命名操作的成功
+          // 可以选择记录日志或通知用户
+        }
+        
         return { success: true, newPath: newPath };
       } catch (error) {
         console.error('重命名失败:', error);
@@ -177,7 +239,7 @@ class FileTreeModule {
     });
 
     // 移动文件或文件夹
-    ipcMain.handle('move-item', (event, sourcePath, targetPath) => {
+    ipcMain.handle('move-item', async (event, sourcePath, targetPath) => {
       try {
         // 检查源文件是否存在
         if (!fs.existsSync(sourcePath)) {
@@ -215,6 +277,35 @@ class FileTreeModule {
         
         // 执行移动操作
         fs.renameSync(sourcePath, newPath);
+        
+        // 获取项目根目录路径
+        const projectRoot = path.join(__dirname, '../..');
+        const relativeOldPath = path.relative(projectRoot, sourcePath).replace(/\\/g, '/');
+        const relativeNewPath = path.relative(projectRoot, newPath).replace(/\\/g, '/');
+        
+        // 确保路径格式正确（移除开头的../）
+        const cleanRelativeOldPath = relativeOldPath.startsWith('../') ? relativeOldPath.substring(3) : relativeOldPath;
+        const cleanRelativeNewPath = relativeNewPath.startsWith('../') ? relativeNewPath.substring(3) : relativeNewPath;
+        
+        // 检查是否为文件夹
+        const isFolder = fs.statSync(newPath).isDirectory();
+        
+        // 更新数据库中的文件路径
+        try {
+          const axios = require('axios');
+          const response = await axios.post('http://localhost:8000/api/document/update-path', {
+            old_path: cleanRelativeOldPath,
+            new_path: cleanRelativeNewPath,
+            is_folder: isFolder
+          });
+          
+          console.log('数据库路径更新成功:', response.data);
+        } catch (dbError) {
+          console.error('更新数据库路径失败:', dbError.message);
+          // 数据库更新失败不影响文件移动操作的成功
+          // 可以选择记录日志或通知用户
+        }
+        
         return { success: true, newPath: newPath };
       } catch (error) {
         console.error('移动文件失败:', error);

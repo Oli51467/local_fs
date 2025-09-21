@@ -377,6 +377,11 @@ class DatabaseModule {
         vectorsDataContent.innerHTML = `<div class="success-message">${data.message}</div>`;
         // 重新获取统计信息
         setTimeout(() => this.getFaissStatistics(), 1500);
+        // 清空当前显示的向量数据，避免用户看到旧数据
+        const vectorsTableContent = document.getElementById('vectors-data-content');
+        if (vectorsTableContent && vectorsTableContent.innerHTML.includes('vectors-table')) {
+          vectorsTableContent.innerHTML = '<p>Faiss向量已清空，请重新查询</p>';
+        }
       } else {
         throw new Error(data.detail || '清空失败');
       }

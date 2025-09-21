@@ -148,13 +148,19 @@ async def cleanup_faiss_vectors() -> Dict[str, Any]:
         # 清空向量数据但保留索引结构
         try:
             # 获取当前向量数量
-            vector_count = len(faiss_manager.metadata) if hasattr(faiss_manager, 'metadata') and faiss_manager.metadata else 0
+            vector_count = faiss_manager.get_total_vectors()
+            metadata_count = len(faiss_manager.metadata) if hasattr(faiss_manager, 'metadata') and faiss_manager.metadata else 0
             
-            # 重置索引（创建新的空索引）
-            import faiss
-            faiss_manager.index = faiss.IndexFlatIP(faiss_manager.dimension)
-            faiss_manager.metadata = []
-            faiss_manager.save_index()
+            logger.info(f"清理前统计 - 索引中向量数: {vector_count}, 元数据数量: {metadata_count}")
+            
+            # 使用cleanup_all方法清空所有向量数据
+            faiss_manager.cleanup_all()
+            
+            # 验证清理后的数量
+            vector_count_after = faiss_manager.get_total_vectors()
+            metadata_count_after = len(faiss_manager.metadata) if hasattr(faiss_manager, 'metadata') and faiss_manager.metadata else 0
+            
+            logger.info(f"清理后统计 - 索引中向量数: {vector_count_after}, 元数据数量: {metadata_count_after}")
             
             logger.info(f"Faiss向量数据库清空完成，删除了 {vector_count} 个向量")
             

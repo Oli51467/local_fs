@@ -255,6 +255,208 @@ function getFileIcon(fileName, isFolder = false, isExpanded = false) {
   }
 }
 
+// 创建右键菜单
+function createContextMenu(x, y, itemPath, isFolder) {
+  // 移除已存在的菜单
+  const existingMenu = document.querySelector('.context-menu');
+  if (existingMenu) {
+    existingMenu.remove();
+  }
+  
+  const menu = document.createElement('div');
+  menu.className = 'context-menu';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  
+  // 重命名菜单项
+  const renameItem = document.createElement('div');
+  renameItem.className = 'context-menu-item';
+  renameItem.innerHTML = `<span class="context-menu-icon">${window.icons.newFile}</span>重命名`;
+  renameItem.addEventListener('click', () => {
+    hideContextMenu();
+    if (explorerModule) {
+      explorerModule.startRename(itemPath);
+    }
+  });
+
+  // 删除菜单项
+  const deleteItem = document.createElement('div');
+  deleteItem.className = 'context-menu-item';
+  deleteItem.innerHTML = `<span class="context-menu-icon">${window.icons.trash}</span>删除`;
+  deleteItem.addEventListener('click', () => {
+    hideContextMenu();
+    if (explorerModule) {
+      explorerModule.deleteItem(itemPath);
+    }
+  });
+
+  // 分隔线
+  const separator = document.createElement('div');
+  separator.className = 'context-menu-separator';
+
+  // 上传菜单项（仅对文件显示）
+  const uploadItem = document.createElement('div');
+  uploadItem.className = 'context-menu-item';
+  uploadItem.innerHTML = `<span class="context-menu-icon">${window.icons.import}</span>上传`;
+  
+  if (isFolder) {
+    uploadItem.classList.add('disabled');
+  } else {
+    uploadItem.addEventListener('click', () => {
+      hideContextMenu();
+      uploadFile(itemPath);
+    });
+  }
+  
+  menu.appendChild(renameItem);
+  menu.appendChild(deleteItem);
+  menu.appendChild(separator);
+  menu.appendChild(uploadItem);
+  
+  document.body.appendChild(menu);
+  
+  // 点击其他地方关闭菜单
+  setTimeout(() => {
+    document.addEventListener('click', hideContextMenu, { once: true });
+  }, 0);
+}
+
+// 隐藏右键菜单
+function hideContextMenu() {
+  const menu = document.querySelector('.context-menu');
+  if (menu) {
+    menu.remove();
+  }
+}
+
+// 上传文件函数
+async function uploadFile(filePath) {
+  try {
+    // 确保使用完整路径，因为后端需要验证文件存在
+    let uploadPath = filePath;
+    
+    // 如果传入的是相对路径，转换为绝对路径
+    if (!filePath.startsWith('/')) {
+      // 假设是相对路径，添加项目根目录前缀
+      uploadPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
+    }
+    
+    console.log('上传文件路径:', uploadPath);
+    
+    // 显示上传状态
+    const fileItem = document.querySelector(`[data-path="${filePath}"]`);
+    if (fileItem) {
+      const indicator = fileItem.querySelector('.upload-indicator');
+      if (indicator) {
+        indicator.classList.add('uploading');
+      }
+    }
+    
+    // 调用后端上传接口
+    const response = await fetch('http://localhost:8000/api/document/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        file_path: uploadPath
+      })
+    });
+    
+    const result = await response.json();
+    
+    // 检查HTTP响应状态
+    if (!response.ok) {
+      // HTTP错误（4xx, 5xx等）
+      const errorMessage = result.detail || result.error || `HTTP错误 ${response.status}`;
+      console.error('文件上传失败:', errorMessage);
+      alert(`上传失败: ${errorMessage}`);
+      return;
+    }
+    
+    // 检查业务逻辑状态
+    if (result.status === 'success' || result.status === 'exists') {
+      // 上传成功或文件已存在，都视为成功，添加已上传标记
+      addUploadIndicator(filePath);
+      console.log('文件上传成功:', uploadPath, result.message);
+      // 显示成功提示
+      alert(result.message || '文件上传成功');
+    } else {
+      // 处理业务逻辑错误
+      const errorMessage = result.message || result.error || result.detail || '未知错误';
+      console.error('文件上传失败:', errorMessage);
+      alert(`上传失败: ${errorMessage}`);
+    }
+  } catch (error) {
+    console.error('上传请求失败:', error);
+    // 显示更详细的错误信息
+    const errorMessage = error.message || '上传请求失败，请检查后端服务';
+    alert(`上传失败: ${errorMessage}`);
+  } finally {
+    // 移除上传状态
+    const fileItem = document.querySelector(`[data-path="${filePath}"]`);
+    if (fileItem) {
+      const indicator = fileItem.querySelector('.upload-indicator');
+      if (indicator) {
+        indicator.classList.remove('uploading');
+      }
+    }
+  }
+}
+
+// 添加上传标记
+function addUploadIndicator(filePath) {
+  const fileItem = document.querySelector(`[data-path="${filePath}"]`);
+  if (fileItem && !fileItem.querySelector('.upload-indicator')) {
+    const indicator = document.createElement('div');
+    indicator.className = 'upload-indicator';
+    // 将指示器添加到contentDiv内部，而不是fileItem末尾
+    const contentDiv = fileItem.querySelector('div');
+    if (contentDiv) {
+      contentDiv.appendChild(indicator);
+    } else {
+      fileItem.appendChild(indicator);
+    }
+  }
+}
+
+// 检查文件是否已上传
+async function checkUploadStatus(filePath) {
+  try {
+    // 确保使用完整路径，因为后端需要验证文件存在
+    let uploadPath = filePath;
+    
+    // 如果传入的是相对路径，转换为绝对路径
+    if (!filePath.startsWith('/')) {
+      // 假设是相对路径，添加项目根目录前缀
+      uploadPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
+    }
+    
+    console.log('检查文件上传状态:', uploadPath);
+    
+    const response = await fetch('http://localhost:8000/api/documents/exists', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        file_path: uploadPath
+      })
+    });
+    
+    if (!response.ok) {
+      console.error('API响应错误:', response.status);
+      return false;
+    }
+    
+    const result = await response.json();
+    return result.exists || false;
+  } catch (error) {
+    console.error('检查上传状态失败:', error);
+    return false;
+  }
+}
+
 // 渲染文件树（递归）
 function renderTree(node, container, isRoot = false, depth = 0) {
   const div = document.createElement('div');
@@ -354,6 +556,23 @@ function renderTree(node, container, isRoot = false, depth = 0) {
       }
     });
     
+    // 添加右键菜单事件
+    div.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // 先选中该项
+      document.querySelectorAll('.file-item.selected').forEach(el => el.classList.remove('selected'));
+      div.classList.add('selected');
+      selectedItemPath = node.path;
+      if (explorerModule) {
+        explorerModule.setSelectedItemPath(node.path);
+      }
+      
+      // 显示右键菜单
+      createContextMenu(e.pageX, e.pageY, node.path, true);
+    });
+    
 
   } else {
     div.classList.add('file-item-file');
@@ -376,6 +595,14 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     contentDiv.appendChild(nameSpan);
     
     div.appendChild(contentDiv);
+    
+    // 异步检查文件上传状态并添加标记
+    (async () => {
+      const isUploaded = await checkUploadStatus(node.path);
+      if (isUploaded) {
+        addUploadIndicator(node.path);
+      }
+    })();
     
     // 添加拖拽功能
     addDragAndDropSupport(div, node, false);
@@ -404,6 +631,23 @@ function renderTree(node, container, isRoot = false, depth = 0) {
           console.error('文件打开失败:', error);
         }
       }
+    });
+    
+    // 添加右键菜单事件
+    div.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // 先选中该项
+      document.querySelectorAll('.file-item.selected').forEach(el => el.classList.remove('selected'));
+      div.classList.add('selected');
+      selectedItemPath = node.path;
+      if (explorerModule) {
+        explorerModule.setSelectedItemPath(node.path);
+      }
+      
+      // 显示右键菜单
+      createContextMenu(e.pageX, e.pageY, node.path, false);
     });
     container.appendChild(div);
   }
@@ -654,6 +898,54 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
   });
 }
 
+// 检查所有文件的上传状态
+async function checkAllFilesUploadStatus(node) {
+  if (!node) return;
+  
+  // 如果是文件，检查上传状态
+  if (!node.isFolder && node.path) {
+    try {
+      // 提取相对于项目根目录的路径
+      let relativePath = node.path;
+      
+      // 如果是绝对路径，提取相对于项目根目录的路径
+      if (node.path.startsWith('/')) {
+        // 查找data目录的位置
+        const dataIndex = node.path.indexOf('/data/');
+        if (dataIndex !== -1) {
+          relativePath = node.path.substring(dataIndex + 1); // 移除开头的'/'
+        } else {
+          // 如果找不到data目录，使用文件名
+          const parts = node.path.split('/');
+          relativePath = parts[parts.length - 1];
+        }
+      }
+      
+      // 确保路径格式正确（移除开头的../）
+      relativePath = relativePath.replace(/^\.\.\//, '');
+      
+      console.log('检查文件上传状态:', node.path, '->', relativePath);
+      const isUploaded = await checkUploadStatus(relativePath);
+      if (isUploaded) {
+        // 找到对应的文件元素并添加上传标记
+        const fileElement = document.querySelector(`[data-path="${node.path}"]`);
+        if (fileElement) {
+          addUploadIndicator(fileElement);
+        }
+      }
+    } catch (error) {
+      console.error(`检查文件上传状态失败: ${node.path}`, error);
+    }
+  }
+  
+  // 递归检查子项
+  if (node.children && node.children.length > 0) {
+    for (const child of node.children) {
+      await checkAllFilesUploadStatus(child);
+    }
+  }
+}
+
 // 加载文件树加载并渲染文件树
 async function loadFileTree() {
   try {
@@ -664,6 +956,11 @@ async function loadFileTree() {
     if (tree.children && tree.children.length > 0) {
       tree.children.forEach(child => renderTree(child, fileTreeEl, true, 0));
     }
+    
+    // 检查所有文件的上传状态
+    setTimeout(async () => {
+      await checkAllFilesUploadStatus(tree);
+    }, 100); // 稍微延迟，确保DOM渲染完成
   } catch (error) {
     console.error('加载文件树失败:', error);
   }

@@ -113,6 +113,49 @@ class SQLiteManager:
                 UPDATE documents SET total_chunks = ? WHERE id = ?
             """, (total_chunks, document_id))
     
+    def update_document_path(self, old_path: str, new_path: str) -> bool:
+        """更新文档的文件路径"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE documents SET file_path = ? WHERE file_path = ?
+                """, (new_path, old_path))
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新文档路径失败: {str(e)}")
+            return False
+    
+    def update_documents_by_path_prefix(self, old_prefix: str, new_prefix: str) -> int:
+        """更新所有以指定前缀开头的文档路径（用于文件夹重命名）"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # 找到所有以旧前缀开头的文档
+                cursor.execute("""
+                    SELECT id, file_path, filename FROM documents WHERE file_path LIKE ?
+                """, (f"{old_prefix}%",))
+                
+                updated_count = 0
+                for row in cursor.fetchall():
+                    doc_id = row[0]
+                    old_file_path = row[1]
+                    old_filename = row[2]
+                    # 构建新路径：将旧前缀替换为新前缀
+                    new_file_path = old_file_path.replace(old_prefix, new_prefix, 1)
+                    # 从新的文件路径中提取新的文件名
+                    new_filename = pathlib.Path(new_file_path).name
+                    
+                    cursor.execute("""
+                        UPDATE documents SET file_path = ?, filename = ? WHERE id = ?
+                    """, (new_file_path, new_filename, doc_id))
+                    updated_count += 1
+                
+                return updated_count
+        except Exception as e:
+            logger.error(f"批量更新文档路径失败: {str(e)}")
+            return 0
+    
     def search_documents(self, query: str) -> List[Dict]:
         """全文搜索文档"""
         with sqlite3.connect(self.db_path) as conn:
@@ -225,6 +268,130 @@ class SQLiteManager:
                 return cursor.fetchone()[0]
         except:
             return 0
+
+    def delete_document_by_path(self, file_path: str) -> int:
+        """根据文件路径删除文档记录和相关块数据"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # 首先获取文档ID
+                cursor.execute("SELECT id FROM documents WHERE file_path = ?", (file_path,))
+                result = cursor.fetchone()
+                
+                if not result:
+                    logger.warning(f"未找到文档路径: {file_path}")
+                    return 0
+                
+                doc_id = result[0]
+                
+                # 删除文档（由于设置了ON DELETE CASCADE，相关的块数据会自动删除）
+                cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+                deleted_count = cursor.rowcount
+                
+                conn.commit()
+                
+                logger.info(f"删除文档成功: {file_path} (ID: {doc_id}), 删除了 {deleted_count} 个文档记录")
+                
+                return deleted_count
+                
+        except Exception as e:
+            logger.error(f"删除文档失败: {str(e)}")
+            return 0
+
+    def delete_documents_by_path_prefix(self, folder_path: str) -> int:
+        """根据文件夹路径前缀删除所有相关文档和块数据"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # 确保路径前缀格式正确（以/结尾）
+                if not folder_path.endswith('/'):
+                    folder_path += '/'
+                
+                # 获取所有匹配的文档ID
+                cursor.execute("""
+                    SELECT DISTINCT d.id
+                    FROM documents d
+                    WHERE d.file_path LIKE ?
+                """, (f"{folder_path}%",))
+                
+                results = cursor.fetchall()
+                
+                if not results:
+                    logger.warning(f"未找到以该前缀开头的文档: {folder_path}")
+                    return 0
+                
+                # 提取唯一的文档ID
+                doc_ids = [row[0] for row in results]
+                
+                # 删除所有匹配的文档（由于级联删除，块数据也会自动删除）
+                cursor.execute(f"""
+                    DELETE FROM documents 
+                    WHERE id IN ({','.join(['?' for _ in doc_ids])})
+                """, doc_ids)
+                
+                deleted_count = cursor.rowcount
+                conn.commit()
+                
+                logger.info(f"批量删除文档成功: 前缀 {folder_path}, 删除了 {deleted_count} 个文档")
+                
+                return deleted_count
+                
+        except Exception as e:
+            logger.error(f"批量删除文档失败: {str(e)}")
+            return 0
+
+    def get_vector_ids_by_path(self, file_path: str) -> List[int]:
+        """根据文件路径获取所有相关的向量ID"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # 获取文档ID
+                cursor.execute("SELECT id FROM documents WHERE file_path = ?", (file_path,))
+                result = cursor.fetchone()
+                
+                if not result:
+                    return []
+                
+                doc_id = result[0]
+                
+                # 获取所有相关的向量ID
+                cursor.execute("SELECT vector_id FROM document_chunks WHERE document_id = ? AND vector_id IS NOT NULL", (doc_id,))
+                vector_ids = [row[0] for row in cursor.fetchall()]
+                
+                return vector_ids
+                
+        except Exception as e:
+            logger.error(f"获取文件路径的向量ID失败: {str(e)}")
+            return []
+
+    def get_vector_ids_by_path_prefix(self, folder_path: str) -> List[int]:
+        """根据文件夹路径前缀获取所有相关的向量ID"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # 确保路径前缀格式正确（以/结尾）
+                if not folder_path.endswith('/'):
+                    folder_path += '/'
+                
+                # 获取所有匹配的向量ID
+                cursor.execute("""
+                    SELECT dc.vector_id 
+                    FROM documents d
+                    JOIN document_chunks dc ON d.id = dc.document_id
+                    WHERE d.file_path LIKE ? AND dc.vector_id IS NOT NULL
+                """, (f"{folder_path}%",))
+                
+                vector_ids = [row[0] for row in cursor.fetchall()]
+                
+                return vector_ids
+                
+        except Exception as e:
+            logger.error(f"获取文件夹路径前缀的向量ID失败: {str(e)}")
+            return []
     
     def cleanup_all(self):
         """清理所有数据"""
