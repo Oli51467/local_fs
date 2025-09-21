@@ -71,6 +71,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 绑定剩余的事件监听器
     bindEventListeners();
+    
+    // 监听数据更新事件，刷新文件上传状态
+    document.addEventListener('dataUpdated', async (event) => {
+      console.log('接收到数据更新事件:', event.detail);
+      
+      // 刷新文件树中的上传状态标记
+      if (databaseModule && databaseModule.refreshUploadStatus) {
+        await databaseModule.refreshUploadStatus();
+      }
+      
+      // 如果当前显示的是数据库页面，也刷新数据库相关内容
+      if (document.getElementById('database-page').style.display === 'block') {
+        if (event.detail.type === 'sqlite' || event.detail.type === 'all') {
+          // 刷新SQLite数据
+          if (databaseModule && databaseModule.getAllTables) {
+            setTimeout(() => databaseModule.getAllTables(), 500);
+          }
+        }
+        if (event.detail.type === 'faiss' || event.detail.type === 'all') {
+          // 刷新Faiss统计信息
+          if (databaseModule && databaseModule.getFaissStatistics) {
+            setTimeout(() => databaseModule.getFaissStatistics(), 500);
+          }
+        }
+      }
+    });
   });
 });
 
@@ -455,6 +481,34 @@ async function checkUploadStatus(filePath) {
     console.error('检查上传状态失败:', error);
     return false;
   }
+}
+
+// 批量刷新文件上传状态
+async function refreshAllUploadStatus() {
+  console.log('开始刷新所有文件上传状态...');
+  
+  // 获取所有文件项
+  const fileItems = document.querySelectorAll('.file-item-file[data-path]');
+  
+  for (const fileItem of fileItems) {
+    const filePath = fileItem.dataset.path;
+    if (filePath) {
+      try {
+        const isUploaded = await checkUploadStatus(filePath);
+        
+        // 更新上传状态标记
+        if (isUploaded) {
+          addUploadIndicator(filePath);
+        } else {
+          removeUploadIndicator(filePath);
+        }
+      } catch (error) {
+        console.error(`刷新文件 ${filePath} 状态失败:`, error);
+      }
+    }
+  }
+  
+  console.log('文件上传状态刷新完成');
 }
 
 // 渲染文件树（递归）

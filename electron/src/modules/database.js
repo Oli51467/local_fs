@@ -286,21 +286,16 @@ class DatabaseModule {
   }
 
   async deleteAllTableData() {
-    if (!this.selectedTable) {
-      alert('请先选择一个表');
-      return;
-    }
-
-    if (!confirm(`确定要删除表 "${this.selectedTable}" 中的所有数据吗？此操作不可恢复。`)) {
+    if (!confirm('确定要删除所有数据吗？此操作将清空SQLite数据库和Faiss向量数据库中的所有数据，且不可恢复。')) {
       return;
     }
 
     const tableDataContent = document.getElementById('table-data-content');
-    tableDataContent.innerHTML = '<div class="loading">正在删除数据...</div>';
+    tableDataContent.innerHTML = '<div class="loading">正在删除所有数据...</div>';
 
     try {
-      const response = await fetch(`${this.baseUrl}/api/database/delete-all/${this.selectedTable}`, {
-        method: 'DELETE',
+      const response = await fetch(`${this.baseUrl}/api/cleanup/all`, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         }
@@ -308,15 +303,23 @@ class DatabaseModule {
 
       const data = await response.json();
 
-      if (response.ok && data.status === 'success') {
-        tableDataContent.innerHTML = `<div class="success-message">成功删除 ${data.deleted_count} 条数据</div>`;
-        // 重新查询表数据
-        setTimeout(() => this.queryTableData(), 1500);
+      if (response.ok && data.status === 'completed') {
+        tableDataContent.innerHTML = `<div class="success-message">${data.message}</div>`;
+        // 重新获取表列表和统计信息
+        setTimeout(() => {
+          this.getAllTables();
+          this.testConnection();
+          this.testFaissConnection();
+        }, 1500);
+        
+        // 触发全局事件，通知其他模块数据已更新
+        this.notifyDataUpdate('all');
+        
       } else {
         throw new Error(data.detail || '删除失败');
       }
     } catch (error) {
-      console.error('删除表数据失败:', error);
+      console.error('删除所有数据失败:', error);
       tableDataContent.innerHTML = `<div class="error-message">删除失败: ${error.message}</div>`;
     }
   }
@@ -346,6 +349,10 @@ class DatabaseModule {
           this.getAllTables();
           this.queryTableData();
         }, 1500);
+        
+        // 触发全局事件，通知其他模块数据已更新
+        this.notifyDataUpdate('sqlite');
+        
       } else {
         throw new Error(data.detail || '清空失败');
       }
@@ -382,6 +389,10 @@ class DatabaseModule {
         if (vectorsTableContent && vectorsTableContent.innerHTML.includes('vectors-table')) {
           vectorsTableContent.innerHTML = '<p>Faiss向量已清空，请重新查询</p>';
         }
+        
+        // 触发全局事件，通知其他模块数据已更新
+        this.notifyDataUpdate('faiss');
+        
       } else {
         throw new Error(data.detail || '清空失败');
       }
@@ -406,6 +417,90 @@ class DatabaseModule {
       text = String(text);
     }
     return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
+  }
+
+  // 数据更新通知机制
+  notifyDataUpdate(dataType) {
+    // 触发自定义事件，通知其他模块数据已更新
+    const event = new CustomEvent('dataUpdated', {
+      detail: { type: dataType, timestamp: Date.now() }
+    });
+    document.dispatchEvent(event);
+    
+    console.log(`数据更新通知已发送: ${dataType}`);
+    
+    // 同时刷新文件树中的上传状态标记
+    this.refreshUploadStatus();
+  }
+
+  // 刷新文件上传状态标记
+  async refreshUploadStatus() {
+    // 重新检查所有文件的上传状态
+    const fileItems = document.querySelectorAll('.file-item-file');
+    
+    for (const item of fileItems) {
+      const path = item.dataset.path;
+      if (path) {
+        // 移除现有的上传标记
+        const existingIndicator = item.querySelector('.upload-indicator');
+        if (existingIndicator) {
+          existingIndicator.remove();
+        }
+        
+        // 重新检查上传状态
+        try {
+          const response = await fetch(`${this.baseUrl}/api/documents/exists`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ file_path: path })
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            if (result.exists) {
+              // 重新添加上传标记
+              this.addUploadIndicator(item, path);
+            }
+          }
+        } catch (error) {
+          console.error(`检查文件上传状态失败: ${path}`, error);
+        }
+      }
+    }
+  }
+
+  // 添加上传状态标记
+  addUploadIndicator(fileElement, filePath) {
+    // 检查是否已存在标记
+    const existingIndicator = fileElement.querySelector('.upload-indicator');
+    if (existingIndicator) {
+      return;
+    }
+    
+    // 创建上传标记
+    const indicator = document.createElement('span');
+    indicator.className = 'upload-indicator';
+    indicator.innerHTML = '✓';
+    indicator.title = '已上传到向量数据库';
+    indicator.style.cssText = `
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #28a745;
+      font-weight: bold;
+      font-size: 12px;
+      background: rgba(40, 167, 69, 0.1);
+      padding: 2px 4px;
+      border-radius: 3px;
+      border: 1px solid rgba(40, 167, 69, 0.3);
+    `;
+    
+    // 设置父元素为相对定位
+    fileElement.style.position = 'relative';
+    fileElement.appendChild(indicator);
   }
 
   // Faiss数据库相关方法

@@ -114,16 +114,25 @@ async def upload_document(request: FileUploadRequest):
         
         # 3. 计算文件哈希值检查是否已上传
         file_hash = calculate_file_hash(file_path)
+        relative_file_path = str(file_path.relative_to(project_root))
         
-        # 检查数据库中是否已存在相同哈希的文件
+        # 使用新的复合校验逻辑：同时检查文件路径和哈希
         if sqlite_manager:
-            existing_docs = sqlite_manager.get_documents_by_filename(filename)
-            for doc in existing_docs:
-                if doc.get('file_hash') == file_hash:
+            # 首先检查完全相同的文件路径和哈希（同一文件）
+            existing_doc = sqlite_manager.get_document_by_path_and_hash(relative_file_path, file_hash)
+            if existing_doc:
+                # 检查是否已有块记录，如果没有则重新处理
+                existing_chunks = sqlite_manager.get_document_chunks(existing_doc['id'])
+                if not existing_chunks:
+                    logger.info(f"文件已存在但无块记录，重新处理文档ID: {existing_doc['id']}")
+                    # 继续执行后续的分割、嵌入等操作，但使用现有文档ID
+                    document_id = existing_doc['id']
+                    # 跳过文档插入步骤，继续执行后续步骤
+                else:
                     return FileUploadResponse(
                         status="exists",
-                        message=f"文件已存在，文档ID: {doc['id']}",
-                        document_id=doc['id'],
+                        message=f"文件已存在，文档ID: {existing_doc['id']}",
+                        document_id=existing_doc['id'],
                         file_info={
                             "filename": filename,
                             "file_type": file_type,
@@ -131,6 +140,55 @@ async def upload_document(request: FileUploadRequest):
                             "file_size": file_path.stat().st_size
                         }
                     )
+            else:
+                # 检查是否有相同哈希但不同路径的文件（文件内容相同但位置不同）
+                same_hash_docs = sqlite_manager.get_documents_by_hash(file_hash)
+                if same_hash_docs:
+                    # 文件内容相同但路径不同，可能是文件被移动了
+                    logger.warning(f"发现相同哈希但不同路径的文件，可能是文件移动: {file_hash}")
+                    
+                    # 检查原文件是否还存在磁盘上
+                    existing_doc = same_hash_docs[0]  # 取最新的一个
+                    original_full_path = project_root / existing_doc['file_path']
+                    
+                    if original_full_path.exists():
+                        # 原文件还存在，说明是不同位置的相同文件，拒绝上传
+                        return FileUploadResponse(
+                            status="exists",
+                            message=f"相同内容的文件已存在于: {existing_doc['file_path']}",
+                            document_id=existing_doc['id'],
+                            file_info={
+                                "filename": filename,
+                                "file_type": file_type,
+                                "file_hash": file_hash,
+                                "file_size": file_path.stat().st_size,
+                                "existing_path": existing_doc['file_path']
+                            }
+                        )
+                    else:
+                        # 原文件不存在，可能是文件被移动了，更新路径信息
+                        logger.info(f"检测到文件移动，从 {existing_doc['file_path']} 到 {relative_file_path}")
+                        
+                        # 更新文档路径信息
+                        sqlite_manager.update_document_path(existing_doc['file_path'], relative_file_path)
+                        
+                        # 更新Faiss向量元数据中的路径信息
+                        if faiss_manager:
+                            faiss_manager.update_metadata_by_path(existing_doc['file_path'], relative_file_path)
+                        
+                        return FileUploadResponse(
+                            status="updated",
+                            message=f"文件路径已更新: {existing_doc['file_path']} -> {relative_file_path}",
+                            document_id=existing_doc['id'],
+                            file_info={
+                                "filename": filename,
+                                "file_type": file_type,
+                                "file_hash": file_hash,
+                                "file_size": file_path.stat().st_size,
+                                "old_path": existing_doc['file_path'],
+                                "new_path": relative_file_path
+                            }
+                        )
         
         # 4. 根据文档类型提取文本（目前只支持txt）
         if file_type != "txt":
@@ -167,21 +225,43 @@ async def upload_document(request: FileUploadRequest):
         if not sqlite_manager:
             raise HTTPException(status_code=500, detail="数据库管理器未初始化")
         
-        document_id = sqlite_manager.insert_document(
-            filename=filename,
-            file_path=str(file_path.relative_to(project_root)),
-            file_type=file_type,
-            file_size=file_path.stat().st_size,
-            file_hash=file_hash,
-            content=text_content,
-            metadata={
-                "upload_time": datetime.now().isoformat(),
-                "chunks_count": len(chunks),
-                "original_path": request.file_path
-            }
-        )
-        
-        logger.info(f"文档已存储到SQLite，文档ID: {document_id}")
+        # 检查是否是重新处理的情况
+        is_reprocessing = False
+        if 'document_id' in locals():
+            is_reprocessing = True
+            logger.info(f"重新处理文档，文档ID: {document_id}")
+            # 清理现有的块和向量数据
+            sqlite_manager.delete_document_by_path(str(file_path.relative_to(project_root)))
+            # 重新插入文档记录
+            document_id = sqlite_manager.insert_document(
+                filename=filename,
+                file_path=str(file_path.relative_to(project_root)),
+                file_type=file_type,
+                file_size=file_path.stat().st_size,
+                file_hash=file_hash,
+                content=text_content,
+                metadata={
+                    "upload_time": datetime.now().isoformat(),
+                    "chunks_count": len(chunks),
+                    "original_path": request.file_path
+                }
+            )
+        else:
+            # 新文档，正常插入
+            document_id = sqlite_manager.insert_document(
+                filename=filename,
+                file_path=str(file_path.relative_to(project_root)),
+                file_type=file_type,
+                file_size=file_path.stat().st_size,
+                file_hash=file_hash,
+                content=text_content,
+                metadata={
+                    "upload_time": datetime.now().isoformat(),
+                    "chunks_count": len(chunks),
+                    "original_path": request.file_path
+                }
+            )
+            logger.info(f"文档已存储到SQLite，文档ID: {document_id}")
         
         # 7. 生成文本嵌入向量
         embedding_service = get_embedding_service()

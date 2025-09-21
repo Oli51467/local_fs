@@ -192,6 +192,9 @@ class FaissManager:
             self.metadata = new_metadata
             self.save_index()
             
+            # 重新加载索引以确保内存中的数据是最新的
+            self.init_index()
+            
             logger.info(f"Faiss向量删除完成: 删除了 {deleted_count} 个向量，剩余 {new_index.ntotal} 个向量")
             return deleted_count
             

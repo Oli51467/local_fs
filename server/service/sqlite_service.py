@@ -20,6 +20,9 @@ class SQLiteManager:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
+            # 启用外键约束
+            cursor.execute("PRAGMA foreign_keys = ON")
+            
             # 创建文件元数据表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
@@ -61,11 +64,20 @@ class SQLiteManager:
         """插入文档记录"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            
+            # 获取总块数（从metadata中获取）
+            total_chunks = 0
+            if metadata and 'chunks_count' in metadata:
+                total_chunks = metadata['chunks_count']
+            
+            # 调试日志
+            logger.info(f"插入文档 - metadata: {metadata}, chunks_count: {total_chunks}")
+            
             cursor.execute("""
                 INSERT OR REPLACE INTO documents 
-                (filename, file_path, file_type, file_size, content_hash)
-                VALUES (?, ?, ?, ?, ?)
-            """, (filename, file_path, file_type, file_size, file_hash))
+                (filename, file_path, file_type, file_size, content_hash, total_chunks)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (filename, file_path, file_type, file_size, file_hash, total_chunks))
             return cursor.lastrowid
     
     def insert_chunk(self, document_id: int, chunk_index: int, content: str, vector_id: int = None, metadata: dict = None) -> int:
@@ -90,6 +102,59 @@ class SQLiteManager:
                 WHERE filename = ?
                 ORDER BY upload_time DESC
             """, (filename,))
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append({
+                    'id': row[0],
+                    'filename': row[1],
+                    'file_path': row[2],
+                    'file_type': row[3],
+                    'file_size': row[4],
+                    'upload_time': row[5],
+                    'file_hash': row[6],
+                    'total_chunks': row[7]
+                })
+            return results
+
+    def get_document_by_path_and_hash(self, file_path: str, file_hash: str) -> Optional[Dict]:
+        """根据文件路径和哈希值获取文档（用于精确匹配）"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, filename, file_path, file_type, file_size, 
+                       upload_time, content_hash, total_chunks
+                FROM documents 
+                WHERE file_path = ? AND content_hash = ?
+                ORDER BY upload_time DESC
+                LIMIT 1
+            """, (file_path, file_hash))
+            
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'id': row[0],
+                    'filename': row[1],
+                    'file_path': row[2],
+                    'file_type': row[3],
+                    'file_size': row[4],
+                    'upload_time': row[5],
+                    'file_hash': row[6],
+                    'total_chunks': row[7]
+                }
+            return None
+
+    def get_documents_by_hash(self, file_hash: str) -> List[Dict]:
+        """根据文件哈希值获取所有相关文档（用于检测重复文件）"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, filename, file_path, file_type, file_size, 
+                       upload_time, content_hash, total_chunks
+                FROM documents 
+                WHERE content_hash = ?
+                ORDER BY upload_time DESC
+            """, (file_hash,))
             
             results = []
             for row in cursor.fetchall():
@@ -207,6 +272,32 @@ class SQLiteManager:
                 }
             return None
     
+    def get_document_chunks(self, document_id: int) -> List[Dict]:
+        """获取指定文档的所有块"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT d.id, d.filename, d.file_path, d.file_type,
+                       dc.chunk_index, dc.content, dc.vector_id
+                FROM documents d
+                JOIN document_chunks dc ON d.id = dc.document_id
+                WHERE d.id = ?
+                ORDER BY dc.chunk_index
+            """, (document_id,))
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append({
+                    'document_id': row[0],
+                    'filename': row[1],
+                    'file_path': row[2],
+                    'file_type': row[3],
+                    'chunk_index': row[4],
+                    'content': row[5],
+                    'vector_id': row[6]
+                })
+            return results
+
     def get_all_document_chunks(self) -> List[Dict]:
         """获取所有文档块"""
         with sqlite3.connect(self.db_path) as conn:
@@ -275,6 +366,9 @@ class SQLiteManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
+                # 启用外键约束
+                cursor.execute("PRAGMA foreign_keys = ON")
+                
                 # 首先获取文档ID
                 cursor.execute("SELECT id FROM documents WHERE file_path = ?", (file_path,))
                 result = cursor.fetchone()
@@ -288,6 +382,18 @@ class SQLiteManager:
                 # 删除文档（由于设置了ON DELETE CASCADE，相关的块数据会自动删除）
                 cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
                 deleted_count = cursor.rowcount
+                
+                # 重置sqlite_sequence表中的自增序列值
+                if deleted_count > 0:
+                    # 获取当前最大ID值
+                    cursor.execute("SELECT MAX(id) FROM documents")
+                    max_doc_id = cursor.fetchone()[0] or 0
+                    cursor.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'documents'", (max_doc_id,))
+                    
+                    # 获取document_chunks表当前最大ID值
+                    cursor.execute("SELECT MAX(id) FROM document_chunks")
+                    max_chunk_id = cursor.fetchone()[0] or 0
+                    cursor.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'document_chunks'", (max_chunk_id,))
                 
                 conn.commit()
                 
@@ -304,6 +410,9 @@ class SQLiteManager:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                
+                # 启用外键约束
+                cursor.execute("PRAGMA foreign_keys = ON")
                 
                 # 确保路径前缀格式正确（以/结尾）
                 if not folder_path.endswith('/'):
@@ -332,6 +441,19 @@ class SQLiteManager:
                 """, doc_ids)
                 
                 deleted_count = cursor.rowcount
+                
+                # 重置sqlite_sequence表中的自增序列值
+                if deleted_count > 0:
+                    # 获取当前最大ID值
+                    cursor.execute("SELECT MAX(id) FROM documents")
+                    max_doc_id = cursor.fetchone()[0] or 0
+                    cursor.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'documents'", (max_doc_id,))
+                    
+                    # 获取document_chunks表当前最大ID值
+                    cursor.execute("SELECT MAX(id) FROM document_chunks")
+                    max_chunk_id = cursor.fetchone()[0] or 0
+                    cursor.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'document_chunks'", (max_chunk_id,))
+                
                 conn.commit()
                 
                 logger.info(f"批量删除文档成功: 前缀 {folder_path}, 删除了 {deleted_count} 个文档")
