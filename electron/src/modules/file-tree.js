@@ -149,10 +149,14 @@ class FileTreeModule {
         // 1. 首先调用后端API删除数据库中的数据
         try {
           const axios = require('axios');
-          const response = await axios.delete('http://localhost:8000/api/document/delete', {
+          const response = await axios.delete('http://127.0.0.1:8000/api/document/delete', {
             data: {
               file_path: cleanRelativePath,
               is_folder: isFolder
+            },
+            timeout: 5000, // 5秒超时
+            headers: {
+              'Content-Type': 'application/json'
             }
           });
           
@@ -217,21 +221,41 @@ class FileTreeModule {
         const isFolder = fs.statSync(newPath).isDirectory();
         
         // 更新数据库中的文件路径
+        let dbUpdateSuccess = true;
+        let dbUpdateMessage = '';
+        
         try {
-          const response = await axios.post('http://localhost:8000/api/document/update-path', {
+          const response = await axios.post('http://127.0.0.1:8000/api/document/update-path', {
             old_path: cleanRelativeOldPath,
             new_path: cleanRelativeNewPath,
             is_folder: isFolder
+          }, {
+            timeout: 5000, // 5秒超时
+            headers: {
+              'Content-Type': 'application/json'
+            }
           });
           
           console.log('数据库路径更新成功:', response.data);
+          
+          // 检查后端响应状态
+          if (response.data && response.data.status === 'error') {
+            dbUpdateSuccess = false;
+            dbUpdateMessage = response.data.message || '数据库路径更新失败';
+          }
+          
         } catch (dbError) {
           console.error('更新数据库路径失败:', dbError.message);
-          // 数据库更新失败不影响文件重命名操作的成功
-          // 可以选择记录日志或通知用户
+          dbUpdateSuccess = false;
+          dbUpdateMessage = dbError.message;
         }
         
-        return { success: true, newPath: newPath };
+        return { 
+          success: true, 
+          newPath: newPath,
+          dbUpdateSuccess: dbUpdateSuccess,
+          dbUpdateMessage: dbUpdateMessage
+        };
       } catch (error) {
         console.error('重命名失败:', error);
         return { success: false, error: error.message };
@@ -291,22 +315,42 @@ class FileTreeModule {
         const isFolder = fs.statSync(newPath).isDirectory();
         
         // 更新数据库中的文件路径
+        let dbUpdateSuccess = true;
+        let dbUpdateMessage = '';
+        
         try {
           const axios = require('axios');
-          const response = await axios.post('http://localhost:8000/api/document/update-path', {
+          const response = await axios.post('http://127.0.0.1:8000/api/document/update-path', {
             old_path: cleanRelativeOldPath,
             new_path: cleanRelativeNewPath,
             is_folder: isFolder
+          }, {
+            timeout: 5000, // 5秒超时
+            headers: {
+              'Content-Type': 'application/json'
+            }
           });
           
           console.log('数据库路径更新成功:', response.data);
+          
+          // 检查后端响应状态
+          if (response.data && response.data.status === 'error') {
+            dbUpdateSuccess = false;
+            dbUpdateMessage = response.data.message || '数据库路径更新失败';
+          }
+          
         } catch (dbError) {
           console.error('更新数据库路径失败:', dbError.message);
-          // 数据库更新失败不影响文件移动操作的成功
-          // 可以选择记录日志或通知用户
+          dbUpdateSuccess = false;
+          dbUpdateMessage = dbError.message;
         }
         
-        return { success: true, newPath: newPath };
+        return { 
+          success: true, 
+          newPath: newPath,
+          dbUpdateSuccess: dbUpdateSuccess,
+          dbUpdateMessage: dbUpdateMessage
+        };
       } catch (error) {
         console.error('移动文件失败:', error);
         return { success: false, error: error.message };

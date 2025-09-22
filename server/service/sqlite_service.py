@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import logging
+import pathlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from config.config import DatabaseConfig

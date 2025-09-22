@@ -236,6 +236,12 @@ function addDragAndDropSupport(element, node, isFolder) {
           if (explorerModule) {
             explorerModule.setSelectedItemPath(result.newPath);
           }
+          
+          // 检查数据库更新状态
+          if (result.dbUpdateSuccess === false) {
+            console.warn('数据库路径更新失败:', result.dbUpdateMessage);
+            alert(`警告: 文件移动成功，但数据库路径更新失败。这可能影响搜索功能。\n错误: ${result.dbUpdateMessage}`);
+          }
         } else {
           alert(`移动失败: ${result.error}`);
         }
