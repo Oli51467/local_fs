@@ -367,7 +367,7 @@ async def update_document_path(request: UpdateDocumentPathRequest):
         # 根据是否是文件夹选择不同的更新方法
         if request.is_folder:
             # 更新文件夹下所有文档的路径
-            updated_count = sqlite_manager.update_documents_path_by_prefix(old_path, new_path)
+            updated_count = sqlite_manager.update_documents_by_path_prefix(old_path, new_path)
             logger.info(f"文件夹路径更新完成，更新了 {updated_count} 个文档")
         else:
             # 更新单个文档路径

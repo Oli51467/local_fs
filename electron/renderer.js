@@ -28,6 +28,10 @@ const dragStyles = `
     border: 1px solid #007acc;
     background-color: rgba(0, 122, 204, 0.1) !important;
   }
+  #file-tree.drag-over-root {
+    background-color: rgba(0, 122, 204, 0.05) !important;
+    border: 2px dashed #007acc !important;
+  }
 `;
 
 // 添加拖拽样式到页面
@@ -150,6 +154,11 @@ function addDragAndDropSupport(element, node, isFolder) {
     document.querySelectorAll('.file-item').forEach(item => {
       item.classList.remove('drag-over', 'drag-over-folder');
     });
+    
+    // 清理文件树容器的根目录拖拽样式
+    if (fileTreeEl) {
+      fileTreeEl.classList.remove('drag-over-root');
+    }
     
     // 隐藏拖拽指示器
     if (dropIndicator) {
@@ -1185,6 +1194,99 @@ function bindEventListeners() {
         // 同步到ExplorerModule
         if (explorerModule) {
           explorerModule.setSelectedItemPath(null);
+        }
+      }
+    });
+  }
+  
+  // 添加文件树容器根目录拖拽支持
+  if (fileTreeEl) {
+    // 拖拽进入事件
+    fileTreeEl.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      if (draggedElement && draggedPath) {
+        fileTreeEl.classList.add('drag-over-root');
+      }
+    });
+    
+    // 拖拽悬停事件
+    fileTreeEl.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (draggedElement && draggedPath) {
+        fileTreeEl.classList.add('drag-over-root');
+        // 隐藏拖拽指示器
+        if (dropIndicator) {
+          dropIndicator.style.display = 'none';
+        }
+      }
+    });
+    
+    // 拖拽离开事件
+    fileTreeEl.addEventListener('dragleave', (e) => {
+      // 只有当鼠标真正离开文件树容器时才移除样式
+      if (!fileTreeEl.contains(e.relatedTarget)) {
+        fileTreeEl.classList.remove('drag-over-root');
+      }
+    });
+    
+    // 放置事件 - 移动到根目录
+    fileTreeEl.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      fileTreeEl.classList.remove('drag-over-root');
+      
+      // 保存拖拽路径的副本，因为 draggedPath 可能在后续处理中被清空
+      const currentDraggedPath = draggedPath;
+      
+      if (currentDraggedPath) {
+        try {
+          // 获取文件树的根目录路径
+          const tree = await window.fsAPI.getFileTree();
+          const rootPath = tree.path; // 获取实际的根目录路径
+          
+          // 检查文件是否已经在根目录
+          const draggedItemName = currentDraggedPath.split('/').pop() || currentDraggedPath.split('\\').pop();
+          const wouldBeNewPath = rootPath + '/' + draggedItemName;
+          
+          // 如果文件已经在根目录（拖拽路径的父目录就是根目录），则不需要移动
+          const draggedParentDir = currentDraggedPath.substring(0, currentDraggedPath.lastIndexOf('/')) || 
+                                 currentDraggedPath.substring(0, currentDraggedPath.lastIndexOf('\\'));
+          
+          if (draggedParentDir === rootPath) {
+            console.log('文件已经在根目录，无需移动:', currentDraggedPath);
+            return; // 直接返回，不进行任何操作
+          }
+          
+          console.log('移动到根目录:', currentDraggedPath, '目标路径:', rootPath);
+          const result = await window.fsAPI.moveItem(currentDraggedPath, rootPath);
+          
+          if (result.success) {
+            console.log('成功移动到根目录');
+            // 重新加载文件树
+            await loadFileTree();
+            
+            // 选中移动后的文件
+            selectedItemPath = result.newPath;
+            if (explorerModule) {
+              explorerModule.setSelectedItemPath(result.newPath);
+            }
+            
+            // 在DOM中设置选中状态
+            setTimeout(() => {
+              const newElement = document.querySelector(`[data-path="${result.newPath}"]`);
+              if (newElement) {
+                newElement.classList.add('selected');
+                newElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            }, 100);
+            
+          } else {
+            console.error('移动到根目录失败:', result.error);
+            alert('移动到根目录失败: ' + result.error);
+          }
+        } catch (error) {
+          console.error('移动到根目录时出错:', error);
+          alert('移动到根目录时出错: ' + error.message);
         }
       }
     });

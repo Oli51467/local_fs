@@ -84,6 +84,8 @@
   overflow-y: auto;
   padding: 5px 10px;
   min-height: 100%; /* 确保容器至少占满可用空间 */
+  min-height: 200px; /* 确保至少有200px的高度用于拖拽 */
+  box-sizing: border-box;
 }
 
 .file-item {
