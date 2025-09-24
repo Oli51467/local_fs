@@ -362,7 +362,7 @@ class ExplorerModule {
           await this.loadFileTree();
         } catch (error) {
           console.error('创建失败:', error);
-          alert(`创建失败: ${error.message}`);
+          showAlert(`创建失败: ${error.message}`, 'error');
         }
       }
       inputContainer.remove();
@@ -435,7 +435,7 @@ class ExplorerModule {
         try {
           const importResult = await window.fsAPI.importFiles(targetPath, result.filePaths);
           if (!importResult.success) {
-            alert(`导入失败: ${importResult.error}`);
+            showAlert(`导入失败: ${importResult.error}`, 'error');
             return;
           }
           
@@ -450,18 +450,18 @@ class ExplorerModule {
           
           if (failCount > 0 && dataDirectoryErrors.length === failCount && successCount === 0) {
             // 如果所有文件都是因为在data目录下而被拒绝，显示简单提示
-            alert('无法导入该文件夹，不能导入系统数据目录下的文件');
+            showAlert('无法导入该文件夹，不能导入系统数据目录下的文件', 'warning');
           } else {
             // 否则显示详细统计
             let message = `成功导入 ${successCount} 个文件`;
             if (failCount > 0) {
               message += `，失败 ${failCount} 个`;
             }
-            alert(message);
+            showAlert(message, 'info');
           }
         } catch (error) {
           console.error('导入文件失败:', error);
-          alert(`导入文件失败: ${error.message}`);
+          showAlert(`导入文件失败: ${error.message}`, 'error');
           return;
         }
         
@@ -470,7 +470,7 @@ class ExplorerModule {
       }
     } catch (error) {
       console.error('导入文件失败:', error);
-      alert(`导入文件失败: ${error.message}`);
+      showAlert(`导入文件失败: ${error.message}`, 'error');
     }
   }
 
@@ -512,7 +512,7 @@ class ExplorerModule {
       window.createRenameInput(element, itemPath, currentName, isFolder);
     } else {
       console.error('createRenameInput 函数未找到');
-      alert('重命名功能初始化失败');
+      showAlert('重命名功能初始化失败', 'error');
     }
   }
 
@@ -520,6 +520,7 @@ class ExplorerModule {
   deleteItem(itemPath) {
     if (!itemPath) {
       console.warn('没有提供要删除的项目路径');
+      showAlert('请先选择要删除的文件或文件夹', 'warning');
       return;
     }
     
@@ -642,7 +643,7 @@ class ExplorerModule {
         document.body.removeChild(overlay);
       } catch (error) {
         console.error('删除失败:', error);
-        alert(`删除失败: ${error.message}`);
+        showAlert(`删除失败: ${error.message}`, 'error');
       }
     });
     

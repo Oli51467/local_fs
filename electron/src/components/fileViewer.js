@@ -562,7 +562,7 @@ class FileViewer {
       }
     } catch (error) {
       console.error('保存文件失败:', error);
-      alert('保存文件失败: ' + error.message);
+      showAlert('保存文件失败: ' + error.message, 'error');
     }
   }
 

@@ -211,7 +211,7 @@ class DatabaseModule {
 
   async queryTableData() {
     if (!this.selectedTable) {
-      alert('请先选择一个表');
+      showAlert('请先选择一个表', 'warning');
       return;
     }
 
@@ -447,26 +447,7 @@ class DatabaseModule {
           existingIndicator.remove();
         }
         
-        // 重新检查上传状态
-        try {
-          const response = await fetch(`${this.baseUrl}/api/documents/exists`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ file_path: path })
-          });
-          
-          if (response.ok) {
-            const result = await response.json();
-            if (result.exists) {
-              // 重新添加上传标记
-              this.addUploadIndicator(item, path);
-            }
-          }
-        } catch (error) {
-          console.error(`检查文件上传状态失败: ${path}`, error);
-        }
+        // 不再通过API检查上传状态，由上传操作直接控制
       }
     }
   }
@@ -501,6 +482,14 @@ class DatabaseModule {
     // 设置父元素为相对定位
     fileElement.style.position = 'relative';
     fileElement.appendChild(indicator);
+  }
+
+  // 移除上传状态标记
+  removeUploadIndicator(fileElement) {
+    const indicator = fileElement.querySelector('.upload-indicator');
+    if (indicator) {
+      indicator.remove();
+    }
   }
 
   // Faiss数据库相关方法
@@ -603,7 +592,7 @@ class DatabaseModule {
 
   async queryVectorData() {
     if (!this.selectedVectorType) {
-      alert('请先选择向量类型');
+      showAlert('请先选择向量类型', 'warning');
       return;
     }
 

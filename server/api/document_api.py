@@ -27,21 +27,24 @@ class DeleteDocumentRequest(BaseModel):
     file_path: str
     is_folder: bool = False
 
+class UnmountDocumentRequest(BaseModel):
+    """取消挂载文档请求模型"""
+    file_path: str
+    is_folder: bool = False
+
+class UnmountDocumentResponse(BaseModel):
+    """取消挂载文档响应模型"""
+    status: str
+    message: str
+    unmounted_documents: int
+    unmounted_vectors: int
+
 class DeleteDocumentResponse(BaseModel):
     """删除文档响应模型"""
     status: str
     message: str
     deleted_documents: int
     deleted_vectors: int
-
-class DocumentExistsRequest(BaseModel):
-    """检查文档是否存在请求模型"""
-    file_path: str
-
-class DocumentExistsResponse(BaseModel):
-    """检查文档是否存在响应模型"""
-    exists: bool
-    document_id: Optional[int] = None
 
 class ReuploadDocumentRequest(BaseModel):
     """重新上传文档请求模型"""
@@ -478,6 +481,80 @@ async def delete_document(request: DeleteDocumentRequest):
     except Exception as e:
         logger.error(f"删除文档失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"删除文档失败: {str(e)}")
+
+@router.post("/unmount", response_model=UnmountDocumentResponse)
+async def unmount_document(request: UnmountDocumentRequest):
+    """
+    取消挂载文档 - 删除数据库中的记录但不删除文件
+    
+    Args:
+        request: 取消挂载请求，包含文件路径和是否为文件夹
+        
+    Returns:
+        取消挂载结果，包括取消挂载的文档数量和向量数量
+    """
+    try:
+        logger.info(f"收到文档取消挂载请求: {request.file_path}, 文件夹: {request.is_folder}")
+        
+        if not sqlite_manager or not faiss_manager:
+            raise HTTPException(status_code=500, detail="数据库管理器未初始化")
+        
+        # 验证路径参数
+        if not request.file_path:
+            raise HTTPException(status_code=400, detail="文件路径不能为空")
+        
+        # 标准化路径（移除前导斜杠）
+        file_path = request.file_path.lstrip('/')
+        
+        unmounted_docs = 0
+        unmounted_vectors = 0
+        
+        if request.is_folder:
+            # 取消挂载文件夹及其下所有文档
+            logger.info(f"开始递归取消挂载文件夹: {file_path}")
+            
+            # 1. 获取文件夹下所有文档的向量ID
+            vector_ids = sqlite_manager.get_vector_ids_by_path_prefix(file_path)
+            logger.info(f"找到 {len(vector_ids)} 个向量需要取消挂载")
+            
+            # 2. 从SQLite中删除文档及相关数据（但不删除文件）
+            unmounted_docs = sqlite_manager.delete_documents_by_path_prefix(file_path)
+            logger.info(f"从SQLite中取消挂载了 {unmounted_docs} 个文档")
+            
+            # 3. 从Faiss中删除向量
+            if vector_ids:
+                unmounted_vectors = faiss_manager.delete_vectors_by_ids(vector_ids)
+                logger.info(f"从Faiss中删除了 {unmounted_vectors} 个向量")
+            
+        else:
+            # 取消挂载单个文档
+            logger.info(f"开始取消挂载单个文档: {file_path}")
+            
+            # 1. 获取文档的向量ID
+            vector_ids = sqlite_manager.get_vector_ids_by_path(file_path)
+            logger.info(f"找到 {len(vector_ids)} 个向量需要取消挂载")
+            
+            # 2. 从SQLite中删除文档及相关数据（但不删除文件）
+            unmounted_docs = sqlite_manager.delete_document_by_path(file_path)
+            logger.info(f"从SQLite中取消挂载了 {unmounted_docs} 个文档")
+            
+            # 3. 从Faiss中删除向量
+            if vector_ids:
+                unmounted_vectors = faiss_manager.delete_vectors_by_ids(vector_ids)
+                logger.info(f"从Faiss中删除了 {unmounted_vectors} 个向量")
+        
+        return UnmountDocumentResponse(
+            status="success",
+            message=f"成功取消挂载了 {unmounted_docs} 个文档和 {unmounted_vectors} 个向量",
+            unmounted_documents=unmounted_docs,
+            unmounted_vectors=unmounted_vectors
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"取消挂载文档失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"取消挂载文档失败: {str(e)}")
 
 @router.post("/reupload", response_model=ReuploadDocumentResponse)
 async def reupload_document(request: ReuploadDocumentRequest):

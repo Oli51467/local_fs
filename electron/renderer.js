@@ -249,14 +249,14 @@ function addDragAndDropSupport(element, node, isFolder) {
           // 检查数据库更新状态
           if (result.dbUpdateSuccess === false) {
             console.warn('数据库路径更新失败:', result.dbUpdateMessage);
-            alert(`警告: 文件移动成功，但数据库路径更新失败。这可能影响搜索功能。\n错误: ${result.dbUpdateMessage}`);
+            showAlert(`警告: 文件移动成功，但数据库路径更新失败。这可能影响搜索功能。\n错误: ${result.dbUpdateMessage}`, 'warning');
           }
         } else {
-          alert(`移动失败: ${result.error}`);
+          showAlert(`移动失败: ${result.error}`, 'error');
         }
       } catch (error) {
         console.error('移动文件失败:', error);
-        alert(`移动失败: ${error.message}`);
+        showAlert(`移动失败: ${error.message}`, 'error');
       }
     }
   });
@@ -362,9 +362,19 @@ function createContextMenu(x, y, itemPath, isFolder) {
       reuploadFile(itemPath);
     });
   }
+
+  // 取消挂载菜单项
+  const unmountItem = document.createElement('div');
+  unmountItem.className = 'context-menu-item';
+  unmountItem.innerHTML = `<span class="context-menu-icon">${window.icons.trash}</span>取消挂载`;
+  unmountItem.addEventListener('click', () => {
+    hideContextMenu();
+    unmountDocument(itemPath, isFolder);
+  });
   
   menu.appendChild(renameItem);
   menu.appendChild(deleteItem);
+  menu.appendChild(unmountItem);
   menu.appendChild(separator);
   menu.appendChild(uploadItem);
   menu.appendChild(reuploadItem);
@@ -377,11 +387,228 @@ function createContextMenu(x, y, itemPath, isFolder) {
   }, 0);
 }
 
+// 取消挂载文档函数
+async function unmountDocument(filePath, isFolder) {
+  try {
+    console.log('取消挂载文档路径:', filePath);
+    
+    // 确保使用相对路径，因为数据库存储的是相对路径格式
+    let unmountPath = filePath;
+    
+    // 如果传入的是绝对路径，转换为相对路径
+    if (filePath.startsWith('/')) {
+      // 提取相对于项目根目录的路径
+      const projectRoot = '/Users/dingjianan/Desktop/fs/';
+      if (filePath.startsWith(projectRoot)) {
+        unmountPath = filePath.substring(projectRoot.length);
+      } else {
+        // 如果路径不包含项目根目录，尝试查找data目录
+        const dataIndex = filePath.indexOf('/data/');
+        if (dataIndex !== -1) {
+          unmountPath = filePath.substring(dataIndex + 1); // 包含data/
+        } else {
+          // 最后手段：使用文件名
+          const parts = filePath.split('/');
+          unmountPath = parts[parts.length - 1];
+        }
+      }
+    }
+    
+    console.log('转换后的取消挂载路径:', unmountPath);
+    
+    // 显示取消挂载状态
+    const fileItem = document.querySelector(`[data-path="${filePath}"]`);
+    if (fileItem) {
+      const indicator = fileItem.querySelector('.upload-indicator');
+      if (indicator) {
+        indicator.classList.add('uploading');
+      }
+    }
+    
+    // 调用后端取消挂载接口
+    const response = await fetch('http://localhost:8000/api/document/unmount', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        file_path: unmountPath,
+        is_folder: isFolder
+      })
+    });
+    
+    const result = await response.json();
+    
+    // 检查HTTP响应状态
+    if (!response.ok) {
+      // HTTP错误（4xx, 5xx等）
+      const errorMessage = result.detail || result.error || `HTTP错误 ${response.status}`;
+      console.error('取消挂载失败:', errorMessage);
+      showAlert(`取消挂载失败: ${errorMessage}`, 'error');
+      return;
+    }
+    
+    // 检查业务逻辑状态
+    if (result.status === 'success') {
+      // 只有在实际取消挂载了文档时才显示成功提示
+      if (result.unmounted_documents > 0 || result.unmounted_vectors > 0) {
+        removeUploadIndicator(filePath);
+        console.log('取消挂载成功:', filePath);
+        // 显示成功提示（使用自定义模态框）
+        showModal({
+          type: 'success',
+          title: '操作成功',
+          message: `取消挂载成功：${result.message}`,
+          showCancel: false,
+          onConfirm: null
+        });
+      } else {
+        // 没有找到要取消挂载的文档，不显示成功提示
+        console.log('取消挂载完成，但未找到相关文档:', filePath);
+      }
+      
+      // 延迟刷新文件树，让用户先看到成功提示
+      setTimeout(async () => {
+        // 刷新文件树以更新状态
+        if (window.explorerModule && window.explorerModule.refreshFileTree) {
+          await window.explorerModule.refreshFileTree();
+        } else {
+          // 如果explorerModule不可用，使用备用方案刷新文件树
+          await loadFileTree();
+        }
+      }, 500); // 延迟500ms执行
+    } else {
+      // 处理业务逻辑错误
+      const errorMessage = result.message || result.error || result.detail || '未知错误';
+      console.error('取消挂载失败:', errorMessage);
+      showModal({
+        type: 'error',
+        title: '取消挂载失败',
+        message: errorMessage,
+        showCancel: false,
+        onConfirm: null
+      });
+    }
+  } catch (error) {
+    console.error('取消挂载请求失败:', error);
+    // 显示更详细的错误信息
+    const errorMessage = error.message || '取消挂载请求失败，请检查后端服务';
+    showModal({
+      type: 'error',
+      title: '取消挂载失败',
+      message: errorMessage,
+      showCancel: false,
+      onConfirm: null
+    });
+  } finally {
+    // 移除取消挂载状态
+    const fileItem = document.querySelector(`[data-path="${filePath}"]`);
+    if (fileItem) {
+      const indicator = fileItem.querySelector('.upload-indicator');
+      if (indicator) {
+        indicator.classList.remove('uploading');
+      }
+    }
+  }
+}
+
 // 隐藏右键菜单
 function hideContextMenu() {
   const menu = document.querySelector('.context-menu');
   if (menu) {
     menu.remove();
+  }
+}
+
+// 取消挂载文档函数
+async function unmountDocument(filePath) {
+  try {
+    // 关闭所有现有提示框，避免重复
+    closeAllModals();
+    
+    // 确保使用相对路径，因为数据库存储的是相对路径格式
+    let unmountPath = filePath;
+    
+    // 如果传入的是绝对路径，转换为相对路径
+    if (filePath.startsWith('/')) {
+      // 提取相对于项目根目录的路径
+      const projectRoot = '/Users/dingjianan/Desktop/fs/';
+      if (filePath.startsWith(projectRoot)) {
+        unmountPath = filePath.substring(projectRoot.length);
+      } else {
+        // 如果路径不包含项目根目录，尝试查找data目录
+        const dataIndex = filePath.indexOf('/data/');
+        if (dataIndex !== -1) {
+          unmountPath = filePath.substring(dataIndex + 1); // 包含data/
+        } else {
+          // 最后手段：使用文件名
+          const parts = filePath.split('/');
+          unmountPath = parts[parts.length - 1];
+        }
+      }
+    }
+    
+    console.log('取消挂载文件路径:', unmountPath);
+    
+    const response = await fetch(`http://localhost:8000/api/document/unmount`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        file_path: unmountPath,
+        is_folder: false
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      // 只有在实际取消挂载了文档时才显示成功提示
+      if (data.unmounted_documents > 0 || data.unmounted_vectors > 0) {
+        // 显示成功提示
+        showModal({
+          type: 'success',
+          title: '操作成功',
+          message: '文档取消挂载成功',
+          showCancel: false,
+          onConfirm: null
+        });
+      } else {
+        // 没有找到要取消挂载的文档，不显示成功提示
+        console.log('取消挂载完成，但未找到相关文档:', unmountPath);
+      }
+      
+      // 移除文件的上传指示器
+      const fileElement = document.querySelector(`[data-path="${filePath}"]`);
+      if (fileElement) {
+        // 调用database模块的removeUploadIndicator方法
+        if (window.database && window.database.removeUploadIndicator) {
+          window.database.removeUploadIndicator(fileElement);
+        } else {
+          // 如果database模块不可用，直接移除指示器
+          const indicator = fileElement.querySelector('.upload-indicator');
+          if (indicator) {
+            indicator.remove();
+          }
+        }
+      }
+      
+      // 延迟刷新文件树，让用户先看到成功提示
+      setTimeout(async () => {
+        // 刷新文件树以更新状态
+        if (window.explorerModule && window.explorerModule.refreshFileTree) {
+          await window.explorerModule.refreshFileTree();
+        } else {
+          // 如果explorerModule不可用，使用备用方案刷新文件树
+          await loadFileTree();
+        }
+      }, 500); // 延迟500ms执行
+    } else {
+      showAlert(`取消挂载失败: ${data.detail || '未知错误'}`, 'error');
+    }
+  } catch (error) {
+    showAlert(`取消挂载时发生错误: ${error.message}`, 'error');
   }
 }
 
@@ -426,7 +653,7 @@ async function uploadFile(filePath) {
       // HTTP错误（4xx, 5xx等）
       const errorMessage = result.detail || result.error || `HTTP错误 ${response.status}`;
       console.error('文件上传失败:', errorMessage);
-      alert(`上传失败: ${errorMessage}`);
+      showAlert(`上传失败: ${errorMessage}`, 'error');
       return;
     }
     
@@ -435,31 +662,31 @@ async function uploadFile(filePath) {
       // 新文件上传成功
       addUploadIndicator(filePath);
       console.log('文件上传成功:', uploadPath);
-      // 显示成功提示
-      alert('文件上传成功');
+      // 显示成功提示（使用自定义模态框）
+      showSuccessModal('文件上传成功');
     } else if (result.status === 'exists') {
       // 文件已存在（相同内容的文件已上传过）
       addUploadIndicator(filePath);
       console.log('文件已上传:', uploadPath);
-      // 显示已存在提示
-      alert('文件已上传');
+      // 显示已存在提示（使用自定义模态框）
+      showSuccessModal('文件已上传');
     } else if (result.status === 'updated') {
       // 文件路径更新（检测到文件移动）
       addUploadIndicator(filePath);
       console.log('文件路径已更新:', uploadPath);
-      // 显示路径更新提示
-      alert('文件已上传');
+      // 显示路径更新提示（使用自定义模态框）
+      showSuccessModal('文件已上传');
     } else {
       // 处理业务逻辑错误
       const errorMessage = result.message || result.error || result.detail || '未知错误';
       console.error('文件上传失败:', errorMessage);
-      alert(`上传失败: ${errorMessage}`);
+      showAlert(`上传失败: ${errorMessage}`, 'error');
     }
   } catch (error) {
     console.error('上传请求失败:', error);
     // 显示更详细的错误信息
     const errorMessage = error.message || '上传请求失败，请检查后端服务';
-    alert(`上传失败: ${errorMessage}`);
+    showAlert(`上传失败: ${errorMessage}`, 'error');
   } finally {
     // 移除上传状态
     const fileItem = document.querySelector(`[data-path="${filePath}"]`);
@@ -470,6 +697,170 @@ async function uploadFile(filePath) {
       }
     }
   }
+}
+
+// 通用提示框函数
+function showModal(options) {
+  const {
+    type = 'info', // 'success', 'error', 'warning', 'info'
+    title,
+    message,
+    confirmText = '确定',
+    cancelText = '取消',
+    showCancel = false,
+    onConfirm = null,
+    onCancel = null
+  } = options;
+
+  // 创建遮罩层
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  `;
+  
+  // 创建弹窗
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    background-color: var(--bg-color);
+    border-radius: 8px;
+    padding: 20px;
+    min-width: 300px;
+    max-width: 500px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    color: var(--text-color);
+  `;
+  
+  // 标题样式和文本
+  const titleElement = document.createElement('h3');
+  const titleConfig = {
+    success: { text: title || '操作成功', color: '#28a745' },
+    error: { text: title || '操作失败', color: '#dc3545' },
+    warning: { text: title || '警告', color: '#ffc107' },
+    info: { text: title || '提示', color: '#17a2b8' }
+  };
+  
+  titleElement.textContent = titleConfig[type].text;
+  titleElement.style.cssText = `
+    margin: 0 0 15px 0;
+    font-size: 16px;
+    font-weight: bold;
+    color: ${titleConfig[type].color};
+  `;
+  
+  // 消息内容
+  const messageElement = document.createElement('p');
+  messageElement.textContent = message;
+  messageElement.style.cssText = `
+    margin: 0 0 20px 0;
+    line-height: 1.5;
+    white-space: pre-line;
+  `;
+  
+  // 按钮容器
+  const buttonContainer = document.createElement('div');
+  buttonContainer.style.cssText = `
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  `;
+  
+  // 取消按钮
+  if (showCancel) {
+    const cancelButton = document.createElement('button');
+    cancelButton.textContent = cancelText;
+    cancelButton.style.cssText = `
+      padding: 8px 16px;
+      border: 1px solid var(--tree-border);
+      background: var(--bg-color);
+      color: var(--text-color);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    `;
+    
+    cancelButton.addEventListener('click', () => {
+      document.body.removeChild(overlay);
+      if (onCancel) onCancel();
+    });
+    
+    buttonContainer.appendChild(cancelButton);
+  }
+  
+  // 确定按钮
+  const confirmButton = document.createElement('button');
+  confirmButton.textContent = confirmText;
+  const buttonColor = type === 'error' ? '#dc3545' : 
+                     type === 'warning' ? '#ffc107' :
+                     type === 'success' ? '#28a745' : '#17a2b8';
+  
+  confirmButton.style.cssText = `
+    padding: 8px 16px;
+    border: none;
+    background: ${buttonColor};
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+  `;
+  
+  confirmButton.addEventListener('click', () => {
+    document.body.removeChild(overlay);
+    if (onConfirm) onConfirm();
+  });
+  
+  // 组装弹窗
+  buttonContainer.appendChild(confirmButton);
+  modal.appendChild(titleElement);
+  modal.appendChild(messageElement);
+  modal.appendChild(buttonContainer);
+  overlay.appendChild(modal);
+  
+  // 显示弹窗
+  document.body.appendChild(overlay);
+  
+  // 点击遮罩层关闭弹窗（仅信息类）
+  if (type === 'info' || type === 'success') {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        document.body.removeChild(overlay);
+      }
+    });
+  }
+}
+
+// 关闭所有模态框
+function closeAllModals() {
+  const overlays = document.querySelectorAll('div[style*="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5);"]');
+  overlays.forEach(overlay => {
+    if (overlay.parentNode) {
+      overlay.parentNode.removeChild(overlay);
+    }
+  });
+}
+
+// 简化的提示函数（替代alert）
+function showAlert(message, type = 'info') {
+  showModal({
+    type: type,
+    message: message
+  });
+}
+
+// 显示自定义成功提示框
+function showSuccessModal(message) {
+  showModal({
+    type: 'success',
+    message: message
+  });
 }
 
 // 添加上传标记
@@ -491,6 +882,9 @@ function addUploadIndicator(filePath) {
 // 重新上传文件函数
 async function reuploadFile(filePath) {
   try {
+    // 关闭所有现有提示框，避免重复
+    closeAllModals();
+    
     // 确保使用完整路径，因为后端需要验证文件存在
     let uploadPath = filePath;
 
@@ -530,7 +924,7 @@ async function reuploadFile(filePath) {
       // HTTP错误（4xx, 5xx等）
       const errorMessage = result.detail || result.error || `HTTP错误 ${response.status}`;
       console.error('文件重新上传失败:', errorMessage);
-      alert(`重新上传失败: ${errorMessage}`);
+      showAlert(`重新上传失败: ${errorMessage}`, 'error');
       return;
     }
 
@@ -539,14 +933,14 @@ async function reuploadFile(filePath) {
       // 重新上传成功
       addUploadIndicator(filePath);
       console.log('文件重新上传成功:', uploadPath);
-      // 重新上传成功时显示提示
-      alert('文件重新上传成功');
+      // 重新上传成功时显示提示（使用自定义模态框）
+      showSuccessModal('文件重新上传成功');
     } else if (result.status === 'uploaded') {
       // 新上传成功（之前未上传过）
       addUploadIndicator(filePath);
       console.log('文件上传成功:', uploadPath);
-      // 新上传成功时显示提示
-      alert('文件上传成功');
+      // 新上传成功时显示提示（使用自定义模态框）
+      showSuccessModal('文件上传成功');
     } else if (result.status === 'unchanged') {
       // 文件内容未改变 - 静默处理，不显示提示
       console.log('文件内容未改变，无需重新上传:', uploadPath);
@@ -555,13 +949,13 @@ async function reuploadFile(filePath) {
       // 处理业务逻辑错误
       const errorMessage = result.message || result.error || result.detail || '未知错误';
       console.error('文件重新上传失败:', errorMessage);
-      alert(`重新上传失败: ${errorMessage}`);
+      showAlert(`重新上传失败: ${errorMessage}`, 'error');
     }
   } catch (error) {
     console.error('重新上传请求失败:', error);
     // 显示更详细的错误信息
     const errorMessage = error.message || '重新上传请求失败，请检查后端服务';
-    alert(`重新上传失败: ${errorMessage}`);
+    showAlert(`重新上传失败: ${errorMessage}`, 'error');
   } finally {
     // 移除重新上传状态
     const fileItem = document.querySelector(`[data-path="${filePath}"]`);
@@ -574,42 +968,7 @@ async function reuploadFile(filePath) {
   }
 }
 
-// 检查文件是否已上传
-async function checkUploadStatus(filePath) {
-  try {
-    // 确保使用完整路径，因为后端需要验证文件存在
-    let uploadPath = filePath;
 
-    // 如果传入的是相对路径，转换为绝对路径
-    if (!filePath.startsWith('/')) {
-      // 假设是相对路径，添加项目根目录前缀
-      uploadPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
-    }
-
-    console.log('检查文件上传状态:', uploadPath);
-
-    const response = await fetch('http://localhost:8000/api/documents/exists', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        file_path: uploadPath
-      })
-    });
-
-    if (!response.ok) {
-      console.error('API响应错误:', response.status);
-      return false;
-    }
-
-    const result = await response.json();
-    return result.exists || false;
-  } catch (error) {
-    console.error('检查上传状态失败:', error);
-    return false;
-  }
-}
 
 // 批量刷新文件上传状态
 async function refreshAllUploadStatus() {
@@ -622,14 +981,8 @@ async function refreshAllUploadStatus() {
     const filePath = fileItem.dataset.path;
     if (filePath) {
       try {
-        const isUploaded = await checkUploadStatus(filePath);
-        
-        // 更新上传状态标记
-        if (isUploaded) {
-          addUploadIndicator(filePath);
-        } else {
-          removeUploadIndicator(filePath);
-        }
+        // 移除上传状态标记（不再通过API检查，由上传操作直接控制）
+        removeUploadIndicator(filePath);
       } catch (error) {
         console.error(`刷新文件 ${filePath} 状态失败:`, error);
       }
@@ -777,14 +1130,6 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     contentDiv.appendChild(nameSpan);
     
     div.appendChild(contentDiv);
-    
-    // 异步检查文件上传状态并添加标记
-    (async () => {
-      const isUploaded = await checkUploadStatus(node.path);
-      if (isUploaded) {
-        addUploadIndicator(node.path);
-      }
-    })();
     
     // 添加拖拽功能
     addDragAndDropSupport(div, node, false);
@@ -1018,14 +1363,14 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
          cleanup();
        } else {
          // 重命名失败时显示错误并重置状态
-         alert(`重命名失败: ${result.error}`);
+         showAlert(`重命名失败: ${result.error}`, 'error');
          isProcessing = false;
          input.focus();
          input.select();
        }
      } catch (error) {
        console.error('重命名失败:', error);
-       alert(`重命名失败: ${error.message}`);
+       showAlert(`重命名失败: ${error.message}`, 'error');
        isProcessing = false;
        input.focus();
        input.select();
@@ -1081,52 +1426,7 @@ function createRenameInput(element, itemPath, currentName, isFolder) {
 }
 
 // 检查所有文件的上传状态
-async function checkAllFilesUploadStatus(node) {
-  if (!node) return;
-  
-  // 如果是文件，检查上传状态
-  if (!node.isFolder && node.path) {
-    try {
-      // 提取相对于项目根目录的路径
-      let relativePath = node.path;
-      
-      // 如果是绝对路径，提取相对于项目根目录的路径
-      if (node.path.startsWith('/')) {
-        // 查找data目录的位置
-        const dataIndex = node.path.indexOf('/data/');
-        if (dataIndex !== -1) {
-          relativePath = node.path.substring(dataIndex + 1); // 移除开头的'/'
-        } else {
-          // 如果找不到data目录，使用文件名
-          const parts = node.path.split('/');
-          relativePath = parts[parts.length - 1];
-        }
-      }
-      
-      // 确保路径格式正确（移除开头的../）
-      relativePath = relativePath.replace(/^\.\.\//, '');
-      
-      console.log('检查文件上传状态:', node.path, '->', relativePath);
-      const isUploaded = await checkUploadStatus(relativePath);
-      if (isUploaded) {
-        // 找到对应的文件元素并添加上传标记
-        const fileElement = document.querySelector(`[data-path="${node.path}"]`);
-        if (fileElement) {
-          addUploadIndicator(fileElement);
-        }
-      }
-    } catch (error) {
-      console.error(`检查文件上传状态失败: ${node.path}`, error);
-    }
-  }
-  
-  // 递归检查子项
-  if (node.children && node.children.length > 0) {
-    for (const child of node.children) {
-      await checkAllFilesUploadStatus(child);
-    }
-  }
-}
+
 
 // 加载文件树加载并渲染文件树
 async function loadFileTree() {
@@ -1139,10 +1439,7 @@ async function loadFileTree() {
       tree.children.forEach(child => renderTree(child, fileTreeEl, true, 0));
     }
     
-    // 检查所有文件的上传状态
-    setTimeout(async () => {
-      await checkAllFilesUploadStatus(tree);
-    }, 100); // 稍微延迟，确保DOM渲染完成
+
   } catch (error) {
     console.error('加载文件树失败:', error);
   }
@@ -1395,11 +1692,11 @@ function bindEventListeners() {
             
           } else {
             console.error('移动到根目录失败:', result.error);
-            alert('移动到根目录失败: ' + result.error);
+            showAlert('移动到根目录失败: ' + result.error, 'error');
           }
         } catch (error) {
           console.error('移动到根目录时出错:', error);
-          alert('移动到根目录时出错: ' + error.message);
+          showAlert('移动到根目录时出错: ' + error.message, 'error');
         }
       }
     });

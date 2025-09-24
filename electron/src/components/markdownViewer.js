@@ -739,7 +739,7 @@ class MarkdownViewer {
       console.log('Markdown文件保存成功:', tabState.filePath);
     } catch (error) {
       console.error('保存Markdown文件失败:', error);
-      alert(`保存文件失败: ${error.message}`);
+      showAlert(`保存文件失败: ${error.message}`, 'error');
     }
   }
 

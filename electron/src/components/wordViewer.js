@@ -434,10 +434,10 @@ class WordViewer {
       }
       
       console.log('Docx文件内容已保存为文本备份:', backupPath);
-      alert(`文档内容已保存为文本备份：${backupPath}\n\n注意：由于docx格式的复杂性，当前版本只能保存文本内容。`);
+      showAlert(`文档内容已保存为文本备份：${backupPath}\n\n注意：由于docx格式的复杂性，当前版本只能保存文本内容。`, 'info');
     } catch (error) {
-      console.error('保存Docx文件失败:', error);
-      alert('保存文件失败: ' + error.message);
+      console.error('保存Word文档失败:', error);
+      showAlert('保存文件失败: ' + error.message, 'error');
     }
   }
 
@@ -517,16 +517,16 @@ class WordViewer {
             window.location.reload();
           } else {
             console.error('创建基本Word文档失败:', result.error);
-            alert('创建基本Word文档失败: ' + result.error);
+            showAlert('创建基本Word文档失败: ' + result.error, 'error');
           }
         } else {
           console.error('文件系统API不可用');
-          alert('文件系统API不可用，无法创建文档');
+          showAlert('文件系统API不可用，无法创建文档', 'warning');
         }
       }
     } catch (error) {
       console.error('创建基本Word文档时出错:', error);
-      alert('创建基本Word文档时出错: ' + error.message);
+      showAlert('创建基本Word文档时出错: ' + error.message, 'error');
     }
   }
 
