@@ -1,157 +1,291 @@
-# 🗂️ LocalFS - 智能桌面文件管理系统
+# 🗂️ LoFS - Load once Fast Search
 
-> 一个现代化的本地文件管理解决方案，集成AI能力，让文件管理更智能、更高效
+> **Lo**cal **F**ile **S**ystem + Load once Fast Search - 基于向量搜索和RAG技术的现代化桌面文件管理解决方案
+>
+> 🎯 **LoFS** 巧妙融合：作为 **Local File System** 体现其本地文件系统的本质，同时通过 **Load once Fast Search** 彰显其一次加载、极速搜索的核心能力
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Electron](https://img.shields.io/badge/Electron-Latest-blue.svg)](https://www.electronjs.org/)
 [![Python](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-Latest-red.svg)](https://fastapi.tiangolo.com/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-red.svg)](https://fastapi.tiangolo.com/)
+[![Electron](https://img.shields.io/badge/Electron-26+-blue.svg)](https://www.electronjs.org/)
 
-## 🌟 背景介绍
+## 🎯 核心特性
 
-在数字化时代，我们每天都要处理大量的文件和文档。传统的文件管理器功能单一，无法满足现代工作流程的需求。LocalFS 应运而生，它不仅是一个文件管理器，更是一个智能的文件处理平台。
+### 🔍 智能文档处理
+- **多格式支持**：TXT、PDF、Excel文件智能解析
+- **向量化存储**：基于BAAI/bge-small-zh-v1.5的文档嵌入
+- **混合检索**：结合向量搜索(Faiss)和关键词搜索(BM25s)
+- **智能重排序**：Cross-Encoder模型优化搜索结果
 
-**LocalFS** 致力于打造下一代桌面文件管理体验：
-- 🎯 **专注本地**：专为本地文件管理优化，无需云端依赖
-- 🤖 **AI 驱动**：集成大模型能力，智能分析文档内容
-- 🔧 **高度可扩展**：模块化设计，支持多种文件格式处理
-- 💡 **用户友好**：直观的界面设计，简化复杂操作
+### 🏗️ 现代化架构
+- **双核架构**：LoFS = Local File System (本地文件系统) + Load once Fast Search (一次加载极速搜索)
+- **前后端分离**：Electron + FastAPI架构
+- **模块化设计**：可插拔的服务架构
+- **异步处理**：支持大文件并发处理
+- **本地优先**：完全离线的文档处理能力
 
-## ✨ 主要功能
+### 🛠️ 工程化实践
+- **容器化部署**：支持Docker容器化
+- **自动化构建**：一键打包多平台应用
+- **配置管理**：环境变量驱动的配置系统
+- **日志监控**：完整的日志和监控体系
 
-### 📁 智能文件管理
-- **可视化文件树**：直观的树形结构展示，支持拖拽调整
-- **快速导入**：一键导入各种类型文件到工作区
-- **批量操作**：支持文件/文件夹的批量创建、删除、重命名
-- **智能搜索**：基于文件名、内容的快速检索
-
-### 🤖 AI 文档处理
-- **PDF 智能解析**：自动将 PDF 转换为 Markdown 格式
-- **内容理解**：利用大模型分析文档内容，提取关键信息
-- **智能摘要**：自动生成文档摘要和关键词标签
-- **语义搜索**：基于内容语义的智能搜索功能
-
-### 📊 数据分析能力
-- **Excel 文件支持**：上传并解析 .xlsx/.xls 文件
-- **数据可视化**：自动生成图表和统计报告
-- **数据洞察**：AI 驱动的数据分析和趋势识别
-- **报告生成**：一键生成专业的数据分析报告
+## 📸 系统演示
 
 ### 🎨 现代化界面
-- **响应式设计**：适配不同屏幕尺寸
-- **暗色模式**：护眼的深色主题支持
-- **自定义布局**：可调整的面板和工具栏
-- **快捷操作**：丰富的键盘快捷键支持
+LoFS采用简洁现代的设计风格，提供直观的用户体验：
 
-### 🔧 扩展功能
-- **插件系统**：支持第三方插件扩展
-- **格式转换**：多种文件格式间的智能转换
-- **版本管理**：文件变更历史追踪
-- **云端同步**：可选的云端备份功能（规划中）
+| ![欢迎页面](img/welcome_page.png) |
+|:--:|
+| *LoFS启动欢迎页面 - 简洁优雅的品牌展示* |
 
-## 🛠️ 技术栈
+### 📄 智能文档查看
+支持多种文档格式的智能解析和优雅展示：
 
-### 前端技术
-- **Electron**：跨平台桌面应用框架
-- **HTML5/CSS3**：现代化的用户界面
-- **JavaScript (ES6+)**：交互逻辑和状态管理
-- **SVG Icons**：矢量图标系统
+| ![PDF查看器](img/pdf_viewer.png) |
+|:--:|
+| *PDF文档智能解析 - 支持文本提取和向量化处理* |
 
-### 后端技术
-- **Python 3.8+**：核心业务逻辑
-- **FastAPI**：高性能异步 Web 框架
-- **PyPDF2/pdfplumber**：PDF 文件解析
-- **pandas/openpyxl**：Excel 数据处理
-- **transformers**：大模型集成（规划中）
+| ![PPT查看器](img/ppt_viewer.png) |
+|:--:|
+| *PowerPoint文档处理 - 智能内容识别和结构化展示* |
 
-### 系统架构
-```
-┌─────────────────┐    IPC     ┌─────────────────┐
-│   Electron UI   │ ◄────────► │  Python Backend │
-│                 │            │                 │
-│ • 文件树展示     │            │ • 文件处理       │
-│ • 用户交互       │            │ • AI 分析        │
-│ • 界面渲染       │            │ • 数据转换       │
-└─────────────────┘            └─────────────────┘
-```
+### 🔍 核心功能亮点
+- **📁 智能文件树**：直观的资源管理器界面
+- **🔎 极速搜索**：毫秒级向量搜索响应
+- **📊 数据库管理**：内置数据库管理面板
+- **⚙️ 系统配置**：灵活的配置管理系统
 
-## 🚀 部署与打包
+## 🚀 快速开始
 
-### 快速开始
-
-1. **环境准备**
+### 环境要求
 ```bash
-# 安装 Node.js 和 Python 3.8+
-# 克隆项目
+# Python环境
+Python 3.8+  # 推荐3.10+
+Node.js 16+  # 推荐18+
+
+# 系统依赖
+macOS/Linux: 原生支持
+Windows: 需要Visual C++ 14.0+
+```
+
+### 安装部署
+
+```bash
+# 1. 克隆项目
 git clone <repository-url>
 cd LocalFS
-source .venv/bin/activate 
-```
 
-2. **安装依赖**
-```bash
-# 安装 Python 依赖
+# 2. 后端环境准备
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r server/requirements.txt
 
-# 安装 Electron 依赖
+# 3. 前端环境准备
 cd electron
 npm install
-```
 
-3. **开发模式运行**
-```bash
-# 启动后端服务
+# 4. 开发模式启动
+# 终端1 - 启动后端
 python server/main.py
 
-# 启动 Electron 应用
+# 终端2 - 启动前端
 cd electron
-npm run electron:dev
+npm run dev
 ```
 
-### 打包发布
+### 生产构建
 
-使用自动化打包脚本：
 ```bash
+# 一键打包脚本
 python package.py
+
+# 构建产物位置
+electron/dist/  # 各平台安装包
 ```
 
-打包后的应用位于 `electron/dist/` 目录，支持 Windows、macOS 和 Linux 平台。
+## 📊 系统架构
 
-## 📋 TODO
+### 技术栈
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Electron Frontend                   │
+├─────────────────────────────────────────────────────────┤
+│  • HTML5/CSS3/JavaScript (ES6+)                      │
+│  • Axios HTTP客户端                                   │
+│  • 原生文件系统API                                     │
+└─────────────────────┬───────────────────────────────────┘
+                      │ IPC通信
+┌─────────────────────┴───────────────────────────────────┐
+│                  FastAPI Backend                      │
+├─────────────────────────────────────────────────────────┤
+│  API层                                                  │
+│  ├── document_api.py  - 文档上传处理                      │
+│  ├── database_api.py  - 数据库操作                       │
+│  ├── faiss_api.py    - 向量索引管理                     │
+│  └── cleanup_api.py  - 系统清理维护                     │
+│                                                         │
+│  服务层                                                  │
+│  ├── embedding_service.py    - BAAI嵌入模型             │
+│  ├── faiss_service.py        - 向量索引管理              │
+│  ├── sqlite_service.py       - 元数据存储               │
+│  ├── bm25s_service.py       - 关键词搜索               │
+│  ├── reranker_service.py    - 结果重排序               │
+│  └── text_splitter_service.py - 文本分块处理            │
+└─────────────────────────────────────────────────────────┘
+```
 
-### 🎯 近期计划 (v1.0)
-- [x] 基础文件树展示
-- [x] 文件导入/删除功能
-- [x] 用户界面优化
-- [ ] 文件内容预览
-- [ ] 多种文件格式支持
-- [ ] 搜索功能实现
+### 数据流
+```
+文档上传 → 文本提取 → 智能分块 → 向量化 → 存储索引
+    ↓                                           ↓
+文件元数据 ← SQLite存储 ← 内容哈希 ← 格式检测
+```
 
-### 🚀 中期目标 (v2.0)
-- [ ] PDF 转 Markdown 功能
-- [ ] Excel 文件解析与展示
-- [ ] 基础数据可视化
-- [ ] 文件标签系统
-- [ ] 快捷键支持
-- [ ] 主题切换功能
+## 🔧 核心API
 
-### 🌟 长期愿景 (v3.0+)
-- [ ] 大模型集成 (GPT/Claude)
-- [ ] 智能文档分析
-- [ ] 语义搜索功能
-- [ ] 插件系统架构
-- [ ] 云端同步支持
-- [ ] 多语言国际化
-- [ ] 移动端适配
+### 文档管理
+```http
+POST /api/document/upload          # 文档上传
+POST /api/document/delete          # 文档删除  
+POST /api/document/reupload        # 重新上传
+POST /api/document/update-path       # 路径更新
+```
 
----
+### 搜索检索
+```http
+POST /api/faiss/search             # 向量搜索
+POST /api/database/search          # 数据库查询
+POST /api/faiss/bm25s_search       # BM25s关键词搜索
+```
+
+### 系统管理
+```http
+GET  /api/health/ready             # 健康检查
+POST /api/cleanup/all              # 系统清理
+GET  /api/cleanup/status           # 清理状态
+```
+
+## 🎛️ 配置系统
+
+### 环境变量
+```bash
+# 核心配置
+PROJECT_ROOT=/path/to/project       # 项目根目录
+SERVER_HOST=0.0.0.0                 # 服务地址
+SERVER_PORT=8000                     # 服务端口
+
+# 模型配置
+EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5 # 嵌入模型
+RERANKER_MODEL=BAAI/bge-reranker-base # 重排序模型
+
+# 存储配置
+SQLITE_DB_PATH=data/documents.db     # SQLite路径
+VECTOR_INDEX_PATH=data/faiss.index   # 向量索引路径
+DATABASE_DIR=data/                    # 数据目录
+
+# 分块策略
+TEXT_SPLITTER_TYPE=recursive         # recursive|semantic
+RECURSIVE_CHUNK_SIZE=512            # 分块大小
+RECURSIVE_CHUNK_OVERLAP=50          # 重叠大小
+```
+
+## 📈 性能指标
+
+### 处理能力
+- **文档处理**：支持100MB+大文件处理
+- **并发处理**：异步处理，支持多文件并发
+- **搜索性能**：毫秒级向量搜索响应
+- **内存优化**：流式处理，内存占用可控
+
+### 扩展性
+- **水平扩展**：支持多实例部署
+- **存储扩展**：支持TB级文档存储
+- **模型热切换**：支持模型动态更新
+- **插件扩展**：预留插件接口
+
+## 🔒 安全设计
+
+### 数据安全
+- **本地存储**：所有数据本地处理，无云端依赖
+- **路径验证**：严格的文件路径验证机制
+- **内容检测**：恶意文件检测和处理
+- **权限控制**：基于文件系统的权限管理
+
+### 系统安全
+- **输入验证**：完整的参数验证和清洗
+- **错误处理**：统一的异常处理机制
+- **日志审计**：完整的操作日志记录
+- **资源限制**：内存和CPU使用限制
+
+## 🧪 开发规范
+
+### 代码质量
+```bash
+# 代码格式化
+black server/                    # Python代码格式化
+prettier electron/               # JavaScript代码格式化
+
+# 静态检查
+pylint server/                   # Python代码检查
+eslint electron/                 # JavaScript代码检查
+```
+
+### 测试覆盖
+```bash
+# 单元测试
+python -m pytest server/tests/   # 后端测试
+npm test electron/               # 前端测试
+
+# 集成测试
+python server/tests/integration/ # 集成测试
+```
+
+## 📋 路线图
+
+### v1.0 (当前)
+- ✅ 基础文档管理功能
+- ✅ 向量搜索实现
+- ✅ 混合检索策略
+- ✅ 多平台打包支持
+
+### v1.1 (近期)
+- 🔄 PDF解析优化
+- 🔄 Excel数据处理增强
+- 🔄 语义分块策略
+- 🔄 搜索性能优化
+
+### v2.0 (中期)
+- 📋 多模态文档支持
+- 📋 图数据库集成
+- 📋 分布式架构支持
+- 📋 插件生态系统
+
+### v3.0 (愿景)
+- 🎯 AI Agent集成
+- 🎯 知识图谱构建
+- 🎯 智能推荐系统
+- 🎯 企业级特性
 
 ## 🤝 贡献指南
 
-欢迎提交 Issue 和 Pull Request！请确保：
-- 遵循现有代码风格
-- 添加必要的测试用例
-- 更新相关文档
+### 开发流程
+1. Fork项目并创建功能分支
+2. 遵循代码规范进行开发
+3. 添加测试用例
+4. 提交Pull Request
+5. 通过代码审查
+
+### 提交规范
+```
+feat: 新功能开发
+fix: 问题修复
+docs: 文档更新
+style: 代码格式
+refactor: 代码重构
+test: 测试用例
+chore: 构建维护
+```
 
 ## 📄 许可证
 
@@ -159,17 +293,21 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ## 🙏 致谢
 
-感谢所有开源项目的贡献者，特别是：
-- Electron 团队
-- FastAPI 社区
-- Python 生态系统
+### 核心技术
+- **[FastAPI](https://fastapi.tiangolo.com/)** - 高性能Web框架
+- **[Faiss](https://github.com/facebookresearch/faiss)** - Facebook向量搜索库
+- **[BAAI](https://github.com/FlagOpen/FlagEmbedding)** - 智源研究院嵌入模型
+- **[Electron](https://www.electronjs.org/)** - 跨平台桌面应用框架
+
+### 开源生态
+感谢所有为开源社区贡献的项目和开发者，LoFS (Local File System) 站在巨人的肩膀上前行。
 
 ---
 
 <div align="center">
 
-**LocalFS** - 让文件管理更智能 🚀
+**LoFS** (Local File System + Load once Fast Search) - 重新定义本地文件管理体验
 
-[报告问题](https://github.com/your-username/LocalFS/issues) • [功能建议](https://github.com/your-username/LocalFS/issues) • [参与讨论](https://github.com/your-username/LocalFS/discussions)
+[📖 文档](https://github.com/your-username/LoFS/wiki) • [🐛 报告问题](https://github.com/your-username/LoFS/issues) • [💡 功能建议](https://github.com/your-username/LoFS/discussions)
 
 </div>
