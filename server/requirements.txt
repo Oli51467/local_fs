@@ -8,3 +8,4 @@ pydantic>=2.0.0
 faiss-cpu==1.8.0
 bm25s[full]
 langchain
+python-multipart

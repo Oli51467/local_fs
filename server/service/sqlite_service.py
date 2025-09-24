@@ -118,6 +118,33 @@ class SQLiteManager:
                 })
             return results
 
+    def get_document_by_path(self, file_path: str) -> Optional[Dict]:
+        """根据文件路径获取文档"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, filename, file_path, file_type, file_size, 
+                       upload_time, content_hash, total_chunks
+                FROM documents 
+                WHERE file_path = ?
+                ORDER BY upload_time DESC
+                LIMIT 1
+            """, (file_path,))
+            
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'id': row[0],
+                    'filename': row[1],
+                    'file_path': row[2],
+                    'file_type': row[3],
+                    'file_size': row[4],
+                    'upload_time': row[5],
+                    'file_hash': row[6],
+                    'total_chunks': row[7]
+                }
+            return None
+
     def get_document_by_path_and_hash(self, file_path: str, file_hash: str) -> Optional[Dict]:
         """根据文件路径和哈希值获取文档（用于精确匹配）"""
         with sqlite3.connect(self.db_path) as conn:

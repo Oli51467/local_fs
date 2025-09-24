@@ -348,11 +348,26 @@ function createContextMenu(x, y, itemPath, isFolder) {
       uploadFile(itemPath);
     });
   }
+
+  // 重新上传菜单项（仅对文件显示）
+  const reuploadItem = document.createElement('div');
+  reuploadItem.className = 'context-menu-item';
+  reuploadItem.innerHTML = `<span class="context-menu-icon">${window.icons.import}</span>重新上传`;
+  
+  if (isFolder) {
+    reuploadItem.classList.add('disabled');
+  } else {
+    reuploadItem.addEventListener('click', () => {
+      hideContextMenu();
+      reuploadFile(itemPath);
+    });
+  }
   
   menu.appendChild(renameItem);
   menu.appendChild(deleteItem);
   menu.appendChild(separator);
   menu.appendChild(uploadItem);
+  menu.appendChild(reuploadItem);
   
   document.body.appendChild(menu);
   
@@ -416,12 +431,24 @@ async function uploadFile(filePath) {
     }
     
     // 检查业务逻辑状态
-    if (result.status === 'success' || result.status === 'exists') {
-      // 上传成功或文件已存在，都视为成功，添加已上传标记
+    if (result.status === 'success') {
+      // 新文件上传成功
       addUploadIndicator(filePath);
-      console.log('文件上传成功:', uploadPath, result.message);
+      console.log('文件上传成功:', uploadPath);
       // 显示成功提示
-      alert(result.message || '文件上传成功');
+      alert('文件上传成功');
+    } else if (result.status === 'exists') {
+      // 文件已存在（相同内容的文件已上传过）
+      addUploadIndicator(filePath);
+      console.log('文件已上传:', uploadPath);
+      // 显示已存在提示
+      alert('文件已上传');
+    } else if (result.status === 'updated') {
+      // 文件路径更新（检测到文件移动）
+      addUploadIndicator(filePath);
+      console.log('文件路径已更新:', uploadPath);
+      // 显示路径更新提示
+      alert('文件已上传');
     } else {
       // 处理业务逻辑错误
       const errorMessage = result.message || result.error || result.detail || '未知错误';
@@ -461,20 +488,106 @@ function addUploadIndicator(filePath) {
   }
 }
 
-// 检查文件是否已上传
-async function checkUploadStatus(filePath) {
+// 重新上传文件函数
+async function reuploadFile(filePath) {
   try {
     // 确保使用完整路径，因为后端需要验证文件存在
     let uploadPath = filePath;
-    
+
     // 如果传入的是相对路径，转换为绝对路径
     if (!filePath.startsWith('/')) {
       // 假设是相对路径，添加项目根目录前缀
       uploadPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
     }
-    
+
+    console.log('重新上传文件路径:', uploadPath);
+
+    // 显示重新上传状态
+    const fileItem = document.querySelector(`[data-path="${filePath}"]`);
+    if (fileItem) {
+      const indicator = fileItem.querySelector('.upload-indicator');
+      if (indicator) {
+        indicator.classList.add('reuploading');
+      }
+    }
+
+    // 调用后端重新上传接口
+    const response = await fetch('http://localhost:8000/api/document/reupload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        file_path: uploadPath,
+        force_reupload: false  // 默认不强制重新上传，让后端自动判断
+      })
+    });
+
+    const result = await response.json();
+
+    // 检查HTTP响应状态
+    if (!response.ok) {
+      // HTTP错误（4xx, 5xx等）
+      const errorMessage = result.detail || result.error || `HTTP错误 ${response.status}`;
+      console.error('文件重新上传失败:', errorMessage);
+      alert(`重新上传失败: ${errorMessage}`);
+      return;
+    }
+
+    // 检查业务逻辑状态
+    if (result.status === 'reuploaded') {
+      // 重新上传成功
+      addUploadIndicator(filePath);
+      console.log('文件重新上传成功:', uploadPath);
+      // 重新上传成功时显示提示
+      alert('文件重新上传成功');
+    } else if (result.status === 'uploaded') {
+      // 新上传成功（之前未上传过）
+      addUploadIndicator(filePath);
+      console.log('文件上传成功:', uploadPath);
+      // 新上传成功时显示提示
+      alert('文件上传成功');
+    } else if (result.status === 'unchanged') {
+      // 文件内容未改变 - 静默处理，不显示提示
+      console.log('文件内容未改变，无需重新上传:', uploadPath);
+      // 不显示任何提示，保持静默
+    } else {
+      // 处理业务逻辑错误
+      const errorMessage = result.message || result.error || result.detail || '未知错误';
+      console.error('文件重新上传失败:', errorMessage);
+      alert(`重新上传失败: ${errorMessage}`);
+    }
+  } catch (error) {
+    console.error('重新上传请求失败:', error);
+    // 显示更详细的错误信息
+    const errorMessage = error.message || '重新上传请求失败，请检查后端服务';
+    alert(`重新上传失败: ${errorMessage}`);
+  } finally {
+    // 移除重新上传状态
+    const fileItem = document.querySelector(`[data-path="${filePath}"]`);
+    if (fileItem) {
+      const indicator = fileItem.querySelector('.upload-indicator');
+      if (indicator) {
+        indicator.classList.remove('reuploading');
+      }
+    }
+  }
+}
+
+// 检查文件是否已上传
+async function checkUploadStatus(filePath) {
+  try {
+    // 确保使用完整路径，因为后端需要验证文件存在
+    let uploadPath = filePath;
+
+    // 如果传入的是相对路径，转换为绝对路径
+    if (!filePath.startsWith('/')) {
+      // 假设是相对路径，添加项目根目录前缀
+      uploadPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
+    }
+
     console.log('检查文件上传状态:', uploadPath);
-    
+
     const response = await fetch('http://localhost:8000/api/documents/exists', {
       method: 'POST',
       headers: {
@@ -484,12 +597,12 @@ async function checkUploadStatus(filePath) {
         file_path: uploadPath
       })
     });
-    
+
     if (!response.ok) {
       console.error('API响应错误:', response.status);
       return false;
     }
-    
+
     const result = await response.json();
     return result.exists || false;
   } catch (error) {

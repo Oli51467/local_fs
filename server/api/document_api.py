@@ -43,6 +43,18 @@ class DocumentExistsResponse(BaseModel):
     exists: bool
     document_id: Optional[int] = None
 
+class ReuploadDocumentRequest(BaseModel):
+    """重新上传文档请求模型"""
+    file_path: str
+    force_reupload: bool = False  # 是否强制重新上传，忽略哈希检查
+
+class ReuploadDocumentResponse(BaseModel):
+    """重新上传文档响应模型"""
+    status: str
+    message: str
+    document_id: Optional[int] = None
+    file_info: Optional[Dict[str, Any]] = None
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/document", tags=["document"])
@@ -466,6 +478,129 @@ async def delete_document(request: DeleteDocumentRequest):
     except Exception as e:
         logger.error(f"删除文档失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"删除文档失败: {str(e)}")
+
+@router.post("/reupload", response_model=ReuploadDocumentResponse)
+async def reupload_document(request: ReuploadDocumentRequest):
+    """
+    重新上传文档到系统
+    
+    Args:
+        request: 重新上传请求，包含文件路径和是否强制重新上传
+        
+    Returns:
+        重新上传结果，包括状态、消息和文档信息
+    """
+    try:
+        logger.info(f"收到文件重新上传请求: {request.file_path}, 强制重新上传: {request.force_reupload}")
+        
+        # 1. 验证文件路径
+        file_path = pathlib.Path(request.file_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"文件不存在: {request.file_path}")
+        
+        if not file_path.is_file():
+            raise HTTPException(status_code=400, detail=f"路径不是文件: {request.file_path}")
+        
+        # 2. 获取项目根目录
+        project_root = ServerConfig.PROJECT_ROOT
+        
+        # 验证文件是否在项目根目录内
+        try:
+            file_path.relative_to(project_root)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"文件必须在项目根目录内: {project_root}")
+        
+        # 获取文件名和类型
+        filename = file_path.name
+        file_type = file_path.suffix.lower().lstrip('.')
+        relative_file_path = str(file_path.relative_to(project_root))
+        logger.info(f"文件信息: 名称={filename}, 类型={file_type}, 相对路径={relative_file_path}")
+        
+        # 3. 计算文件哈希值
+        file_hash = calculate_file_hash(file_path)
+        file_size = file_path.stat().st_size
+        
+        # 4. 检查文档是否已存在
+        if not sqlite_manager:
+            raise HTTPException(status_code=500, detail="数据库管理器未初始化")
+        
+        existing_doc = sqlite_manager.get_document_by_path(relative_file_path)
+        
+        if not existing_doc:
+            # 文档不存在，直接上传
+            logger.info(f"文档不存在，直接上传: {relative_file_path}")
+            # 调用现有的上传逻辑
+            upload_request = FileUploadRequest(file_path=request.file_path)
+            upload_response = await upload_document(upload_request)
+            
+            return ReuploadDocumentResponse(
+                status="uploaded",
+                message="文档上传成功",
+                document_id=upload_response.document_id,
+                file_info=upload_response.file_info
+            )
+        
+        # 文档已存在，检查是否需要重新上传
+        existing_hash = existing_doc.get('file_hash')
+        existing_document_id = existing_doc.get('id')
+        
+        # 如果哈希相同且没有强制重新上传，则不需要重新处理
+        if existing_hash == file_hash and not request.force_reupload:
+            logger.info(f"文件哈希相同，无需重新上传: {file_hash}")
+            return ReuploadDocumentResponse(
+                status="unchanged",
+                message="文件内容未改变，无需重新上传",
+                document_id=existing_document_id,
+                file_info={
+                    "filename": filename,
+                    "file_type": file_type,
+                    "file_hash": file_hash,
+                    "file_size": file_size,
+                    "existing_path": relative_file_path
+                }
+            )
+        
+        # 哈希不同或强制重新上传，删除旧数据并重新处理
+        logger.info(f"文件哈希不同或强制重新上传，旧哈希: {existing_hash}, 新哈希: {file_hash}")
+        
+        # 5. 删除旧文档数据（包括文档、chunks和sqlite_sequence）
+        logger.info(f"开始删除旧文档数据，文档ID: {existing_document_id}, 文件路径: {relative_file_path}")
+        
+        # 获取旧向量的ID（用于后续从Faiss删除）
+        old_vector_ids = sqlite_manager.get_vector_ids_by_path(relative_file_path)
+        logger.info(f"找到 {len(old_vector_ids)} 个旧向量需要删除")
+        
+        # 从SQLite中删除文档及相关数据（包括documents、document_chunks和sqlite_sequence）
+        deleted_docs = sqlite_manager.delete_document_by_path(relative_file_path)
+        if deleted_docs > 0:
+            logger.info(f"成功从SQLite中删除文档及相关数据，删除了 {deleted_docs} 个文档记录")
+            logger.info(f"同时删除了该文档的所有chunks数据，并重置了sqlite_sequence表")
+        else:
+            logger.warning(f"删除文档数据失败或文档不存在: {relative_file_path}")
+        
+        # 从Faiss中删除对应的向量
+        deleted_vectors = 0
+        if old_vector_ids and faiss_manager:
+            deleted_vectors = faiss_manager.delete_vectors_by_ids(old_vector_ids)
+            logger.info(f"从Faiss中删除了 {deleted_vectors} 个向量")
+        
+        # 6. 重新上传文档（调用现有的上传逻辑）
+        logger.info("开始重新上传文档")
+        upload_request = FileUploadRequest(file_path=request.file_path)
+        upload_response = await upload_document(upload_request)
+        
+        return ReuploadDocumentResponse(
+            status="reuploaded",
+            message="文档重新上传成功",
+            document_id=upload_response.document_id,
+            file_info=upload_response.file_info
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"文档重新上传失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"文档重新上传失败: {str(e)}")
 
 def calculate_file_hash(file_path: pathlib.Path) -> str:
     """计算文件哈希值"""
