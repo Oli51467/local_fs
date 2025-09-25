@@ -72,10 +72,13 @@ class FileViewer {
      this.pdfViewer = new PdfViewer(this.contentContainer, this.tabManager);
  
      // 初始化键盘快捷键
-     this.initKeyboardShortcuts();
- 
-     // 添加样式
-     this.addStyles();
+    this.initKeyboardShortcuts();
+
+    // 添加点击事件监听器，当点击内容区域时清除文件树选中状态
+    this.addContentClickHandler();
+
+    // 添加样式
+    this.addStyles();
   }
 
   addStyles() {
@@ -582,7 +585,26 @@ class FileViewer {
     return this.tabManager.closeTabByFilePath(filePath);
   }
 
-   // 初始化键盘快捷键（保存文件快捷键）
+  // 添加点击事件监听器，当点击内容区域时清除文件树选中状态
+  addContentClickHandler() {
+    // 监听内容容器的点击事件
+    this.contentContainer.addEventListener('click', (e) => {
+      // 清除文件树的选中状态
+      if (window.explorerModule) {
+        window.explorerModule.setSelectedItemPath(null);
+      }
+      // 清除全局选中路径变量
+      if (typeof window.selectedItemPath !== 'undefined') {
+        window.selectedItemPath = null;
+      }
+      // 移除所有文件项的选中样式
+      document.querySelectorAll('.file-item.selected').forEach(el => {
+        el.classList.remove('selected');
+      });
+    });
+  }
+
+  // 初始化键盘快捷键（保存文件快捷键）
    initKeyboardShortcuts() {
      document.addEventListener('keydown', (e) => {
        // Ctrl+S (Windows/Linux) 或 Command+S (Mac) 保存文件

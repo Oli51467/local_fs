@@ -127,6 +127,9 @@
 .file-item.selected {
   background-color: var(--accent-color);
   color: #ffffff;
+  outline: none;
+  border: none;
+  box-shadow: none;
 }
 
 .file-item.selected:hover {

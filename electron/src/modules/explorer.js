@@ -82,6 +82,20 @@ class ExplorerModule {
       
       // 检查是否按下了Enter键
       if (e.key === 'Enter') {
+        // 检查当前焦点是否在文本编辑区域
+        const activeElement = document.activeElement;
+        if (activeElement) {
+          // 如果焦点在文本输入区域，不触发重命名
+          const tagName = activeElement.tagName.toLowerCase();
+          if (tagName === 'textarea' || 
+              tagName === 'input' || 
+              activeElement.contentEditable === 'true' ||
+              activeElement.classList.contains('txt-editor') ||
+              activeElement.classList.contains('markdown-editor-textarea')) {
+            return; // 不处理，让文本编辑器正常处理回车键
+          }
+        }
+        
         // 阻止事件冒泡，防止与其他键盘事件冲突
         e.stopPropagation();
         e.preventDefault();
