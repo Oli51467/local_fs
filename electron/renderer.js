@@ -1676,7 +1676,10 @@ function createContextMenu(x, y, itemPath, isFolder) {
   mountItem.innerHTML = `<span class="context-menu-icon">${window.icons.import}</span>挂载`;
   
   if (isFolder) {
-    mountItem.classList.add('disabled');
+    mountItem.addEventListener('click', () => {
+      hideContextMenu();
+      mountFolder(itemPath);
+    });
   } else {
     mountItem.addEventListener('click', () => {
       hideContextMenu();
@@ -1684,13 +1687,15 @@ function createContextMenu(x, y, itemPath, isFolder) {
     });
   }
 
-  // 重新挂载菜单项（仅对文件显示）
   const remountItem = document.createElement('div');
   remountItem.className = 'context-menu-item';
   remountItem.innerHTML = `<span class="context-menu-icon">${window.icons.import}</span>重新挂载`;
   
   if (isFolder) {
-    remountItem.classList.add('disabled');
+    remountItem.addEventListener('click', () => {
+      hideContextMenu();
+      remountFolder(itemPath);
+    });
   } else {
     remountItem.addEventListener('click', () => {
       hideContextMenu();
@@ -1698,13 +1703,16 @@ function createContextMenu(x, y, itemPath, isFolder) {
     });
   }
 
-  // 取消挂载菜单项
   const unmountItem = document.createElement('div');
   unmountItem.className = 'context-menu-item';
   unmountItem.innerHTML = `<span class="context-menu-icon">${window.icons.trash}</span>取消挂载`;
   unmountItem.addEventListener('click', () => {
     hideContextMenu();
-    unmountDocument(itemPath, isFolder);
+    if (isFolder) {
+      unmountFolder(itemPath);
+    } else {
+      unmountDocument(itemPath, isFolder);
+    }
   });
   
   menu.appendChild(renameItem);
@@ -1949,6 +1957,86 @@ async function unmountDocument(filePath) {
   } finally {
     hideLoadingOverlay();
   }
+}
+
+async function mountFolder(folderPath) {
+  showLoadingOverlay('正在挂载文件夹…');
+  try {
+    const response = await fetch('http://localhost:8000/api/document/mount-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_path: folderPath })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || `挂载失败 (${response.status})`);
+    }
+    handleFolderOperationResult('挂载完成', data);
+  } catch (error) {
+    showAlert(`挂载失败: ${error.message || error}`, 'error');
+  } finally {
+    hideLoadingOverlay();
+  }
+}
+
+async function remountFolder(folderPath) {
+  showLoadingOverlay('正在重新挂载文件夹…');
+  try {
+    const response = await fetch('http://localhost:8000/api/document/remount-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_path: folderPath, force_reupload: true })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || `重新挂载失败 (${response.status})`);
+    }
+    handleFolderOperationResult('重新挂载完成', data);
+  } catch (error) {
+    showAlert(`重新挂载失败: ${error.message || error}`, 'error');
+  } finally {
+    hideLoadingOverlay();
+  }
+}
+
+async function unmountFolder(folderPath) {
+  showLoadingOverlay('正在取消挂载文件夹…');
+  try {
+    const response = await fetch('http://localhost:8000/api/document/unmount-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_path: folderPath })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || `取消挂载失败 (${response.status})`);
+    }
+    handleFolderOperationResult('取消挂载完成', data);
+  } catch (error) {
+    showAlert(`取消挂载失败: ${error.message || error}`, 'error');
+  } finally {
+    hideLoadingOverlay();
+  }
+}
+
+function handleFolderOperationResult(title, data) {
+  const success = data.succeeded || 0;
+  const failed = data.failed || 0;
+  const total = data.total_files || success + failed;
+  const message = [`文件夹: ${data.folder || ''}`, `总文件: ${total}`, `成功: ${success}`, `失败: ${failed}`].join('\n');
+  showModal({
+    type: failed > 0 ? 'warning' : 'success',
+    title,
+    message,
+    showCancel: false,
+    onConfirm: async () => {
+      if (window.explorerModule && window.explorerModule.refreshFileTree) {
+        await window.explorerModule.refreshFileTree();
+      } else {
+        await loadFileTree();
+      }
+    }
+  });
 }
 
 // 上传文件函数

@@ -1,10 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Callable, Awaitable
 import logging
 import hashlib
 import pathlib
 import re
+import asyncio
 from datetime import datetime
 from typing import Dict, Any
 from service.embedding_service import get_embedding_service
@@ -71,6 +72,17 @@ class FolderUploadStatusResponse(BaseModel):
     files: Dict[str, bool]
     uploaded_files: List[str]
 
+
+class FolderOperationRequest(BaseModel):
+    """文件夹挂载/取消挂载请求"""
+    folder_path: str
+
+
+class FolderRemountRequest(BaseModel):
+    """文件夹重新挂载请求"""
+    folder_path: str
+    force_reupload: bool = True
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/document", tags=["document"])
@@ -122,6 +134,74 @@ def extract_text_content(file_path: pathlib.Path, file_type: str) -> str:
     if lowered in {'md', 'markdown'}:
         return markdown_to_plain_text(raw_text)
     return raw_text
+
+
+def resolve_folder_path(folder_path: str) -> pathlib.Path:
+    path_obj = pathlib.Path(folder_path)
+    if not path_obj.is_absolute():
+        path_obj = (ServerConfig.PROJECT_ROOT / path_obj).resolve()
+    else:
+        path_obj = path_obj.resolve()
+
+    try:
+        path_obj.relative_to(ServerConfig.PROJECT_ROOT)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="文件夹必须位于项目根目录内")
+
+    if not path_obj.exists() or not path_obj.is_dir():
+        raise HTTPException(status_code=404, detail=f"文件夹不存在: {path_obj}")
+
+    return path_obj
+
+
+def collect_files_in_folder(folder_path: pathlib.Path) -> List[pathlib.Path]:
+    files = []
+    for child in folder_path.rglob('*'):
+        if child.is_file() and not child.name.startswith('.'):
+            files.append(child)
+    return files
+
+
+async def run_folder_tasks(
+    files: List[pathlib.Path],
+    operation: Callable[[pathlib.Path], Awaitable[Any]],
+    max_concurrency: int = 8
+) -> List[Dict[str, Any]]:
+    semaphore = asyncio.Semaphore(max(1, min(max_concurrency, len(files))))
+    results: List[Dict[str, Any]] = []
+
+    async def worker(path: pathlib.Path) -> Dict[str, Any]:
+        async with semaphore:
+            try:
+                outcome = await operation(path)
+                status = getattr(outcome, 'status', None)
+                success = status not in {'error', 'failed'}
+                return {
+                    'path': str(path),
+                    'status': status or 'success',
+                    'detail': outcome.dict() if hasattr(outcome, 'dict') else outcome,
+                    'success': success
+                }
+            except HTTPException as http_exc:
+                logger.error("处理文件失败 (HTTP): %s - %s", path, http_exc.detail)
+                return {
+                    'path': str(path),
+                    'status': 'error',
+                    'detail': http_exc.detail,
+                    'success': False
+                }
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.error("处理文件失败: %s - %s", path, exc)
+                return {
+                    'path': str(path),
+                    'status': 'error',
+                    'detail': str(exc),
+                    'success': False
+                }
+
+    tasks = [worker(path) for path in files]
+    results = await asyncio.gather(*tasks)
+    return results
 
 def init_document_api(faiss_mgr: FaissManager, sqlite_mgr: SQLiteManager):
     """初始化文档API"""
@@ -470,6 +550,110 @@ async def upload_document(request: FileUploadRequest):
         logger.error(f"文档上传失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"文档上传失败: {str(e)}")
 
+
+@router.post("/mount-folder")
+async def mount_folder(request: FolderOperationRequest) -> Dict[str, Any]:
+    """批量挂载文件夹中的所有文件"""
+    folder_path = resolve_folder_path(request.folder_path)
+    files = collect_files_in_folder(folder_path)
+
+    if not files:
+        raise HTTPException(status_code=400, detail="文件夹内没有可挂载的文件")
+
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail="单次挂载的文件数量超过 50 个，请拆分后重试")
+
+    logger.info("开始批量挂载文件夹: %s, 文件数量: %d", folder_path, len(files))
+
+    async def mount_file(path: pathlib.Path):
+        upload_request = FileUploadRequest(file_path=str(path))
+        return await upload_document(upload_request)
+
+    results = await run_folder_tasks(files, mount_file)
+
+    success_count = sum(1 for item in results if item['success'])
+    failure_count = len(results) - success_count
+
+    status = 'success' if failure_count == 0 else ('partial' if success_count > 0 else 'failed')
+
+    return {
+        'status': status,
+        'folder': str(folder_path),
+        'total_files': len(results),
+        'succeeded': success_count,
+        'failed': failure_count,
+        'details': results
+    }
+
+
+@router.post("/remount-folder")
+async def remount_folder(request: FolderRemountRequest) -> Dict[str, Any]:
+    """批量重新挂载文件夹中的所有文件"""
+    folder_path = resolve_folder_path(request.folder_path)
+    files = collect_files_in_folder(folder_path)
+
+    if not files:
+        raise HTTPException(status_code=400, detail="文件夹内没有可重新挂载的文件")
+
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail="单次重新挂载的文件数量超过 50 个，请拆分后重试")
+
+    logger.info("开始批量重新挂载文件夹: %s, 文件数量: %d", folder_path, len(files))
+
+    force = request.force_reupload
+
+    async def remount_file(path: pathlib.Path):
+        reupload_request = ReuploadDocumentRequest(file_path=str(path), force_reupload=force)
+        return await reupload_document(reupload_request)
+
+    results = await run_folder_tasks(files, remount_file)
+
+    success_count = sum(1 for item in results if item['success'])
+    failure_count = len(results) - success_count
+    status = 'success' if failure_count == 0 else ('partial' if success_count > 0 else 'failed')
+
+    return {
+        'status': status,
+        'folder': str(folder_path),
+        'total_files': len(results),
+        'succeeded': success_count,
+        'failed': failure_count,
+        'details': results
+    }
+
+
+@router.post("/unmount-folder")
+async def unmount_folder(request: FolderOperationRequest) -> Dict[str, Any]:
+    """批量取消挂载文件夹中的所有文件"""
+    folder_path = resolve_folder_path(request.folder_path)
+    files = collect_files_in_folder(folder_path)
+
+    if not files:
+        raise HTTPException(status_code=400, detail="文件夹内没有可取消挂载的文件")
+
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail="单次取消挂载的文件数量超过 50 个，请拆分后重试")
+
+    logger.info("开始批量取消挂载文件夹: %s, 文件数量: %d", folder_path, len(files))
+
+    async def unmount_file(path: pathlib.Path):
+        unmount_request = UnmountDocumentRequest(file_path=str(path), is_folder=False)
+        return await unmount_document(unmount_request)
+
+    results = await run_folder_tasks(files, unmount_file)
+
+    success_count = sum(1 for item in results if item['success'])
+    failure_count = len(results) - success_count
+    status = 'success' if failure_count == 0 else ('partial' if success_count > 0 else 'failed')
+
+    return {
+        'status': status,
+        'folder': str(folder_path),
+        'total_files': len(results),
+        'succeeded': success_count,
+        'failed': failure_count,
+        'details': results
+    }
 @router.post("/update-path")
 async def update_document_path(request: UpdateDocumentPathRequest):
     """
