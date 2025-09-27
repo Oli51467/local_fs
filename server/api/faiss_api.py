@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, List, Optional
+from pathlib import Path
 import numpy as np
 from service.faiss_service import FaissManager
 from service.embedding_service import EmbeddingService
@@ -181,147 +182,269 @@ async def get_all_vectors(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
 
 @router.post("/search")
 async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
-    """搜索相似向量（POST方法）- 集成BM25S混合打分和Reranker二次排序"""
+    """综合字符匹配与语义检索的搜索接口"""
     try:
         if faiss_manager is None:
             raise HTTPException(status_code=500, detail="Faiss manager not initialized")
-        
+
         if embedding_service is None:
             raise HTTPException(status_code=500, detail="Embedding service not initialized")
-        
-        # 将查询文本转换为向量
-        query_vector = embedding_service.encode_text(request.query)
-        
-        # 第一步：使用Faiss进行向量召回（粗排）
-        # 返回top10个结果用于BM25S混合打分
-        recall_results = faiss_manager.search_vectors([query_vector], k=10)
-        
-        if not recall_results or not recall_results[0]:
+
+        top_k = max(request.top_k or 10, 1)
+        query_text = (request.query or '').strip()
+        if not query_text:
+            raise HTTPException(status_code=400, detail="查询内容不能为空")
+
+        query_lower = query_text.lower()
+
+        def build_result(meta: Dict[str, Any], source: str, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            data = dict(meta) if isinstance(meta, dict) else {}
+            file_path = data.get('file_path') or data.get('path') or ''
+            if file_path and not data.get('filename'):
+                data['filename'] = Path(file_path).name
+            if file_path:
+                path_obj = Path(file_path)
+                if not path_obj.is_absolute():
+                    path_obj = (ServerConfig.PROJECT_ROOT / path_obj).resolve()
+                data['absolute_path'] = str(path_obj)
+            data['source'] = source
+            if overrides:
+                data.update(overrides)
+            return data
+
+        def build_chunk_key(meta: Dict[str, Any]) -> tuple:
+            vector_id = meta.get('vector_id')
+            if vector_id is not None:
+                return ('vector', vector_id)
+            file_path = meta.get('file_path') or meta.get('path') or ''
+            chunk_index = meta.get('chunk_index')
+            if file_path and chunk_index is not None:
+                return ('chunk_index', file_path, chunk_index)
+            chunk_id = meta.get('chunk_id') or meta.get('id')
+            if file_path and chunk_id is not None:
+                return ('chunk_id', file_path, chunk_id)
+            return ('chunk_text', file_path, (meta.get('chunk_text') or meta.get('text') or '')[:64])
+
+        exact_results: List[Dict[str, Any]] = []
+        seen_exact = set()
+
+        for meta in faiss_manager.metadata or []:
+            chunk_text = (meta.get('chunk_text') or meta.get('text') or '')
+            filename = meta.get('filename') or ''
+            file_path = meta.get('file_path') or meta.get('path') or ''
+
+            match_position = None
+            for candidate in (chunk_text, filename, file_path):
+                if not candidate:
+                    continue
+                candidate_lower = str(candidate).lower()
+                pos = candidate_lower.find(query_lower)
+                if pos != -1:
+                    if match_position is None or pos < match_position:
+                        match_position = pos
+            if match_position is None:
+                continue
+
+            key = build_chunk_key(meta)
+            if key in seen_exact:
+                continue
+            seen_exact.add(key)
+
+            rank = len(exact_results) + 1
+            exact_results.append(
+                build_result(
+                    meta,
+                    'exact',
+                    {
+                        'rank': rank,
+                        'match_position': match_position,
+                        'match_score': 1.0,
+                    }
+                )
+            )
+
+        logger.info("字符匹配完成，查询: '%s'，匹配数量: %d", query_text, len(exact_results))
+
+        semantic_candidates: List[Dict[str, Any]] = []
+        bm25s_used = False
+        rerank_used = False
+
+        query_vector = embedding_service.encode_text(query_text)
+        recall_k = max(top_k * 8, 80)
+        recall_results = faiss_manager.search_vectors([query_vector], k=recall_k)
+        raw_candidates = recall_results[0] if recall_results else []
+
+        if raw_candidates:
+            for candidate in raw_candidates:
+                semantic_candidates.append(
+                    build_result(
+                        candidate,
+                        'semantic',
+                        {
+                            'embedding_score': float(candidate.get('score', 0.0))
+                        }
+                    )
+                )
+
+            bm25s_scores: List[float] = [0.0] * len(semantic_candidates)
+            if bm25s_service is not None and bm25s_service.is_available():
+                corpus_contents = [item.get('chunk_text') or item.get('text') or '' for item in semantic_candidates]
+                if any(corpus_contents):
+                    bm25s_scores = bm25s_service.score_documents(query_text, corpus_contents)
+                    bm25s_used = True
+
+            bm25s_weight = request.bm25s_weight if request.bm25s_weight is not None else ServerConfig.BM25S_WEIGHT
+            embedding_weight = request.embedding_weight if request.embedding_weight is not None else ServerConfig.EMBEDDING_WEIGHT
+            total_weight = bm25s_weight + embedding_weight
+            if total_weight <= 0:
+                bm25s_weight = embedding_weight = 0.5
+            else:
+                bm25s_weight /= total_weight
+                embedding_weight /= total_weight
+
+            for idx, item in enumerate(semantic_candidates):
+                embedding_score = float(item.get('embedding_score', 0.0))
+                bm25_raw = float(bm25s_scores[idx]) if idx < len(bm25s_scores) else 0.0
+                bm25_norm = float(bm25_raw / (bm25_raw + 1.0)) if bm25_raw > 0 else 0.0
+                item['bm25s_raw_score'] = bm25_raw if bm25s_used else None
+                item['bm25s_score'] = bm25_norm if bm25s_used else None
+                item['mixed_score'] = (
+                    bm25_norm * bm25s_weight + embedding_score * embedding_weight
+                    if bm25s_used
+                    else embedding_score
+                )
+
+            if reranker_service is not None and reranker_service.is_available() and semantic_candidates:
+                rerank_texts: List[str] = []
+                rerank_indices: List[int] = []
+                for idx, item in enumerate(semantic_candidates):
+                    content = item.get('chunk_text') or item.get('text') or ''
+                    if content:
+                        rerank_texts.append(content)
+                        rerank_indices.append(idx)
+                if rerank_texts:
+                    rerank_scores = reranker_service.rerank_results(query_text, rerank_texts)
+                    if not isinstance(rerank_scores, list):
+                        if isinstance(rerank_scores, (int, float)):
+                            rerank_scores = [float(rerank_scores)] * len(rerank_texts)
+                        else:
+                            rerank_scores = [0.0] * len(rerank_texts)
+                    rerank_used = True
+                    for local_idx, score in enumerate(rerank_scores):
+                        global_idx = rerank_indices[local_idx]
+                        semantic_candidates[global_idx]['rerank_score'] = float(score)
+                    semantic_candidates.sort(
+                        key=lambda x: (
+                            x.get('rerank_score', float('-inf')),
+                            x.get('mixed_score', float('-inf'))
+                        ),
+                        reverse=True
+                    )
+                else:
+                    semantic_candidates.sort(key=lambda x: x.get('mixed_score', 0.0), reverse=True)
+            else:
+                semantic_candidates.sort(key=lambda x: x.get('mixed_score', 0.0), reverse=True)
+
+        semantic_results: List[Dict[str, Any]] = []
+        for idx, item in enumerate(semantic_candidates[:top_k], start=1):
+            semantic_results.append(
+                build_result(
+                    item,
+                    'semantic',
+                    {
+                        'rank': idx,
+                        'embedding_score': float(item.get('embedding_score', 0.0)),
+                        'bm25s_score': item.get('bm25s_score'),
+                        'bm25s_raw_score': item.get('bm25s_raw_score'),
+                        'mixed_score': float(item.get('mixed_score', 0.0)),
+                        'rerank_score': float(item.get('rerank_score', 0.0)) if 'rerank_score' in item else None
+                    }
+                )
+            )
+
+        combined_map: Dict[tuple, Dict[str, Any]] = {}
+
+        def metrics_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
             return {
-                "status": "success",
-                "query": request.query,
-                "results": [],
-                "total_found": 0,
-                "bm25s_performed": False,
-                "rerank_performed": False
+                'rank': result.get('rank'),
+                'match_position': result.get('match_position'),
+                'match_score': result.get('match_score'),
+                'embedding_score': result.get('embedding_score'),
+                'bm25s_score': result.get('bm25s_score'),
+                'bm25s_raw_score': result.get('bm25s_raw_score'),
+                'mixed_score': result.get('mixed_score'),
+                'rerank_score': result.get('rerank_score')
             }
-        
-        # 第二步：BM25S混合打分
-        mixed_results = []
-        
-        if bm25s_service is not None and bm25s_service.is_available() and recall_results[0]:
-            # 获取召回文档的内容列表
-            recall_contents = []
-            for result in recall_results[0]:
-                # 获取文档内容，优先使用chunk_text，其次使用text
-                doc_content = result.get('chunk_text', '') or result.get('text', '')
-                recall_contents.append(doc_content)
-            
-            if recall_contents:
-                # 计算BM25S分数
-                bm25s_scores = bm25s_service.score_documents(request.query, recall_contents)
-                
-                # 获取Faiss向量相似度分数（embedding_score）
-                embedding_scores = [float(result.get('score', 0)) for result in recall_results[0]]
-                
-                # 混合打分：使用请求参数或配置权重
-                bm25s_weight = request.bm25s_weight if request.bm25s_weight is not None else ServerConfig.BM25S_WEIGHT
-                embedding_weight = request.embedding_weight if request.embedding_weight is not None else ServerConfig.EMBEDDING_WEIGHT
-                
-                # 确保权重之和为1
-                total_weight = bm25s_weight + embedding_weight
-                if total_weight > 0:
-                    bm25s_weight = bm25s_weight / total_weight
-                    embedding_weight = embedding_weight / total_weight
-                
-                for i, (result, bm25s_score, embedding_score) in enumerate(zip(recall_results[0], bm25s_scores, embedding_scores)):
-                    mixed_score = bm25s_score * bm25s_weight + embedding_score * embedding_weight
-                    mixed_item = result.copy()
-                    mixed_item['bm25s_score'] = float(bm25s_score)
-                    mixed_item['embedding_score'] = float(embedding_score)
-                    mixed_item['mixed_score'] = float(mixed_score)
-                    mixed_item['rank'] = i + 1
-                    mixed_results.append(mixed_item)
-                
-                # 按混合分数降序排序
-                mixed_results.sort(key=lambda x: x['mixed_score'], reverse=True)
-                
-                logger.info(f"BM25S混合打分完成，查询: '{request.query}', 结果数量: {len(mixed_results)}")
-        
-        # 如果BM25S不可用，使用原始向量分数
-        if not mixed_results:
-            mixed_results = recall_results[0][:]
-            for i, result in enumerate(mixed_results):
-                result['rank'] = i + 1
-                result['embedding_score'] = float(result.get('score', 0))
-                result['bm25s_score'] = 0.0
-                result['mixed_score'] = float(result.get('score', 0))
-        
-        # 第三步：使用Reranker进行二次排序（精排）
-        final_results = []
-        
-        if reranker_service is not None and reranker_service.is_available() and mixed_results:
-            # 准备Reranker输入：[[query, doc1], [query, doc2], ...]
-            reranker_input = []
-            for result in mixed_results:
-                # 获取文档内容，优先使用chunk_text，其次使用text
-                doc_content = result.get('chunk_text', '') or result.get('text', '')
-                if doc_content:
-                    reranker_input.append([request.query, doc_content])
-            
-            if reranker_input:
-                # 计算相关性分数
-                rerank_scores = reranker_service.rerank_results(request.query, [item[1] for item in reranker_input])
-                
-                # 确保rerank_scores是列表
-                if not isinstance(rerank_scores, list):
-                    logger.warning(f"Reranker returned non-list type: {type(rerank_scores)}, converting to list")
-                    if isinstance(rerank_scores, (int, float)):
-                        rerank_scores = [float(rerank_scores)] * len(mixed_results)
-                    else:
-                        rerank_scores = [0.0] * len(mixed_results)
-                
-                # 组合结果和分数，按分数排序
-                for i, (result, score) in enumerate(zip(mixed_results, rerank_scores)):
-                    reranked_item = result.copy()
-                    reranked_item['rerank_score'] = float(score)
-                    final_results.append(reranked_item)
-                
-                # 按Reranker分数降序排序
-                final_results.sort(key=lambda x: x['rerank_score'], reverse=True)
-                
-                # 只返回top3结果
-                top3_results = final_results[:3]
-                
-                return {
-                    "status": "success", 
-                    "query": request.query,
-                    "results": [top3_results],
-                    "total_found": len(top3_results),
-                    "bm25s_performed": True,
-                    "rerank_performed": True,
-                    "mixed_scores": [item['mixed_score'] for item in top3_results],
-                    "bm25s_scores": [item['bm25s_score'] for item in top3_results],
-                    "embedding_scores": [item['embedding_score'] for item in top3_results],
-                    "rerank_scores": [item['rerank_score'] for item in top3_results]
-                }
-        
-        # 如果没有Reranker，返回混合打分后的top3结果
-        top3_results = mixed_results[:3]
-        
-        return {
+
+        def merge_result(result: Dict[str, Any]) -> None:
+            key = build_chunk_key(result)
+            stored = combined_map.get(key)
+            result_copy = dict(result)
+            metrics = metrics_from_result(result_copy)
+            if stored:
+                if result_copy['source'] not in stored['sources']:
+                    stored['sources'].append(result_copy['source'])
+                stored['metrics'][result_copy['source']] = metrics
+                stored['source'] = '+'.join(sorted(stored['sources']))
+                for field in (
+                    'rank',
+                    'match_position',
+                    'match_score',
+                    'embedding_score',
+                    'bm25s_score',
+                    'bm25s_raw_score',
+                    'mixed_score',
+                    'rerank_score'
+                ):
+                    value = result_copy.get(field)
+                    if value is not None and stored.get(field) is None:
+                        stored[field] = value
+            else:
+                result_copy['sources'] = [result_copy['source']]
+                result_copy['metrics'] = {result_copy['source']: metrics}
+                combined_map[key] = result_copy
+
+        for item in exact_results:
+            merge_result(item)
+        for item in semantic_results:
+            merge_result(item)
+
+        combined_results = list(combined_map.values())
+        combined_results.sort(
+            key=lambda x: (
+                0 if 'exact' in x.get('sources', []) else 1,
+                x.get('metrics', {}).get('exact', {}).get('rank', float('inf')),
+                x.get('metrics', {}).get('semantic', {}).get('rank', float('inf'))
+            )
+        )
+        for idx, item in enumerate(combined_results, start=1):
+            item['combined_rank'] = idx
+
+        response = {
             "status": "success",
-            "query": request.query,
-            "results": [top3_results],
-            "total_found": len(top3_results),
-            "bm25s_performed": bm25s_service is not None and bm25s_service.is_available(),
-            "rerank_performed": False,
-            "mixed_scores": [item['mixed_score'] for item in top3_results],
-            "bm25s_scores": [item['bm25s_score'] for item in top3_results],
-            "embedding_scores": [item['embedding_score'] for item in top3_results],
-            "note": "使用BM25S混合打分，Reranker模型不可用"
+            "query": query_text,
+            "exact_match": {
+                "total": len(exact_results),
+                "results": exact_results
+            },
+            "semantic_match": {
+                "total": len(semantic_results),
+                "results": semantic_results,
+                "bm25s_performed": bm25s_used,
+                "rerank_performed": rerank_used
+            },
+            "combined": {
+                "total": len(combined_results),
+                "results": combined_results
+            },
+            "bm25s_performed": bm25s_used,
+            "rerank_performed": rerank_used
         }
-        
+
+        return response
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to search vectors with reranker: {str(e)}")
         raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")

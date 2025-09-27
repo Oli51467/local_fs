@@ -467,18 +467,49 @@ async def update_document_path(request: UpdateDocumentPathRequest):
             # 更新单个文档路径
             updated_count = sqlite_manager.update_document_path(old_path, new_path)
             logger.info(f"文档路径更新完成，更新了 {updated_count} 个文档")
-        
-        if updated_count > 0:
+
+        updated_vectors = 0
+        if faiss_manager is None:
+            logger.warning('Faiss 管理器未初始化，无法同步更新向量路径')
+        else:
+            try:
+                if request.is_folder:
+                    updated_vectors = faiss_manager.update_metadata_by_path_prefix(old_path, new_path)
+                    logger.info(
+                        "Faiss 元数据路径更新（文件夹）: %s -> %s，更新了 %d 条记录",
+                        old_path,
+                        new_path,
+                        updated_vectors
+                    )
+                else:
+                    updated_vectors = faiss_manager.update_metadata_by_path(old_path, new_path)
+                    logger.info(
+                        "Faiss 元数据路径更新（文件）: %s -> %s，更新了 %d 条记录",
+                        old_path,
+                        new_path,
+                        updated_vectors
+                    )
+            except Exception as faiss_error:
+                logger.error(
+                    "更新 Faiss 元数据路径失败: %s -> %s，错误: %s",
+                    old_path,
+                    new_path,
+                    faiss_error
+                )
+
+        if updated_count > 0 or updated_vectors > 0:
             return {
                 "status": "success",
-                "message": f"成功更新了 {updated_count} 个文档的路径",
-                "updated_documents": updated_count
+                "message": f"成功更新文档 {updated_count} 个、向量 {updated_vectors} 个路径",
+                "updated_documents": updated_count,
+                "updated_vectors": updated_vectors
             }
         else:
             return {
-                "status": "not_found", 
-                "message": "未找到需要更新路径的文档",
-                "updated_documents": 0
+                "status": "not_found",
+                "message": "未找到需要更新路径的文档或向量",
+                "updated_documents": 0,
+                "updated_vectors": 0
             }
             
     except HTTPException:

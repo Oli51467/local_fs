@@ -5,6 +5,26 @@ const fileContentEl = document.getElementById('file-content');
 // 初始化文件查看器
 let fileViewer = null;
 
+// 搜索结果状态
+const searchState = {
+  query: '',
+  loading: false,
+  error: null,
+  exact: [],
+  semantic: [],
+  combined: [],
+  meta: {
+    exactTotal: 0,
+    semanticTotal: 0,
+    combinedTotal: 0,
+    bm25sPerformed: false,
+    rerankPerformed: false
+  }
+};
+
+let searchResultsContainer = null;
+let searchUIInitialized = false;
+
 // initFileViewer 函数已移至 ExplorerModule
 
 // 渲染SVG图标
@@ -197,6 +217,588 @@ async function refreshVisibleFolderUploadStatus() {
 window.updateFolderUploadStatus = updateFolderUploadStatus;
 window.refreshVisibleFolderUploadStatus = refreshVisibleFolderUploadStatus;
 
+function initializeSearchUI() {
+  if (searchUIInitialized) {
+    return;
+  }
+
+  if (!fileContentEl) {
+    console.warn('搜索界面初始化失败: 未找到文件内容容器');
+    return;
+  }
+
+  if (!document.getElementById('search-results-styles')) {
+    const style = document.createElement('style');
+    style.id = 'search-results-styles';
+    style.textContent = `
+      #search-results-container {
+        display: none;
+        flex-direction: column;
+        gap: 16px;
+        padding: 20px;
+        height: 100%;
+        overflow-y: auto;
+        background: var(--bg-color);
+        color: var(--text-color);
+      }
+
+      #search-results-container .search-summary {
+        font-size: 13px;
+        color: var(--text-muted);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      #search-results-container .search-summary strong {
+        color: var(--text-color);
+        font-weight: 600;
+      }
+
+      .search-result-status {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 40px 20px;
+        color: var(--text-muted);
+        text-align: center;
+        gap: 12px;
+      }
+
+      .search-result-status .spinner {
+        width: 32px;
+        height: 32px;
+        border: 4px solid rgba(59, 130, 246, 0.15);
+        border-top-color: var(--accent-color);
+        border-radius: 50%;
+        animation: search-spin 0.8s linear infinite;
+      }
+
+      @keyframes search-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .search-result-card {
+        border: 1px solid var(--tree-border, #e1e4e8);
+        border-radius: 10px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.85);
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+        transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .dark-mode .search-result-card {
+        background: rgba(36, 36, 36, 0.9);
+        border-color: rgba(75, 85, 99, 0.5);
+      }
+
+      .search-result-card:hover {
+        transform: translateY(-2px);
+        border-color: var(--accent-color);
+        box-shadow: 0 16px 35px rgba(37, 99, 235, 0.18);
+      }
+
+      .search-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .search-card-title {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text-color);
+      }
+
+      .search-card-path {
+        font-size: 12px;
+        color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .search-card-snippet {
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--text-color);
+        white-space: pre-wrap;
+      }
+
+      .search-card-snippet mark {
+        background: rgba(59, 130, 246, 0.2);
+        color: inherit;
+        padding: 0 2px;
+        border-radius: 4px;
+      }
+
+      .search-card-metrics {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .search-card-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 500;
+        border: 1px solid var(--tree-border, #d1d5db);
+        color: var(--text-color);
+        background: rgba(243, 244, 246, 0.7);
+        letter-spacing: 0.2px;
+      }
+
+      .search-card-chip[data-variant="exact"] {
+        background: rgba(248, 250, 252, 0.85);
+        border-color: rgba(148, 163, 184, 0.7);
+      }
+
+      .search-card-chip[data-variant="semantic"] {
+        background: rgba(191, 219, 254, 0.35);
+        border-color: rgba(59, 130, 246, 0.5);
+      }
+
+      .search-card-chip[data-variant="source"] {
+        background: rgba(99, 102, 241, 0.18);
+        border-color: rgba(99, 102, 241, 0.35);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  searchResultsContainer = document.createElement('div');
+  searchResultsContainer.id = 'search-results-container';
+  searchResultsContainer.style.display = 'none';
+  fileContentEl.appendChild(searchResultsContainer);
+
+  searchUIInitialized = true;
+  renderSearchResults();
+}
+
+function showSearchResultsPane() {
+  if (!searchUIInitialized) {
+    initializeSearchUI();
+  }
+  if (!searchResultsContainer) {
+    return;
+  }
+
+  const viewer = fileContentEl ? fileContentEl.querySelector('.file-viewer') : null;
+  if (viewer) {
+    viewer.dataset.previousDisplay = viewer.style.display;
+    viewer.style.display = 'none';
+  }
+
+  searchResultsContainer.style.display = 'flex';
+}
+
+function hideSearchResultsPane() {
+  if (!searchResultsContainer) {
+    return;
+  }
+
+  const viewer = fileContentEl ? fileContentEl.querySelector('.file-viewer') : null;
+  if (viewer) {
+    viewer.style.display = viewer.dataset.previousDisplay || '';
+  }
+
+  searchResultsContainer.style.display = 'none';
+}
+
+function renderSearchResults() {
+  if (!searchUIInitialized || !searchResultsContainer) {
+    return;
+  }
+
+  searchResultsContainer.innerHTML = '';
+
+  if (!isSearchMode) {
+    searchResultsContainer.style.display = 'none';
+    return;
+  }
+
+  searchResultsContainer.style.display = 'flex';
+
+  if (searchState.loading) {
+    const status = document.createElement('div');
+    status.className = 'search-result-status';
+    const spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    const text = document.createElement('span');
+    text.textContent = `正在搜索 “${searchState.query}”…`;
+    status.appendChild(spinner);
+    status.appendChild(text);
+    searchResultsContainer.appendChild(status);
+    return;
+  }
+
+  if (searchState.error) {
+    const status = document.createElement('div');
+    status.className = 'search-result-status';
+    const title = document.createElement('strong');
+    title.textContent = '搜索失败';
+    const message = document.createElement('span');
+    message.textContent = searchState.error;
+    status.appendChild(title);
+    status.appendChild(message);
+    searchResultsContainer.appendChild(status);
+    return;
+  }
+
+  if (!searchState.query) {
+    const status = document.createElement('div');
+    status.className = 'search-result-status';
+    const title = document.createElement('strong');
+    title.textContent = '智能检索';
+    const message = document.createElement('span');
+    message.textContent = '输入关键词并按 Enter，即可检索文件内容。';
+    status.appendChild(title);
+    status.appendChild(message);
+    searchResultsContainer.appendChild(status);
+    return;
+  }
+
+  const combinedResults = Array.isArray(searchState.combined) && searchState.combined.length
+    ? searchState.combined
+    : [...(searchState.exact || []), ...(searchState.semantic || [])];
+
+  if (!combinedResults.length) {
+    const status = document.createElement('div');
+    status.className = 'search-result-status';
+    const title = document.createElement('strong');
+    title.textContent = `未找到与 “${searchState.query}” 匹配的内容`;
+    const message = document.createElement('span');
+    message.textContent = '尝试调整关键词或缩短查询内容。';
+    status.appendChild(title);
+    status.appendChild(message);
+    searchResultsContainer.appendChild(status);
+    return;
+  }
+
+  const summary = document.createElement('div');
+  summary.className = 'search-summary';
+
+  const queryText = document.createElement('strong');
+  queryText.textContent = `“${searchState.query}”`;
+  summary.appendChild(queryText);
+
+  const totals = document.createElement('span');
+  totals.textContent = `匹配 ${searchState.meta.combinedTotal || combinedResults.length} 条记录`;
+  summary.appendChild(totals);
+
+  const detail = document.createElement('span');
+  detail.textContent = `字符 ${searchState.meta.exactTotal || searchState.exact.length} · 语义 ${searchState.meta.semanticTotal || searchState.semantic.length}`;
+  summary.appendChild(detail);
+
+  if (searchState.meta.bm25sPerformed) {
+    const bm25Chip = document.createElement('span');
+    bm25Chip.className = 'search-card-chip';
+    bm25Chip.dataset.variant = 'semantic';
+    bm25Chip.textContent = 'BM25S 混合检索';
+    summary.appendChild(bm25Chip);
+  }
+
+  if (searchState.meta.rerankPerformed) {
+    const rerankChip = document.createElement('span');
+    rerankChip.className = 'search-card-chip';
+    rerankChip.dataset.variant = 'semantic';
+    rerankChip.textContent = 'Reranker 精排';
+    summary.appendChild(rerankChip);
+  }
+
+  searchResultsContainer.appendChild(summary);
+
+  combinedResults.forEach((result, index) => {
+    const variant = getPrimaryVariant(result);
+    const card = buildSearchCard(result, variant, index);
+    searchResultsContainer.appendChild(card);
+  });
+
+  searchResultsContainer.scrollTop = 0;
+}
+
+async function performSearch(rawQuery) {
+  if (!isSearchMode) {
+    switchToSearchMode();
+  }
+
+  initializeSearchUI();
+  showSearchResultsPane();
+
+  const normalizedQuery = (rawQuery || '').trim();
+  searchState.query = normalizedQuery;
+
+  if (!normalizedQuery) {
+    searchState.loading = false;
+    searchState.error = null;
+    searchState.exact = [];
+    searchState.semantic = [];
+    searchState.combined = [];
+    searchState.meta = {
+      exactTotal: 0,
+      semanticTotal: 0,
+      combinedTotal: 0,
+      bm25sPerformed: false,
+      rerankPerformed: false
+    };
+    renderSearchResults();
+    return;
+  }
+
+  searchState.loading = true;
+  searchState.error = null;
+  renderSearchResults();
+
+  try {
+    const response = await fetch('http://localhost:8000/api/faiss/search', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        query: normalizedQuery,
+        top_k: 10
+      })
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => ({}));
+      const message = errorBody.detail || errorBody.message || `搜索失败 (${response.status})`;
+      throw new Error(message);
+    }
+
+    const data = await response.json();
+
+    const exactResults = Array.isArray(data?.exact_match?.results) ? data.exact_match.results : [];
+    const semanticResults = Array.isArray(data?.semantic_match?.results) ? data.semantic_match.results : [];
+    const combinedResults = Array.isArray(data?.combined?.results) ? data.combined.results : [...exactResults, ...semanticResults];
+
+    searchState.exact = exactResults;
+    searchState.semantic = semanticResults;
+    searchState.combined = combinedResults;
+    searchState.meta = {
+      exactTotal: data?.exact_match?.total ?? exactResults.length,
+      semanticTotal: data?.semantic_match?.total ?? semanticResults.length,
+      combinedTotal: data?.combined?.total ?? combinedResults.length,
+      bm25sPerformed: Boolean(data?.bm25s_performed ?? data?.semantic_match?.bm25s_performed),
+      rerankPerformed: Boolean(data?.rerank_performed ?? data?.semantic_match?.rerank_performed)
+    };
+  } catch (error) {
+    console.error('搜索失败:', error);
+    searchState.error = error.message || '搜索过程中发生错误';
+  } finally {
+    searchState.loading = false;
+    renderSearchResults();
+  }
+}
+
+function getPrimaryVariant(result) {
+  if (!result) {
+    return 'semantic';
+  }
+  if (Array.isArray(result.sources)) {
+    return result.sources.includes('exact') ? 'exact' : 'semantic';
+  }
+  const source = result.source || '';
+  if (source.includes('exact')) {
+    return 'exact';
+  }
+  return 'semantic';
+}
+
+function buildSearchCard(result, variant, index) {
+  const card = document.createElement('div');
+  card.className = 'search-result-card';
+  card.dataset.variant = variant;
+
+  const header = document.createElement('div');
+  header.className = 'search-card-header';
+
+  const title = document.createElement('h4');
+  title.className = 'search-card-title';
+  title.textContent = result.filename || result.file_name || `结果 ${index + 1}`;
+  header.appendChild(title);
+
+  const sourceChip = document.createElement('span');
+  sourceChip.className = 'search-card-chip';
+  sourceChip.dataset.variant = 'source';
+  const sourcesLabel = Array.isArray(result.sources) ? result.sources.join(' + ') : (result.source || variant);
+  sourceChip.textContent = sourcesLabel === 'exact' ? '字符匹配' : sourcesLabel === 'semantic' ? '语义检索' : sourcesLabel.replace('exact', '字符').replace('semantic', '语义');
+  header.appendChild(sourceChip);
+
+  card.appendChild(header);
+
+  const path = document.createElement('div');
+  path.className = 'search-card-path';
+  path.textContent = result.file_path || result.path || '(未知路径)';
+  card.appendChild(path);
+
+  const snippet = document.createElement('div');
+  snippet.className = 'search-card-snippet';
+  snippet.textContent = getResultSnippet(result);
+  card.appendChild(snippet);
+
+  const metrics = buildMetricsChips(result);
+  if (metrics) {
+    card.appendChild(metrics);
+  }
+
+  card.addEventListener('click', () => {
+    openSearchResult(result);
+  });
+
+  return card;
+}
+
+function buildMetricsChips(result) {
+  const metricsContainer = document.createElement('div');
+  metricsContainer.className = 'search-card-metrics';
+
+  const sources = Array.isArray(result.sources) && result.sources.length
+    ? result.sources
+    : [result.source || getPrimaryVariant(result)];
+
+  sources.forEach((sourceKey) => {
+    const metric = getMetricsForSource(result, sourceKey) || {};
+    const parts = [];
+
+    if (metric.rank !== undefined && metric.rank !== null) {
+      parts.push(`Rank ${metric.rank}`);
+    }
+
+    if (sourceKey === 'exact') {
+      if (metric.match_position !== undefined && metric.match_position !== null) {
+        parts.push(`位置 ${metric.match_position}`);
+      }
+    } else {
+      if (metric.mixed_score !== undefined && metric.mixed_score !== null) {
+        const formatted = formatScore(metric.mixed_score);
+        if (formatted !== null) {
+          parts.push(`混合 ${formatted}`);
+        }
+      }
+      if (metric.rerank_score !== undefined && metric.rerank_score !== null) {
+        const formatted = formatScore(metric.rerank_score);
+        if (formatted !== null) {
+          parts.push(`Rerank ${formatted}`);
+        }
+      }
+      if (metric.bm25s_score !== undefined && metric.bm25s_score !== null) {
+        const formatted = formatScore(metric.bm25s_score);
+        if (formatted !== null) {
+          parts.push(`BM25S ${formatted}`);
+        }
+      }
+    }
+
+    if (!parts.length) {
+      return;
+    }
+
+    const chip = document.createElement('span');
+    chip.className = 'search-card-chip';
+    chip.dataset.variant = sourceKey === 'exact' ? 'exact' : 'semantic';
+    chip.textContent = `${sourceKey === 'exact' ? '字符' : '语义'} · ${parts.join(' | ')}`;
+    metricsContainer.appendChild(chip);
+  });
+
+  return metricsContainer.children.length ? metricsContainer : null;
+}
+
+function getMetricsForSource(result, sourceKey) {
+  if (result.metrics && result.metrics[sourceKey]) {
+    return result.metrics[sourceKey];
+  }
+
+  const fallback = {};
+  if (sourceKey === 'exact') {
+    fallback.rank = result.rank;
+    fallback.match_position = result.match_position;
+    fallback.match_score = result.match_score;
+  } else {
+    fallback.rank = result.rank;
+    fallback.mixed_score = result.mixed_score;
+    fallback.rerank_score = result.rerank_score;
+    fallback.bm25s_score = result.bm25s_score;
+  }
+  return fallback;
+}
+
+function getResultSnippet(result) {
+  const raw = result.chunk_text || result.text || '';
+  if (!raw) {
+    return '（暂无内容预览）';
+  }
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  const MAX_LENGTH = 260;
+  if (normalized.length <= MAX_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_LENGTH)}…`;
+}
+
+function formatScore(value, digits = 3) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const numberValue = Number(value);
+  if (Number.isNaN(numberValue)) {
+    return null;
+  }
+  return numberValue.toFixed(digits);
+}
+
+async function openSearchResult(result) {
+  if (!result) {
+    return;
+  }
+
+  let targetPath = result.absolute_path || result.file_path || result.path;
+  if (!targetPath) {
+    showAlert('无法定位检索结果对应的文件', 'error');
+    return;
+  }
+
+  if (!targetPath.startsWith('/')) {
+    const rootPath = window.fileTreeData && window.fileTreeData.path;
+    if (rootPath) {
+      const normalizedRoot = String(rootPath).replace(/\\/g, '/').replace(/\/+$/, '');
+      const normalizedTarget = String(targetPath).replace(/\\/g, '/').replace(/^\/+/, '');
+      targetPath = `${normalizedRoot}/${normalizedTarget}`;
+    }
+  }
+
+  if (!fileViewer && explorerModule && typeof explorerModule.getFileViewer === 'function') {
+    fileViewer = explorerModule.getFileViewer();
+  }
+
+  if (!fileViewer || typeof fileViewer.openFile !== 'function') {
+    showAlert('文件查看器未初始化', 'error');
+    return;
+  }
+
+  try {
+    await fileViewer.openFile(targetPath);
+  } catch (error) {
+    console.error('打开检索结果失败:', error);
+    showAlert(`打开文件失败: ${error.message || error}`, 'error');
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // 初始化启动页面
   splashScreen = new SplashScreen();
@@ -223,6 +825,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 获取ExplorerModule中的fileViewer实例
     fileViewer = explorerModule.getFileViewer();
     console.log('FileViewer初始化状态:', fileViewer ? '成功' : '失败');
+    initializeSearchUI();
     
     // 绑定剩余的事件监听器
     bindEventListeners();
@@ -1750,9 +2353,16 @@ function switchToSearchMode() {
     btn.style.display = 'none';
   });
   
+  initializeSearchUI();
+  showSearchResultsPane();
+  renderSearchResults();
+
   // 聚焦搜索输入框
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
+    if (searchState.query) {
+      searchInput.value = searchState.query;
+    }
     searchInput.focus();
   }
 }
@@ -1792,6 +2402,8 @@ function switchToFileMode() {
   if (searchInput) {
     searchInput.value = '';
   }
+
+  hideSearchResultsPane();
 }
 
 // 绑定剩余事件监听器的函数
@@ -1804,6 +2416,24 @@ function bindEventListeners() {
   if (searchBtn) {
     searchBtn.addEventListener('click', () => {
       switchToSearchMode();
+    });
+  }
+
+  const searchInput = document.getElementById('search-input');
+  if (searchInput) {
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        performSearch(searchInput.value);
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        switchToFileMode();
+      }
+    });
+
+    searchInput.addEventListener('input', (e) => {
+      searchState.query = e.target.value;
     });
   }
   
