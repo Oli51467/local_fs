@@ -162,22 +162,58 @@ def collect_files_in_folder(folder_path: pathlib.Path) -> List[pathlib.Path]:
     return files
 
 
+def normalize_project_relative_path(path_value: str) -> str:
+    """将任意形式的路径转换为项目根目录下的相对路径"""
+    trimmed = (path_value or "").strip()
+    if not trimmed:
+        raise HTTPException(status_code=400, detail="文件路径不能为空")
+
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
+    candidate_path = pathlib.Path(trimmed)
+
+    if candidate_path.is_absolute():
+        resolved = candidate_path.resolve(strict=False)
+    else:
+        resolved = (project_root / candidate_path).resolve(strict=False)
+
+    try:
+        relative_path = resolved.relative_to(project_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="文件必须位于项目根目录内") from exc
+
+    return str(relative_path)
+
+
 async def run_folder_tasks(
     files: List[pathlib.Path],
     operation: Callable[[pathlib.Path], Awaitable[Any]],
     max_concurrency: int = 8
 ) -> List[Dict[str, Any]]:
     semaphore = asyncio.Semaphore(max(1, min(max_concurrency, len(files))))
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
     results: List[Dict[str, Any]] = []
+
+    def to_relative(path: pathlib.Path) -> Optional[str]:
+        try:
+            return str(path.resolve(strict=False).relative_to(project_root))
+        except ValueError:
+            return None
 
     async def worker(path: pathlib.Path) -> Dict[str, Any]:
         async with semaphore:
+            relative_path = to_relative(path)
             try:
                 outcome = await operation(path)
-                status = getattr(outcome, 'status', None)
-                success = status not in {'error', 'failed'}
+                status: Optional[str]
+                success: bool
+                if isinstance(outcome, dict):
+                    status = outcome.get('status')
+                else:
+                    status = getattr(outcome, 'status', None)
+                success = status not in {'error', 'failed'} if status else True
                 return {
                     'path': str(path),
+                    'relative_path': relative_path,
                     'status': status or 'success',
                     'detail': outcome.dict() if hasattr(outcome, 'dict') else outcome,
                     'success': success
@@ -186,6 +222,7 @@ async def run_folder_tasks(
                 logger.error("处理文件失败 (HTTP): %s - %s", path, http_exc.detail)
                 return {
                     'path': str(path),
+                    'relative_path': relative_path,
                     'status': 'error',
                     'detail': http_exc.detail,
                     'success': False
@@ -194,6 +231,7 @@ async def run_folder_tasks(
                 logger.error("处理文件失败: %s - %s", path, exc)
                 return {
                     'path': str(path),
+                    'relative_path': relative_path,
                     'status': 'error',
                     'detail': str(exc),
                     'success': False
@@ -601,15 +639,48 @@ async def remount_folder(request: FolderRemountRequest) -> Dict[str, Any]:
     logger.info("开始批量重新挂载文件夹: %s, 文件数量: %d", folder_path, len(files))
 
     force = request.force_reupload
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
 
     async def remount_file(path: pathlib.Path):
-        reupload_request = ReuploadDocumentRequest(file_path=str(path), force_reupload=force)
-        return await reupload_document(reupload_request)
+        resolved_path = path.resolve()
+        try:
+            relative_path = str(resolved_path.relative_to(project_root))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="文件必须位于项目根目录内") from exc
+
+        if not sqlite_manager:
+            raise HTTPException(status_code=500, detail="数据库管理器未初始化")
+
+        existing_doc = sqlite_manager.get_document_by_path(relative_path)
+
+        if existing_doc:
+            existing_hash = existing_doc.get('file_hash')
+            current_hash = calculate_file_hash(resolved_path)
+
+            if existing_hash == current_hash:
+                logger.debug("文件未变化，跳过重新挂载: %s", relative_path)
+                return {
+                    'status': 'skipped',
+                    'message': '文件内容未改变，跳过重新挂载',
+                    'file_path': relative_path,
+                    'file_hash': current_hash
+                }
+
+            reupload_request = ReuploadDocumentRequest(
+                file_path=str(resolved_path),
+                force_reupload=force
+            )
+            return await reupload_document(reupload_request)
+
+        logger.debug("文件未挂载，执行首次挂载: %s", relative_path)
+        upload_request = FileUploadRequest(file_path=str(resolved_path))
+        return await upload_document(upload_request)
 
     results = await run_folder_tasks(files, remount_file)
 
     success_count = sum(1 for item in results if item['success'])
     failure_count = len(results) - success_count
+    skipped_count = sum(1 for item in results if item.get('status') == 'skipped')
     status = 'success' if failure_count == 0 else ('partial' if success_count > 0 else 'failed')
 
     return {
@@ -618,6 +689,7 @@ async def remount_folder(request: FolderRemountRequest) -> Dict[str, Any]:
         'total_files': len(results),
         'succeeded': success_count,
         'failed': failure_count,
+        'skipped': skipped_count,
         'details': results
     }
 
@@ -760,8 +832,8 @@ async def delete_document(request: DeleteDocumentRequest):
         if not request.file_path:
             raise HTTPException(status_code=400, detail="文件路径不能为空")
         
-        # 标准化路径（移除前导斜杠）
-        file_path = request.file_path.lstrip('/')
+        # 标准化路径为项目内相对路径
+        file_path = normalize_project_relative_path(request.file_path)
         
         deleted_docs = 0
         deleted_vectors = 0
@@ -834,8 +906,8 @@ async def unmount_document(request: UnmountDocumentRequest):
         if not request.file_path:
             raise HTTPException(status_code=400, detail="文件路径不能为空")
         
-        # 标准化路径（移除前导斜杠）
-        file_path = request.file_path.lstrip('/')
+        # 标准化路径为项目内相对路径
+        file_path = normalize_project_relative_path(request.file_path)
         
         unmounted_docs = 0
         unmounted_vectors = 0

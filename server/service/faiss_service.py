@@ -17,6 +17,7 @@ class FaissManager:
         self.metadata_path = DatabaseConfig.VECTOR_METADATA_PATH
         self.index = None
         self.metadata = []
+        self.next_vector_id = 0
         DatabaseConfig.ensure_directories()
         self.init_index()  # 自动初始化索引
     
@@ -33,6 +34,16 @@ class FaissManager:
             self.index = faiss.IndexFlatIP(self.dimension)  # 使用内积相似度
             self.metadata = []
             self.save_index()
+
+        self.next_vector_id = self._compute_next_vector_id()
+
+    def _compute_next_vector_id(self) -> int:
+        if not self.metadata:
+            return 0
+        try:
+            return max(int(entry.get('vector_id', -1)) for entry in self.metadata) + 1
+        except ValueError:
+            return 0
     
     def add_vectors(self, vectors: np.ndarray, metadata_list: List[Dict]) -> List[int]:
         """添加向量到索引"""
@@ -42,8 +53,8 @@ class FaissManager:
         # 标准化向量（用于余弦相似度）
         faiss.normalize_L2(vectors)
         
-        # 获取当前索引大小作为起始ID
-        start_id = self.index.ntotal
+        # 生成唯一的向量ID
+        start_id = self.next_vector_id
         
         # 添加向量
         self.index.add(vectors)
@@ -58,6 +69,9 @@ class FaissManager:
             })
             vector_ids.append(vector_id)
         
+        # 更新下一个可用的向量ID
+        self.next_vector_id = start_id + len(metadata_list)
+
         # 保存索引和元数据
         self.save_index()
         return vector_ids
@@ -159,45 +173,54 @@ class FaissManager:
     def delete_vectors_by_ids(self, vector_ids: List[int]) -> int:
         """根据向量ID列表删除向量（Faiss不支持直接删除，需要重建索引）"""
         try:
-            if not vector_ids:
+            vector_id_set = {int(v) for v in vector_ids if v is not None}
+            if not vector_id_set:
                 return 0
-            
-            # 由于Faiss不支持直接删除向量，我们需要重建索引
-            # 获取当前所有向量
+
             current_count = self.index.ntotal
             if current_count == 0:
                 return 0
-            
-            # 提取所有现有向量
+
             all_vectors = np.zeros((current_count, self.dimension), dtype=np.float32)
             self.index.reconstruct_n(0, current_count, all_vectors)
-            
-            # 创建新的索引和元数据，排除要删除的向量
+
             new_index = faiss.IndexFlatIP(self.dimension)
-            new_metadata = []
+            new_metadata: List[Dict] = []
             deleted_count = 0
-            
+
             for i in range(current_count):
-                if i not in vector_ids:
-                    # 添加不在删除列表中的向量
-                    vector = all_vectors[i:i+1]
-                    if i < len(self.metadata):
-                        new_metadata.append(self.metadata[i])
-                    new_index.add(vector)
-                else:
+                metadata_entry = self.metadata[i] if i < len(self.metadata) else None
+                meta_vector_id = None
+                if metadata_entry is not None:
+                    meta_vector_id = metadata_entry.get('vector_id')
+                    if meta_vector_id is not None:
+                        meta_vector_id = int(meta_vector_id)
+
+                # 允许通过索引删除（兼容早期数据）
+                identifier = meta_vector_id if meta_vector_id is not None else i
+
+                if identifier in vector_id_set:
                     deleted_count += 1
-            
-            # 更新索引和元数据
+                    continue
+
+                vector = all_vectors[i:i + 1]
+                new_index.add(vector)
+                if metadata_entry is not None:
+                    new_metadata.append(metadata_entry)
+
+            # 更新索引、元数据及向量ID游标
             self.index = new_index
             self.metadata = new_metadata
             self.save_index()
-            
-            # 重新加载索引以确保内存中的数据是最新的
             self.init_index()
-            
-            logger.info(f"Faiss向量删除完成: 删除了 {deleted_count} 个向量，剩余 {new_index.ntotal} 个向量")
+
+            logger.info(
+                "Faiss向量删除完成: 删除了 %d 个向量，剩余 %d 个向量",
+                deleted_count,
+                new_index.ntotal
+            )
             return deleted_count
-            
+
         except Exception as e:
             logger.error(f"删除Faiss向量失败: {str(e)}")
             return 0

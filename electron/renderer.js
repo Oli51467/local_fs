@@ -310,6 +310,50 @@ async function refreshVisibleFolderUploadStatus() {
 window.updateFolderUploadStatus = updateFolderUploadStatus;
 window.refreshVisibleFolderUploadStatus = refreshVisibleFolderUploadStatus;
 
+async function refreshFolderUploadIndicators(folderPath) {
+  if (!folderPath) {
+    return;
+  }
+
+  if (typeof expandedFolders === 'undefined') {
+    return;
+  }
+
+  try {
+    const normalizedAbs = folderPath.replace(/\\/g, '/').replace(/\/+$/, '');
+    const targets = new Set();
+
+    const baseRelative = normalizedAbs.startsWith('/')
+      ? computeRelativePathFromAbsolute(normalizedAbs)
+      : normalizeRelativeFolderPath(folderPath);
+
+    if (baseRelative) {
+      targets.add(baseRelative);
+    }
+
+    const prefix = normalizedAbs ? `${normalizedAbs}/` : '';
+
+    expandedFolders.forEach((absPath) => {
+      if (!absPath) {
+        return;
+      }
+      const candidate = absPath.replace(/\\/g, '/').replace(/\/+$/, '');
+      if (candidate === normalizedAbs || (prefix && candidate.startsWith(prefix))) {
+        const relative = computeRelativePathFromAbsolute(candidate);
+        if (relative) {
+          targets.add(relative);
+        }
+      }
+    });
+
+    for (const relative of targets) {
+      await updateFolderUploadStatus(relative);
+    }
+  } catch (error) {
+    console.warn('刷新文件夹上传指示器失败:', error);
+  }
+}
+
 function initializeSearchUI() {
   if (searchUIInitialized) {
     return;
@@ -2022,8 +2066,22 @@ async function unmountFolder(folderPath) {
 function handleFolderOperationResult(title, data) {
   const success = data.succeeded || 0;
   const failed = data.failed || 0;
-  const total = data.total_files || success + failed;
-  const message = [`文件夹: ${data.folder || ''}`, `总文件: ${total}`, `成功: ${success}`, `失败: ${failed}`].join('\n');
+  const statusKey = data.status || (failed > 0 ? 'partial' : 'success');
+
+  if (data.folder) {
+    refreshFolderUploadIndicators(data.folder).catch((error) => {
+      console.warn('批量操作后刷新上传状态失败:', error);
+    });
+  }
+
+  let message;
+  if (statusKey === 'success') {
+    message = '批量操作已完成，全部文件处理成功。';
+  } else if (statusKey === 'failed') {
+    message = '批量操作失败，请稍后重试。';
+  } else {
+    message = '批量操作完成，部分文件处理失败。';
+  }
   showModal({
     type: failed > 0 ? 'warning' : 'success',
     title,
