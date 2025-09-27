@@ -4,6 +4,7 @@ from typing import Optional, List
 import logging
 import hashlib
 import pathlib
+import re
 from datetime import datetime
 from typing import Dict, Any
 from service.embedding_service import get_embedding_service
@@ -78,6 +79,49 @@ router = APIRouter(prefix="/api/document", tags=["document"])
 faiss_manager = None
 sqlite_manager = None
 text_splitter_service = None
+
+
+def read_text_file_with_fallback(file_path: pathlib.Path) -> str:
+    encodings = ['utf-8', 'utf-8-sig', 'gbk']
+    for encoding in encodings:
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                return f.read()
+        except UnicodeDecodeError:
+            continue
+
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        return f.read()
+
+
+def markdown_to_plain_text(markdown_text: str) -> str:
+    text = markdown_text
+    text = re.sub(r'^---[\s\S]*?---\s*', '', text, flags=re.MULTILINE)  # front matter
+    text = re.sub(r'```[\s\S]*?```', '\n', text)
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', r'\1', text)
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'>\s?', '', text)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'__([^_]+)__', r'\1', text)
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    text = re.sub(r'_([^_]+)_', r'\1', text)
+    text = re.sub(r'~~([^~]+)~~', r'\1', text)
+    text = re.sub(r'(?m)^\s*[-*+]\s+', '', text)
+    text = re.sub(r'(?m)^\s*\d+\.\s+', '', text)
+    text = re.sub(r'\s+\n', '\n', text)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+def extract_text_content(file_path: pathlib.Path, file_type: str) -> str:
+    raw_text = read_text_file_with_fallback(file_path)
+    lowered = file_type.lower()
+    if lowered in {'md', 'markdown'}:
+        return markdown_to_plain_text(raw_text)
+    return raw_text
 
 def init_document_api(faiss_mgr: FaissManager, sqlite_mgr: SQLiteManager):
     """初始化文档API"""
@@ -284,20 +328,13 @@ async def upload_document(request: FileUploadRequest):
                             }
                         )
         
-        # 4. 根据文档类型提取文本（目前只支持txt）
-        if file_type != "txt":
+        # 4. 根据文档类型提取文本
+        supported_types = {"txt", "md", "markdown"}
+        if file_type not in supported_types:
             raise HTTPException(status_code=400, detail=f"暂不支持的文件类型: {file_type}")
-        
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                text_content = f.read()
-        except UnicodeDecodeError:
-            try:
-                with open(file_path, 'r', encoding='gbk') as f:
-                    text_content = f.read()
-            except UnicodeDecodeError:
-                raise HTTPException(status_code=400, detail="无法读取文件，编码格式不支持")
-        
+
+        text_content = extract_text_content(file_path, file_type)
+
         if not text_content.strip():
             raise HTTPException(status_code=400, detail="文件内容为空")
         

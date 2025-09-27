@@ -125,12 +125,21 @@
 }
 
 .file-item.selected {
-  background-color: var(--accent-color);
-  color: #ffffff;
+  background-color: rgba(191, 219, 254, 0.5);
+  color: var(--text-color);
 }
 
 .file-item.selected:hover {
-  background-color: var(--accent-hover);
+  background-color: rgba(191, 219, 254, 0.7);
+}
+
+.dark-mode .file-item.selected {
+  background-color: rgba(37, 99, 235, 0.3);
+  color: var(--text-color);
+}
+
+.dark-mode .file-item.selected:hover {
+  background-color: rgba(37, 99, 235, 0.45);
 }
 
 .folder-arrow {

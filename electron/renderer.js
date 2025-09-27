@@ -1,4 +1,5 @@
 const fileTreeEl = document.getElementById('file-tree');
+const fileTreeContainer = document.getElementById('file-tree-container');
 const fileContentEl = document.getElementById('file-content');
 // 设置相关元素已移至设置模块管理
 
@@ -24,6 +25,7 @@ const searchState = {
 
 let searchResultsContainer = null;
 let searchUIInitialized = false;
+let globalLoadingOverlay = null;
 
 // initFileViewer 函数已移至 ExplorerModule
 
@@ -58,6 +60,97 @@ const dragStyles = `
 const styleSheet = document.createElement('style');
 styleSheet.textContent = dragStyles;
 document.head.appendChild(styleSheet);
+
+function ensureLoadingOverlayStyles() {
+  if (document.getElementById('global-loading-overlay-style')) {
+    return;
+  }
+  const style = document.createElement('style');
+  style.id = 'global-loading-overlay-style';
+  style.textContent = `
+    .global-loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(15, 23, 42, 0.35);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2500;
+    }
+    .global-loading-dialog {
+      background: var(--bg-color, #ffffff);
+      color: var(--text-color, #1e293b);
+      padding: 22px 28px;
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      min-width: 240px;
+    }
+    .global-loading-spinner {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      border: 3px solid rgba(37, 99, 235, 0.15);
+      border-top-color: rgba(37, 99, 235, 0.85);
+      animation: global-loading-spin 0.8s linear infinite;
+    }
+    .global-loading-message {
+      font-size: 14px;
+      color: var(--text-muted, rgba(75, 85, 99, 0.85));
+      letter-spacing: 0.01em;
+    }
+    @keyframes global-loading-spin {
+      to { transform: rotate(360deg); }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function showLoadingOverlay(message = '处理中，请稍候…') {
+  ensureLoadingOverlayStyles();
+  if (!globalLoadingOverlay) {
+    const overlay = document.createElement('div');
+    overlay.className = 'global-loading-overlay';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'global-loading-dialog';
+
+    const spinner = document.createElement('div');
+    spinner.className = 'global-loading-spinner';
+
+    const text = document.createElement('div');
+    text.className = 'global-loading-message';
+    text.textContent = message;
+
+    dialog.appendChild(spinner);
+    dialog.appendChild(text);
+    overlay.appendChild(dialog);
+    globalLoadingOverlay = overlay;
+  } else {
+    const text = globalLoadingOverlay.querySelector('.global-loading-message');
+    if (text) {
+      text.textContent = message;
+    }
+  }
+
+  if (!document.body.contains(globalLoadingOverlay)) {
+    document.body.appendChild(globalLoadingOverlay);
+  }
+}
+
+function hideLoadingOverlay() {
+  if (globalLoadingOverlay && globalLoadingOverlay.parentNode) {
+    globalLoadingOverlay.parentNode.removeChild(globalLoadingOverlay);
+  }
+}
 
 // 初始化设置模块、资源管理器模块、测试模块、数据库模块和事件绑定
 let settingsModule;
@@ -236,10 +329,10 @@ function initializeSearchUI() {
         flex-direction: column;
         gap: 16px;
         padding: 20px;
-        height: 100%;
-        overflow-y: auto;
+        width: 100%;
         background: var(--bg-color);
         color: var(--text-color);
+        box-sizing: border-box;
       }
 
       #search-results-container .search-summary {
@@ -399,7 +492,9 @@ function showSearchResultsPane() {
 
   const viewer = fileContentEl ? fileContentEl.querySelector('.file-viewer') : null;
   if (viewer) {
-    viewer.dataset.previousDisplay = viewer.style.display;
+    if (viewer.dataset.previousDisplay === undefined) {
+      viewer.dataset.previousDisplay = viewer.style.display || '';
+    }
     viewer.style.display = 'none';
   }
 
@@ -413,7 +508,9 @@ function hideSearchResultsPane() {
 
   const viewer = fileContentEl ? fileContentEl.querySelector('.file-viewer') : null;
   if (viewer) {
-    viewer.style.display = viewer.dataset.previousDisplay || '';
+    const previous = viewer.dataset.previousDisplay;
+    viewer.style.display = previous !== undefined ? previous : '';
+    delete viewer.dataset.previousDisplay;
   }
 
   searchResultsContainer.style.display = 'none';
@@ -649,7 +746,12 @@ function buildSearchCard(result, variant, index) {
 
   const snippet = document.createElement('div');
   snippet.className = 'search-card-snippet';
-  snippet.textContent = getResultSnippet(result);
+  const snippetContent = getResultSnippet(result);
+  if (snippetContent && snippetContent.html) {
+    snippet.innerHTML = snippetContent.html;
+  } else {
+    snippet.textContent = (snippetContent && snippetContent.text) || '（暂无内容预览）';
+  }
   card.appendChild(snippet);
 
   const metrics = buildMetricsChips(result);
@@ -738,17 +840,66 @@ function getMetricsForSource(result, sourceKey) {
   return fallback;
 }
 
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function getResultSnippet(result) {
   const raw = result.chunk_text || result.text || '';
   if (!raw) {
-    return '（暂无内容预览）';
+    return { text: '（暂无内容预览）' };
   }
-  const normalized = raw.replace(/\s+/g, ' ').trim();
+
+  const isExact = (Array.isArray(result.sources) && result.sources.includes('exact'))
+    || (typeof result.source === 'string' && result.source.includes('exact'));
+
+  const singleLine = raw.replace(/\s+/g, ' ').trim();
   const MAX_LENGTH = 260;
-  if (normalized.length <= MAX_LENGTH) {
-    return normalized;
+
+  if (!isExact) {
+    const truncated = singleLine.length <= MAX_LENGTH ? singleLine : `${singleLine.slice(0, MAX_LENGTH)}…`;
+    return { text: truncated };
   }
-  return `${normalized.slice(0, MAX_LENGTH)}…`;
+
+  const query = (searchState.query || '').trim();
+  if (!query) {
+    const truncated = singleLine.length <= MAX_LENGTH ? singleLine : `${singleLine.slice(0, MAX_LENGTH)}…`;
+    return { text: truncated };
+  }
+
+  const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lower = normalized.toLowerCase();
+  const qLower = query.toLowerCase();
+
+  let index = lower.indexOf(qLower);
+  if (index === -1) {
+    const truncated = singleLine.length <= MAX_LENGTH ? singleLine : `${singleLine.slice(0, MAX_LENGTH)}…`;
+    return { text: truncated };
+  }
+
+  const CONTEXT = 80;
+  let start = Math.max(0, index - CONTEXT);
+  let end = Math.min(normalized.length, index + query.length + CONTEXT);
+  let snippetSection = normalized.slice(start, end);
+
+  const regex = new RegExp(escapeRegExp(query), 'gi');
+  const highlighted = escapeHtml(snippetSection).replace(regex, (match) => `<mark>${match}</mark>`);
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < normalized.length ? '…' : '';
+
+  return {
+    html: `${prefix}${highlighted}${suffix}`
+  };
 }
 
 function formatScore(value, digits = 3) {
@@ -762,9 +913,351 @@ function formatScore(value, digits = 3) {
   return numberValue.toFixed(digits);
 }
 
+async function highlightSearchMatch(filePath, result) {
+  const tabSelector = `[data-tab-id="${cssEscape(filePath)}"]`;
+  const container = await waitForElement(tabSelector, 5000);
+  if (!container) {
+    console.warn('未能获取文件内容容器，无法高亮', filePath);
+    return false;
+  }
+
+  const snippet = (result?.chunk_text || result?.text || '').trim();
+  const query = (searchState.query || '').trim();
+  if (!snippet && !query) {
+    return false;
+  }
+
+  const displayMode = (container.dataset.displayMode || '').toLowerCase();
+
+  if (container.classList.contains('txt-content') || displayMode === 'text') {
+    const textarea = await waitForElement(`${tabSelector} .txt-editor`, 4000);
+    if (!textarea) {
+      return false;
+    }
+    return highlightTextareaMatch(textarea, snippet, query);
+  }
+
+  if (container.classList.contains('markdown-content') || displayMode === 'markdown') {
+    const textarea = await waitForElement(`${tabSelector} .markdown-editor-textarea`, 4000);
+    if (!textarea) {
+      return false;
+    }
+    return highlightTextareaMatch(textarea, snippet, query);
+  }
+
+  // 其他文件类型暂不支持自动定位
+  return false;
+}
+
+function highlightTextareaMatch(textarea, snippet, query) {
+  if (!textarea) {
+    return false;
+  }
+
+  const value = textarea.value || '';
+  const match = findMatchPositionInText(value, snippet, query);
+  if (!match) {
+    return false;
+  }
+
+  const overlay = ensureTextareaHighlightOverlay(textarea);
+  clearTextareaHighlight(textarea);
+
+  try {
+    textarea.focus({ preventScroll: true });
+  } catch (err) {
+    try {
+      textarea.focus();
+    } catch (focusError) {
+      console.warn('聚焦文本编辑器失败', focusError);
+    }
+  }
+
+  const { start, end, matchedText } = match;
+  try {
+    textarea.setSelectionRange(start, end);
+  } catch (error) {
+    console.warn('设置文本选区失败', error);
+  }
+
+  scrollTextareaToLine(textarea, start);
+  applyTextareaHighlight(textarea, overlay, start, end);
+  flashTextareaForSearch(textarea);
+
+  if (matchedText && matchedText.length > 0) {
+    textarea.dataset.searchHighlightText = matchedText;
+  }
+
+  return true;
+}
+
+function findMatchPositionInText(text, snippet, query) {
+  if (!text) {
+    return null;
+  }
+
+  const candidates = collectSearchCandidates(snippet, query);
+  if (!candidates.length) {
+    return null;
+  }
+
+  const lowerText = text.toLowerCase();
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    // 尝试原始匹配
+    let index = text.indexOf(candidate);
+    if (index !== -1) {
+      return { start: index, end: index + candidate.length, matchedText: candidate };
+    }
+
+    // 尝试去除首尾空白
+    const trimmed = candidate.trim();
+    if (trimmed && trimmed !== candidate) {
+      index = text.indexOf(trimmed);
+      if (index !== -1) {
+        return { start: index, end: index + trimmed.length, matchedText: trimmed };
+      }
+    }
+
+    // 忽略大小写匹配
+    const lowerCandidate = candidate.toLowerCase();
+    index = lowerText.indexOf(lowerCandidate);
+    if (index !== -1) {
+      return {
+        start: index,
+        end: index + candidate.length,
+        matchedText: text.slice(index, index + candidate.length)
+      };
+    }
+
+    if (trimmed && trimmed !== candidate) {
+      index = lowerText.indexOf(trimmed.toLowerCase());
+      if (index !== -1) {
+        return {
+          start: index,
+          end: index + trimmed.length,
+          matchedText: text.slice(index, index + trimmed.length)
+        };
+      }
+    }
+
+    // 正则匹配：忽略多余空白并支持大小写
+    try {
+      const escaped = candidate.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const whitespaceRelaxed = escaped.replace(/\s+/g, '\\s+');
+      const regex = new RegExp(whitespaceRelaxed, 'i');
+      const match = regex.exec(text);
+      if (match) {
+        return {
+          start: match.index,
+          end: match.index + match[0].length,
+          matchedText: match[0]
+        };
+      }
+    } catch (regexError) {
+      console.warn('正则匹配搜索片段失败', regexError);
+    }
+  }
+
+  return null;
+}
+
+function collectSearchCandidates(snippet, query) {
+  const candidates = [];
+  const seen = new Set();
+
+  const pushCandidate = (value) => {
+    if (!value) {
+      return;
+    }
+    const raw = String(value);
+    const key = raw.trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    candidates.push(raw);
+  };
+
+  if (snippet) {
+    pushCandidate(snippet);
+    const normalizedNewlines = snippet.replace(/\r\n/g, '\n');
+    if (normalizedNewlines !== snippet) {
+      pushCandidate(normalizedNewlines);
+    }
+    const trimmed = snippet.trim();
+    if (trimmed !== snippet) {
+      pushCandidate(trimmed);
+    }
+    const collapsed = snippet.replace(/[\t\f\v]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (collapsed && collapsed !== trimmed) {
+      pushCandidate(collapsed);
+    }
+    snippet
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length >= 3)
+      .sort((a, b) => b.length - a.length)
+      .forEach(pushCandidate);
+  }
+
+  if (query) {
+    pushCandidate(query);
+    const trimmedQuery = query.trim();
+    if (trimmedQuery !== query) {
+      pushCandidate(trimmedQuery);
+    }
+    trimmedQuery
+      .split(/\s+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 2)
+      .sort((a, b) => b.length - a.length)
+      .forEach(pushCandidate);
+  }
+
+  return candidates;
+}
+
+function ensureTextareaHighlightOverlay(textarea) {
+  const wrapper = textarea.parentElement;
+  if (!wrapper) {
+    return null;
+  }
+
+  const computed = window.getComputedStyle(wrapper);
+  if (computed.position === 'static') {
+    wrapper.style.position = 'relative';
+  }
+
+  let overlay = wrapper.querySelector('.txt-highlight-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'txt-highlight-overlay';
+    wrapper.insertBefore(overlay, textarea);
+  }
+  return overlay;
+}
+
+function applyTextareaHighlight(textarea, overlay, startIndex, endIndex) {
+  if (!textarea || !overlay) {
+    return;
+  }
+
+  textarea.dataset.searchHighlight = JSON.stringify({ startIndex, endIndex });
+  positionTextareaHighlightOverlay(textarea, overlay);
+  overlay.style.opacity = '1';
+
+  if (!textarea.dataset.searchHighlightScrollHandlerAttached) {
+    const handler = () => positionTextareaHighlightOverlay(textarea, overlay);
+    textarea.dataset.searchHighlightScrollHandlerAttached = 'true';
+    textarea._searchHighlightScrollHandler = handler;
+    textarea.addEventListener('scroll', handler);
+  }
+}
+
+function clearTextareaHighlight(textarea) {
+  if (!textarea) {
+    return;
+  }
+
+  if (textarea.dataset.searchHighlight) {
+    delete textarea.dataset.searchHighlight;
+    const overlay = ensureTextareaHighlightOverlay(textarea);
+    if (overlay) {
+      overlay.style.opacity = '0';
+      overlay.style.top = '0';
+      overlay.style.height = '0';
+    }
+  }
+
+  if (textarea.dataset.searchHighlightText) {
+    delete textarea.dataset.searchHighlightText;
+  }
+
+  if (textarea._searchHighlightScrollHandler) {
+    textarea.removeEventListener('scroll', textarea._searchHighlightScrollHandler);
+    delete textarea._searchHighlightScrollHandler;
+    delete textarea.dataset.searchHighlightScrollHandlerAttached;
+  }
+}
+
+function positionTextareaHighlightOverlay(textarea, overlay) {
+  if (!overlay || !textarea.dataset.searchHighlight) {
+    return;
+  }
+
+  let info;
+  try {
+    info = JSON.parse(textarea.dataset.searchHighlight);
+  } catch (error) {
+    return;
+  }
+  if (!info) {
+    return;
+  }
+
+  const { startIndex, endIndex } = info;
+  const lineHeight = textareaLineHeight(textarea);
+  const paddingTop = parseFloat(window.getComputedStyle(textarea).paddingTop) || 0;
+
+  const textBefore = textarea.value.slice(0, startIndex);
+  const startLine = textBefore ? textBefore.split(/\r\n|\r|\n/).length - 1 : 0;
+  const selectionText = textarea.value.slice(startIndex, endIndex);
+  const selectionLines = selectionText ? selectionText.split(/\r\n|\r|\n/).length - 1 : 0;
+
+  const top = paddingTop + startLine * lineHeight - textarea.scrollTop;
+  const height = Math.max(lineHeight * (selectionLines + 1), lineHeight);
+
+  overlay.style.top = `${top}px`;
+  overlay.style.height = `${height}px`;
+}
+
+function textareaLineHeight(textarea) {
+  const computed = window.getComputedStyle(textarea);
+  let lineHeight = parseFloat(computed.lineHeight);
+  if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+    const fontSize = parseFloat(computed.fontSize);
+    lineHeight = Number.isFinite(fontSize) && fontSize > 0 ? fontSize * 1.5 : 20;
+  }
+  return lineHeight;
+}
+
+function scrollTextareaToLine(textarea, index) {
+  const lineHeight = textareaLineHeight(textarea);
+  const beforeText = textarea.value.slice(0, index);
+  const lineCount = beforeText ? beforeText.split(/\r\n|\r|\n/).length - 1 : 0;
+  const targetTop = Math.max(0, lineCount * lineHeight - textarea.clientHeight / 2);
+  textarea.scrollTop = targetTop;
+}
+
+function flashTextareaForSearch(textarea) {
+  textarea.classList.remove('search-highlight-flash');
+  void textarea.offsetWidth;
+  textarea.classList.add('search-highlight-flash');
+  setTimeout(() => {
+    textarea.classList.remove('search-highlight-flash');
+  }, 900);
+}
+
+function cssEscape(value) {
+  if (window.CSS && CSS.escape) {
+    return CSS.escape(value);
+  }
+  return value.replace(/['"\\]/g, '\\$&');
+}
+
 async function openSearchResult(result) {
   if (!result) {
     return;
+  }
+
+  const wasSearchMode = isSearchMode;
+  if (wasSearchMode) {
+    switchToFileMode();
   }
 
   let targetPath = result.absolute_path || result.file_path || result.path;
@@ -791,12 +1284,70 @@ async function openSearchResult(result) {
     return;
   }
 
+  selectedItemPath = targetPath;
+  if (explorerModule && typeof explorerModule.setSelectedItemPath === 'function') {
+    explorerModule.setSelectedItemPath(targetPath);
+  }
+
   try {
     await fileViewer.openFile(targetPath);
+    await waitForElement(`[data-tab-id="${cssEscape(targetPath)}"]`, 5000);
+    const highlighted = await highlightSearchMatchWithRetry(targetPath, result);
+    if (!highlighted) {
+      console.warn('未能在文件中定位到检索文本', result);
+    }
+
+    const treeSelector = `[data-path="${cssEscape(targetPath)}"]`;
+    const treeElement = document.querySelector(treeSelector);
+    if (treeElement) {
+      document.querySelectorAll('.file-item.selected').forEach((el) => el.classList.remove('selected'));
+      treeElement.classList.add('selected');
+      treeElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
   } catch (error) {
     console.error('打开检索结果失败:', error);
     showAlert(`打开文件失败: ${error.message || error}`, 'error');
   }
+}
+
+function waitForElement(selector, timeout = 3000) {
+  const start = performance.now();
+  return new Promise((resolve) => {
+    function check() {
+      const element = document.querySelector(selector);
+      if (element) {
+        resolve(element);
+        return;
+      }
+      if (performance.now() - start >= timeout) {
+        resolve(null);
+        return;
+      }
+      requestAnimationFrame(check);
+    }
+    check();
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function highlightSearchMatchWithRetry(filePath, result, attempt = 0) {
+  const MAX_ATTEMPTS = 6;
+  const DELAY_STEP = 180;
+
+  const success = await highlightSearchMatch(filePath, result);
+  if (success) {
+    return true;
+  }
+
+  if (attempt >= MAX_ATTEMPTS - 1) {
+    return false;
+  }
+
+  await delay(DELAY_STEP * (attempt + 1));
+  return highlightSearchMatchWithRetry(filePath, result, attempt + 1);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1025,9 +1576,25 @@ function addDragAndDropSupport(element, node, isFolder) {
 }
 
 // 获取文件图标
+
+function getFolderSvg() {
+  const fillColor = 'rgba(37, 99, 235, 0.2)';
+  const strokeColor = 'rgba(37, 99, 235, 0.7)';
+  const topFill = 'rgba(37, 99, 235, 0.3)';
+  return `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M3 7.25C3 6.00736 4.00736 5 5.25 5H9.17774C9.44351 5 9.69843 5.10536 9.89175 5.29289L11.3583 6.70711C11.5516 6.89464 11.8065 7 12.0723 7H18.75C19.9926 7 21 8.00736 21 9.25V16.75C21 17.9926 19.9926 19 18.75 19H5.25C4.00736 19 3 17.9926 3 16.75V7.25Z" fill="${fillColor}" stroke="${strokeColor}" stroke-width="1" />
+      <path d="M3 7.25C3 6.00736 4.00736 5 5.25 5H9.17774C9.44351 5 9.69843 5.10536 9.89175 5.29289L11.3583 6.70711C11.5516 6.89464 11.8065 7 12.0723 7H18.75C19.9926 7 21 8.00736 21 9.25" fill="${topFill}" />
+    </svg>
+  `;
+}
+
 function getFileIcon(fileName, isFolder = false, isExpanded = false) {
   if (isFolder) {
-    return isExpanded ? window.icons.folderOpen : window.icons.folder;
+    if (isExpanded) {
+      return getOpenFolderIcon();
+    }
+    return window.icons && window.icons.folder ? window.icons.folder : getFolderSvg();
   }
   
   // 根据文件扩展名返回对应的图标
@@ -1056,6 +1623,16 @@ function getFileIcon(fileName, isFolder = false, isExpanded = false) {
       // 其他文件类型使用默认文件图标
       return window.icons.file;
   }
+}
+
+function getOpenFolderIcon() {
+  if (window.icons && typeof window.icons.folder === 'string') {
+    const svg = window.icons.folder
+      .replace(/fill="[^"]*"/gi, 'fill="rgba(37, 99, 235, 0.18)"')
+      .replace(/stroke="[^"]*"/gi, 'stroke="rgba(37, 99, 235, 0.65)"');
+    return svg;
+  }
+  return getFolderSvg();
 }
 
 // 创建右键菜单
@@ -1093,33 +1670,29 @@ function createContextMenu(x, y, itemPath, isFolder) {
     }
   });
 
-  // 分隔线
-  const separator = document.createElement('div');
-  separator.className = 'context-menu-separator';
-
-  // 上传菜单项（仅对文件显示）
-  const uploadItem = document.createElement('div');
-  uploadItem.className = 'context-menu-item';
-  uploadItem.innerHTML = `<span class="context-menu-icon">${window.icons.import}</span>上传`;
+  // 挂载菜单项（仅对文件显示）
+  const mountItem = document.createElement('div');
+  mountItem.className = 'context-menu-item';
+  mountItem.innerHTML = `<span class="context-menu-icon">${window.icons.import}</span>挂载`;
   
   if (isFolder) {
-    uploadItem.classList.add('disabled');
+    mountItem.classList.add('disabled');
   } else {
-    uploadItem.addEventListener('click', () => {
+    mountItem.addEventListener('click', () => {
       hideContextMenu();
       uploadFile(itemPath);
     });
   }
 
-  // 重新上传菜单项（仅对文件显示）
-  const reuploadItem = document.createElement('div');
-  reuploadItem.className = 'context-menu-item';
-  reuploadItem.innerHTML = `<span class="context-menu-icon">${window.icons.import}</span>重新上传`;
+  // 重新挂载菜单项（仅对文件显示）
+  const remountItem = document.createElement('div');
+  remountItem.className = 'context-menu-item';
+  remountItem.innerHTML = `<span class="context-menu-icon">${window.icons.import}</span>重新挂载`;
   
   if (isFolder) {
-    reuploadItem.classList.add('disabled');
+    remountItem.classList.add('disabled');
   } else {
-    reuploadItem.addEventListener('click', () => {
+    remountItem.addEventListener('click', () => {
       hideContextMenu();
       reuploadFile(itemPath);
     });
@@ -1136,10 +1709,9 @@ function createContextMenu(x, y, itemPath, isFolder) {
   
   menu.appendChild(renameItem);
   menu.appendChild(deleteItem);
+  menu.appendChild(mountItem);
+  menu.appendChild(remountItem);
   menu.appendChild(unmountItem);
-  menu.appendChild(separator);
-  menu.appendChild(uploadItem);
-  menu.appendChild(reuploadItem);
   
   document.body.appendChild(menu);
   
@@ -1151,6 +1723,7 @@ function createContextMenu(x, y, itemPath, isFolder) {
 
 // 取消挂载文档函数
 async function unmountDocument(filePath, isFolder) {
+  showLoadingOverlay(isFolder ? '正在取消挂载文件夹…' : '正在取消挂载…');
   try {
     console.log('取消挂载文档路径:', filePath);
     
@@ -1263,6 +1836,7 @@ async function unmountDocument(filePath, isFolder) {
       onConfirm: null
     });
   } finally {
+    hideLoadingOverlay();
     // 移除取消挂载状态
     const fileItem = document.querySelector(`[data-path="${filePath}"]`);
     if (fileItem) {
@@ -1284,6 +1858,7 @@ function hideContextMenu() {
 
 // 取消挂载文档函数
 async function unmountDocument(filePath) {
+  showLoadingOverlay('正在取消挂载…');
   try {
     // 关闭所有现有提示框，避免重复
     closeAllModals();
@@ -1371,11 +1946,14 @@ async function unmountDocument(filePath) {
     }
   } catch (error) {
     showAlert(`取消挂载时发生错误: ${error.message}`, 'error');
+  } finally {
+    hideLoadingOverlay();
   }
 }
 
 // 上传文件函数
 async function uploadFile(filePath) {
+  showLoadingOverlay('正在挂载…');
   try {
     // 确保使用完整路径，因为后端需要验证文件存在
     let uploadPath = filePath;
@@ -1450,6 +2028,7 @@ async function uploadFile(filePath) {
     const errorMessage = error.message || '上传请求失败，请检查后端服务';
     showAlert(`上传失败: ${errorMessage}`, 'error');
   } finally {
+    hideLoadingOverlay();
     // 移除上传状态
     const fileItem = document.querySelector(`[data-path="${filePath}"]`);
     if (fileItem) {
@@ -1709,6 +2288,7 @@ function addUploadIndicator(filePath) {
 
 // 重新上传文件函数
 async function reuploadFile(filePath) {
+  showLoadingOverlay('正在重新挂载…');
   try {
     // 关闭所有现有提示框，避免重复
     closeAllModals();
@@ -1785,6 +2365,7 @@ async function reuploadFile(filePath) {
     const errorMessage = error.message || '重新上传请求失败，请检查后端服务';
     showAlert(`重新上传失败: ${errorMessage}`, 'error');
   } finally {
+    hideLoadingOverlay();
     // 移除重新上传状态
     const fileItem = document.querySelector(`[data-path="${filePath}"]`);
     if (fileItem) {
@@ -2294,7 +2875,7 @@ async function loadFileTree() {
 // 连接Python后端API
 async function testPythonBackend() {
   try {
-    const response = await fetch('http://127.0.0.1:8000/health');
+    const response = await fetch('http://127.0.0.1:8000/api/health/ready');
     const data = await response.json();
     console.log('Python后端健康检查:', data);
     return data;
@@ -2355,7 +2936,6 @@ function switchToSearchMode() {
   
   initializeSearchUI();
   showSearchResultsPane();
-  renderSearchResults();
 
   // 聚焦搜索输入框
   const searchInput = document.getElementById('search-input');
@@ -2365,6 +2945,8 @@ function switchToSearchMode() {
     }
     searchInput.focus();
   }
+
+  renderSearchResults();
 }
 
 // 切换到文件模式
@@ -2404,6 +2986,7 @@ function switchToFileMode() {
   }
 
   hideSearchResultsPane();
+  renderSearchResults();
 }
 
 // 绑定剩余事件监听器的函数
@@ -2459,20 +3042,21 @@ function bindEventListeners() {
   }
   
   // 添加文件树容器点击事件，实现点击空白处取消选中
-  if (fileTreeEl) {
-    fileTreeEl.addEventListener('click', (e) => {
-      // 如果点击的是文件树容器本身（空白处），而不是文件项
-      if (e.target === fileTreeEl) {
-        // 清除所有选中状态
-        document.querySelectorAll('.file-item.selected').forEach(el => el.classList.remove('selected'));
-        selectedItemPath = null;
-        // 同步到ExplorerModule
-        if (explorerModule) {
-          explorerModule.setSelectedItemPath(null);
-        }
-      }
-    });
+function clearFileTreeSelection() {
+  document.querySelectorAll('.file-item.selected').forEach((el) => el.classList.remove('selected'));
+  selectedItemPath = null;
+  if (explorerModule) {
+    explorerModule.setSelectedItemPath(null);
   }
+}
+
+if (fileTreeContainer) {
+  fileTreeContainer.addEventListener('click', (e) => {
+    if (!e.target.closest('.file-item')) {
+      clearFileTreeSelection();
+    }
+  });
+}
   
   // 添加文件树容器根目录拖拽支持
   if (fileTreeEl) {

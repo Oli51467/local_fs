@@ -20,6 +20,13 @@ class TextViewer {
         display: flex;
         flex-direction: column;
       }
+
+      .txt-editor-wrapper {
+        position: relative;
+        height: 100%;
+        width: 100%;
+        display: flex;
+      }
       
       .txt-editor {
         width: 100%;
@@ -37,6 +44,8 @@ class TextViewer {
         white-space: pre-wrap;
         word-wrap: break-word;
         overflow-y: auto;
+        background-color: var(--bg-color);
+        color: var(--text-color);
       }
       
       .txt-editor:focus {
@@ -65,6 +74,35 @@ class TextViewer {
       
       .txt-editor::-webkit-scrollbar-thumb:hover {
         background: var(--accent-color, #007acc);
+      }
+
+      .txt-editor.search-highlight-flash {
+        animation: txt-highlight-pulse 0.8s ease;
+      }
+
+      @keyframes txt-highlight-pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35);
+          background-color: rgba(191, 219, 254, 0.35);
+        }
+        100% {
+          box-shadow: none;
+          background-color: inherit;
+        }
+      }
+
+      .txt-highlight-overlay {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        height: 0;
+        pointer-events: none;
+        border-left: 3px solid rgba(37, 99, 235, 0.85);
+        background: rgba(37, 99, 235, 0.24);
+        opacity: 0;
+        transition: opacity 0.2s ease, top 0.1s ease;
+        z-index: 5;
       }
     `;
     document.head.appendChild(style);
@@ -111,7 +149,15 @@ class TextViewer {
       this.markTabAsDirty(tabId);
     });
 
-    contentElement.appendChild(textarea);
+    const wrapper = document.createElement('div');
+    wrapper.className = 'txt-editor-wrapper';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'txt-highlight-overlay';
+
+    wrapper.appendChild(overlay);
+    wrapper.appendChild(textarea);
+    contentElement.appendChild(wrapper);
   }
 
   // 标记标签页为已修改

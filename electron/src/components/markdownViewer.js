@@ -49,6 +49,12 @@ class MarkdownViewer {
         overflow: hidden;
       }
       
+      .markdown-textarea-wrapper {
+        position: relative;
+        flex: 1;
+        display: flex;
+      }
+      
       .markdown-preview-pane {
         flex: 1;
         height: 100%;
@@ -83,6 +89,7 @@ class MarkdownViewer {
         line-height: 1.5;
         tab-size: 2;
         overflow-y: auto;
+        z-index: 1;
       }
       
       .markdown-preview {
@@ -536,7 +543,10 @@ class MarkdownViewer {
     contentElement.innerHTML = `
       <div class="markdown-editor-container" id="container-${tabId}">
         <div class="markdown-editor-pane" id="editor-pane-${tabId}">
-          <textarea class="markdown-editor-textarea" id="editor-${tabId}" spellcheck="false" wrap="soft" autocomplete="off">${content}</textarea>
+          <div class="markdown-textarea-wrapper">
+            <div class="txt-highlight-overlay"></div>
+            <textarea class="markdown-editor-textarea" id="editor-${tabId}" spellcheck="false" wrap="soft" autocomplete="off">${content}</textarea>
+          </div>
         </div>
         <div class="resize-handle" id="resize-handle-${tabId}"></div>
         <div class="markdown-preview-pane" id="preview-pane-${tabId}">

@@ -416,7 +416,15 @@ class ExplorerModule {
         rootContainer.dataset.parentRelative = 'data';
       }
       if (window.updateFolderUploadStatus) {
-        await window.updateFolderUploadStatus('data');
+        try {
+          if (typeof window.refreshVisibleFolderUploadStatus === 'function') {
+            await window.refreshVisibleFolderUploadStatus();
+          } else {
+            await window.updateFolderUploadStatus('data');
+          }
+        } catch (statusError) {
+          console.warn('刷新上传状态失败:', statusError);
+        }
       }
     } catch (error) {
       console.error('加载文件树失败:', error);
