@@ -145,6 +145,19 @@ class SQLiteManager:
                 }
             return None
 
+    def get_documents_by_paths(self, file_paths: List[str]) -> List[str]:
+        """批量根据文件路径获取已存在的文档路径"""
+        if not file_paths:
+            return []
+
+        placeholders = ",".join(["?"] * len(file_paths))
+        query = f"SELECT file_path FROM documents WHERE file_path IN ({placeholders})"
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, file_paths)
+            return [row[0] for row in cursor.fetchall()]
+
     def get_document_by_path_and_hash(self, file_path: str, file_hash: str) -> Optional[Dict]:
         """根据文件路径和哈希值获取文档（用于精确匹配）"""
         with sqlite3.connect(self.db_path) as conn:

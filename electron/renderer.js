@@ -46,6 +46,157 @@ let testModule;
 let databaseModule;
 let splashScreen;
 
+const UPLOAD_STATUS_ENDPOINT = 'http://localhost:8000/api/document/upload-status';
+
+function normalizeRelativeFolderPath(relativePath) {
+  if (!relativePath) {
+    return 'data';
+  }
+  let cleaned = String(relativePath).trim().replace(/\\/g, '/');
+  if (!cleaned || cleaned === '.' || cleaned === './') {
+    return 'data';
+  }
+  cleaned = cleaned.replace(/^\.+\//, '');
+  cleaned = cleaned.replace(/^\/+/, '');
+  if (!cleaned.startsWith('data')) {
+    cleaned = `data/${cleaned}`;
+  }
+  cleaned = cleaned.replace(/\/+$/, '');
+  return cleaned || 'data';
+}
+
+function formatFolderPathForApi(relativePath) {
+  const normalized = normalizeRelativeFolderPath(relativePath);
+  return `/${normalized}/`;
+}
+
+function computeRelativePathFromAbsolute(absolutePath) {
+  if (!absolutePath) {
+    return 'data';
+  }
+  const normalizedAbs = absolutePath.replace(/\\/g, '/');
+  const rootPath = window.fileTreeData && window.fileTreeData.path
+    ? window.fileTreeData.path.replace(/\\/g, '/').replace(/\/+$/, '')
+    : null;
+  if (rootPath && normalizedAbs.startsWith(rootPath)) {
+    const remainder = normalizedAbs.slice(rootPath.length).replace(/^\/+/, '');
+    return remainder ? `data/${remainder}` : 'data';
+  }
+  const markerIndex = normalizedAbs.indexOf('/data/');
+  if (markerIndex !== -1) {
+    return normalizedAbs.slice(markerIndex + 1).replace(/\/+$/, '');
+  }
+  if (normalizedAbs.endsWith('/data')) {
+    return 'data';
+  }
+  return 'data';
+}
+
+function resolveNodeRelativePath(node) {
+  if (!node) {
+    return 'data';
+  }
+  if (node.relativePath) {
+    return normalizeRelativeFolderPath(node.relativePath);
+  }
+  return normalizeRelativeFolderPath(computeRelativePathFromAbsolute(node.path));
+}
+
+function getFolderContainerByRelativePath(relativeFolderPath) {
+  const normalized = normalizeRelativeFolderPath(relativeFolderPath);
+  if (!normalized || normalized === 'data') {
+    return fileTreeEl;
+  }
+  return document.querySelector(`div[data-parent-relative="${normalized}"]`);
+}
+
+function ensureUploadIndicatorElement(fileElement) {
+  let indicator = fileElement.querySelector('.upload-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.className = 'upload-indicator';
+    indicator.title = '已上传';
+    const contentDiv = fileElement.querySelector('div');
+    if (contentDiv) {
+      contentDiv.appendChild(indicator);
+    } else {
+      fileElement.appendChild(indicator);
+    }
+  }
+  indicator.classList.remove('uploading', 'reuploading');
+  return indicator;
+}
+
+function updateUploadIndicatorForElement(fileElement, isUploaded) {
+  if (!fileElement) {
+    return;
+  }
+  const existing = fileElement.querySelector('.upload-indicator');
+  if (isUploaded) {
+    ensureUploadIndicatorElement(fileElement);
+    fileElement.dataset.uploaded = 'true';
+  } else if (existing) {
+    existing.remove();
+    fileElement.dataset.uploaded = 'false';
+  } else {
+    fileElement.dataset.uploaded = 'false';
+  }
+}
+
+function applyUploadStatusToFolder(relativeFolderPath, filesStatus) {
+  const container = getFolderContainerByRelativePath(relativeFolderPath);
+  if (!container) {
+    return;
+  }
+  const directFiles = container.querySelectorAll(':scope > .file-item-file');
+  directFiles.forEach((fileElement) => {
+    const fileName = fileElement.dataset.fileName || '';
+    const uploaded = Boolean(filesStatus && filesStatus[fileName]);
+    updateUploadIndicatorForElement(fileElement, uploaded);
+  });
+}
+
+async function updateFolderUploadStatus(relativeFolderPath) {
+  const normalized = normalizeRelativeFolderPath(relativeFolderPath);
+  const container = getFolderContainerByRelativePath(normalized);
+  if (!container) {
+    return;
+  }
+  try {
+    const response = await fetch(UPLOAD_STATUS_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_path: formatFolderPathForApi(normalized) })
+    });
+    if (!response.ok) {
+      throw new Error(`接口返回状态 ${response.status}`);
+    }
+    const data = await response.json();
+    applyUploadStatusToFolder(normalized, data.files || {});
+  } catch (error) {
+    console.error(`获取文件夹 ${normalized} 上传状态失败:`, error);
+  }
+}
+
+async function refreshVisibleFolderUploadStatus() {
+  const targets = new Set(['data']);
+  document.querySelectorAll('div[data-parent-relative]').forEach((container) => {
+    const relative = container.dataset.parentRelative;
+    if (!relative) {
+      return;
+    }
+    if (container.style.display !== 'none') {
+      targets.add(relative);
+    }
+  });
+  for (const relative of targets) {
+    await updateFolderUploadStatus(relative);
+  }
+}
+
+window.updateFolderUploadStatus = updateFolderUploadStatus;
+window.refreshVisibleFolderUploadStatus = refreshVisibleFolderUploadStatus;
+
 document.addEventListener('DOMContentLoaded', async () => {
   // 初始化启动页面
   splashScreen = new SplashScreen();
@@ -75,6 +226,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 绑定剩余的事件监听器
     bindEventListeners();
+
+    if (typeof refreshVisibleFolderUploadStatus === 'function') {
+      try {
+        await refreshVisibleFolderUploadStatus();
+      } catch (error) {
+        console.error('初始化根目录上传状态失败:', error);
+      }
+    }
     
     // 监听数据更新事件，刷新文件上传状态
     document.addEventListener('dataUpdated', async (event) => {
@@ -702,7 +861,7 @@ async function uploadFile(filePath) {
 // 通用提示框函数
 function showModal(options) {
   const {
-    type = 'info', // 'success', 'error', 'warning', 'info'
+    type = 'info',
     title,
     message,
     confirmText = '确定',
@@ -712,126 +871,195 @@ function showModal(options) {
     onCancel = null
   } = options;
 
-  // 创建遮罩层
+  const palette = {
+    success: {
+      defaultTitle: '操作成功',
+      accent: '#22c55e',
+      accentStrong: '#16a34a',
+      accentSoft: '#bbf7d0',
+      shadow: 'rgba(34, 197, 94, 0.25)'
+    },
+    error: {
+      defaultTitle: '发生错误',
+      accent: '#f87171',
+      accentStrong: '#ef4444',
+      accentSoft: '#fecaca',
+      shadow: 'rgba(248, 113, 113, 0.25)'
+    },
+    warning: {
+      defaultTitle: '温馨提示',
+      accent: '#fbbf24',
+      accentStrong: '#f59e0b',
+      accentSoft: '#fde68a',
+      shadow: 'rgba(251, 191, 36, 0.25)'
+    },
+    info: {
+      defaultTitle: '提示',
+      accent: '#60a5fa',
+      accentStrong: '#3b82f6',
+      accentSoft: '#bfdbfe',
+      shadow: 'rgba(96, 165, 250, 0.25)'
+    }
+  };
+
+  const config = palette[type] || palette.info;
+  const titleText = title || config.defaultTitle;
+
   const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
   overlay.style.cssText = `
     position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.5);
-    z-index: 1000;
     display: flex;
     align-items: center;
     justify-content: center;
+    background: rgba(15, 23, 42, 0.35);
+    backdrop-filter: blur(6px);
+    z-index: 1600;
+    padding: 24px;
+    box-sizing: border-box;
   `;
-  
-  // 创建弹窗
+
   const modal = document.createElement('div');
+  modal.className = 'modal-shell';
   modal.style.cssText = `
-    background-color: var(--bg-color);
-    border-radius: 8px;
-    padding: 20px;
-    min-width: 300px;
-    max-width: 500px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    background: var(--bg-color);
     color: var(--text-color);
+    min-width: 320px;
+    max-width: 420px;
+    border-radius: 16px;
+    padding: 24px 26px 22px;
+    box-shadow: 0 22px 60px rgba(15, 23, 42, 0.25);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    position: relative;
   `;
-  
-  // 标题样式和文本
+
+  const accentBar = document.createElement('span');
+  accentBar.style.cssText = `
+    display: inline-flex;
+    width: 46px;
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, ${config.accentSoft}, ${config.accent});
+  `;
+
   const titleElement = document.createElement('h3');
-  const titleConfig = {
-    success: { text: title || '操作成功', color: '#28a745' },
-    error: { text: title || '操作失败', color: '#dc3545' },
-    warning: { text: title || '警告', color: '#ffc107' },
-    info: { text: title || '提示', color: '#17a2b8' }
-  };
-  
-  titleElement.textContent = titleConfig[type].text;
+  titleElement.textContent = titleText;
   titleElement.style.cssText = `
-    margin: 0 0 15px 0;
-    font-size: 16px;
-    font-weight: bold;
-    color: ${titleConfig[type].color};
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
   `;
-  
-  // 消息内容
+
   const messageElement = document.createElement('p');
   messageElement.textContent = message;
   messageElement.style.cssText = `
-    margin: 0 0 20px 0;
-    line-height: 1.5;
+    margin: 0;
+    line-height: 1.6;
+    font-size: 14px;
+    color: var(--text-muted, rgba(75, 85, 99, 0.85));
     white-space: pre-line;
   `;
-  
-  // 按钮容器
+
   const buttonContainer = document.createElement('div');
   buttonContainer.style.cssText = `
     display: flex;
     justify-content: flex-end;
-    gap: 10px;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
   `;
-  
-  // 取消按钮
+
   if (showCancel) {
     const cancelButton = document.createElement('button');
     cancelButton.textContent = cancelText;
     cancelButton.style.cssText = `
-      padding: 8px 16px;
-      border: 1px solid var(--tree-border);
-      background: var(--bg-color);
+      padding: 9px 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      background: rgba(148, 163, 184, 0.12);
       color: var(--text-color);
-      border-radius: 4px;
-      cursor: pointer;
       font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
     `;
-    
+
+    cancelButton.addEventListener('mouseenter', () => {
+      cancelButton.style.boxShadow = '0 8px 16px rgba(15, 23, 42, 0.18)';
+      cancelButton.style.transform = 'translateY(-1px)';
+      cancelButton.style.background = 'rgba(148, 163, 184, 0.18)';
+    });
+
+    cancelButton.addEventListener('mouseleave', () => {
+      cancelButton.style.boxShadow = 'none';
+      cancelButton.style.transform = 'none';
+      cancelButton.style.background = 'rgba(148, 163, 184, 0.12)';
+    });
+
     cancelButton.addEventListener('click', () => {
-      document.body.removeChild(overlay);
+      overlay.remove();
       if (onCancel) onCancel();
     });
-    
+
     buttonContainer.appendChild(cancelButton);
   }
-  
-  // 确定按钮
+
   const confirmButton = document.createElement('button');
   confirmButton.textContent = confirmText;
-  const buttonColor = type === 'error' ? '#dc3545' : 
-                     type === 'warning' ? '#ffc107' :
-                     type === 'success' ? '#28a745' : '#17a2b8';
-  
+  const confirmBaseShadow = `0 12px 24px ${config.shadow}`;
   confirmButton.style.cssText = `
-    padding: 8px 16px;
+    padding: 9px 20px;
+    border-radius: 999px;
     border: none;
-    background: ${buttonColor};
-    color: white;
-    border-radius: 4px;
-    cursor: pointer;
+    background: linear-gradient(135deg, ${config.accentSoft}, ${config.accentStrong});
+    color: #ffffff;
     font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: ${confirmBaseShadow};
+    transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
   `;
-  
+
+  confirmButton.addEventListener('mouseenter', () => {
+    confirmButton.style.boxShadow = `0 16px 30px ${config.shadow}`;
+    confirmButton.style.transform = 'translateY(-1px)';
+    confirmButton.style.filter = 'brightness(1.03)';
+  });
+
+  confirmButton.addEventListener('mouseleave', () => {
+    confirmButton.style.boxShadow = confirmBaseShadow;
+    confirmButton.style.transform = 'none';
+    confirmButton.style.filter = 'none';
+  });
+
   confirmButton.addEventListener('click', () => {
-    document.body.removeChild(overlay);
+    overlay.remove();
     if (onConfirm) onConfirm();
   });
-  
-  // 组装弹窗
+
   buttonContainer.appendChild(confirmButton);
+
+  modal.appendChild(accentBar);
   modal.appendChild(titleElement);
-  modal.appendChild(messageElement);
+  if (message) {
+    modal.appendChild(messageElement);
+  }
   modal.appendChild(buttonContainer);
   overlay.appendChild(modal);
-  
-  // 显示弹窗
   document.body.appendChild(overlay);
-  
-  // 点击遮罩层关闭弹窗（仅信息类）
+
   if (type === 'info' || type === 'success') {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
-        document.body.removeChild(overlay);
+        overlay.remove();
       }
     });
   }
@@ -839,11 +1067,8 @@ function showModal(options) {
 
 // 关闭所有模态框
 function closeAllModals() {
-  const overlays = document.querySelectorAll('div[style*="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5);"]');
-  overlays.forEach(overlay => {
-    if (overlay.parentNode) {
-      overlay.parentNode.removeChild(overlay);
-    }
+  document.querySelectorAll('.modal-overlay').forEach((overlay) => {
+    overlay.remove();
   });
 }
 
@@ -997,6 +1222,8 @@ function renderTree(node, container, isRoot = false, depth = 0) {
   const div = document.createElement('div');
   div.className = 'file-item';
   div.dataset.path = node.path;
+  const nodeRelativePath = resolveNodeRelativePath(node);
+  div.dataset.relativePath = nodeRelativePath;
   
   // 设置缩进
   const indentSize = depth * 12; // 每层缩进12px
@@ -1052,11 +1279,16 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     
     const childContainer = document.createElement('div');
     childContainer.dataset.parent = node.path;
+    childContainer.dataset.parentRelative = nodeRelativePath;
     // 根据expandedFolders状态决定是否展开
     childContainer.style.display = isExpanded ? 'block' : 'none';
     arrow.style.transform = isExpanded ? 'rotate(90deg)' : 'rotate(0deg)';
     node.children.forEach(child => renderTree(child, childContainer, false, depth + 1));
     container.appendChild(childContainer);
+
+    if (isExpanded) {
+      updateFolderUploadStatus(nodeRelativePath);
+    }
     
     // 文件夹点击事件 - 负责选中和展开/收起
     div.addEventListener('click', (e) => {
@@ -1088,6 +1320,7 @@ function renderTree(node, container, isRoot = false, depth = 0) {
         childContainer.style.display = 'block';
         arrow.style.transform = 'rotate(90deg)';
         folderIcon.innerHTML = getFileIcon(node.name, true, true);
+        updateFolderUploadStatus(nodeRelativePath);
       }
     });
     
@@ -1111,6 +1344,7 @@ function renderTree(node, container, isRoot = false, depth = 0) {
 
   } else {
     div.classList.add('file-item-file');
+    div.dataset.fileName = node.name;
     
     // 添加文件图标
     const fileIcon = document.createElement('span');
@@ -1433,12 +1667,13 @@ async function loadFileTree() {
   try {
     const tree = await window.fsAPI.getFileTree();
     window.fileTreeData = tree; // 保存文件树数据供其他函数使用
+    fileTreeEl.dataset.parentRelative = 'data';
     fileTreeEl.innerHTML = '';
     // 直接渲染子文件，不显示根目录
     if (tree.children && tree.children.length > 0) {
       tree.children.forEach(child => renderTree(child, fileTreeEl, true, 0));
     }
-    
+    await updateFolderUploadStatus('data');
 
   } catch (error) {
     console.error('加载文件树失败:', error);
@@ -1714,4 +1949,3 @@ function bindEventListeners() {
 
 // 将 createRenameInput 函数暴露到全局作用域
 window.createRenameInput = createRenameInput;
-

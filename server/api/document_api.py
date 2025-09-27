@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import logging
 import hashlib
 import pathlib
@@ -10,7 +10,7 @@ from service.embedding_service import get_embedding_service
 from service.faiss_service import FaissManager
 from service.sqlite_service import SQLiteManager
 from service.text_splitter_service import init_text_splitter_service, get_text_splitter_service
-from config.config import ServerConfig
+from config.config import ServerConfig, DatabaseConfig
 from model.document_request_model import (
     FileUploadRequest,
     FileUploadResponse
@@ -58,6 +58,18 @@ class ReuploadDocumentResponse(BaseModel):
     document_id: Optional[int] = None
     file_info: Optional[Dict[str, Any]] = None
 
+
+class FolderUploadStatusRequest(BaseModel):
+    """文件夹上传状态请求模型"""
+    folder_path: str
+
+
+class FolderUploadStatusResponse(BaseModel):
+    """文件夹上传状态响应模型"""
+    folder: str
+    files: Dict[str, bool]
+    uploaded_files: List[str]
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/document", tags=["document"])
@@ -90,6 +102,73 @@ def init_document_api(faiss_mgr: FaissManager, sqlite_mgr: SQLiteManager):
     
     text_splitter_service = get_text_splitter_service()
     logger.info(f"Document API initialized with {text_splitter_service.get_splitter_info()['type']} text splitter")
+
+
+@router.post("/upload-status", response_model=FolderUploadStatusResponse)
+async def get_folder_upload_status(request: FolderUploadStatusRequest):
+    """查询指定文件夹下一层文件的上传状态"""
+    if sqlite_manager is None:
+        raise HTTPException(status_code=500, detail="数据库管理器未初始化")
+
+    raw_path = request.folder_path.strip()
+    if not raw_path or raw_path in {".", "./", ""}:
+        normalized_path = "data"
+    else:
+        trimmed = raw_path.strip()
+        trimmed = trimmed.lstrip("/")
+        trimmed = trimmed.lstrip("./")
+        if not trimmed:
+            normalized_path = "data"
+        elif trimmed.startswith("data"):
+            normalized_path = trimmed.rstrip("/") or "data"
+        else:
+            normalized_path = f"data/{trimmed.rstrip('/')}"
+
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
+    data_root = DatabaseConfig.DATABASE_DIR.resolve()
+
+    folder_relative = pathlib.Path(normalized_path)
+    folder_full_path = (project_root / folder_relative).resolve()
+
+    try:
+        folder_full_path.relative_to(data_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="文件夹必须位于数据目录内")
+
+    if not folder_full_path.exists() or not folder_full_path.is_dir():
+        raise HTTPException(status_code=404, detail="指定的文件夹不存在")
+
+    try:
+        entries = [entry for entry in folder_full_path.iterdir() if entry.is_file()]
+    except PermissionError as exc:
+        logger.error("读取文件夹失败: %s", exc)
+        raise HTTPException(status_code=500, detail="读取文件夹内容失败") from exc
+
+    entries.sort(key=lambda path: path.name.lower())
+
+    path_pairs = []
+    for file_path in entries:
+        try:
+            rel_path = str(file_path.resolve().relative_to(project_root))
+        except ValueError:
+            logger.warning("文件 %s 不在项目根目录内，已跳过", file_path)
+            rel_path = None
+        path_pairs.append((file_path, rel_path))
+
+    valid_rel_paths = [rel_path for _, rel_path in path_pairs if rel_path is not None]
+    existing_paths = set(sqlite_manager.get_documents_by_paths(valid_rel_paths))
+
+    files_status: Dict[str, bool] = {}
+    for file_path, rel_path in path_pairs:
+        files_status[file_path.name] = rel_path in existing_paths if rel_path else False
+
+    uploaded_files = [name for name, uploaded in files_status.items() if uploaded]
+
+    return FolderUploadStatusResponse(
+        folder=str(folder_relative),
+        files=files_status,
+        uploaded_files=uploaded_files
+    )
 
 @router.post("/upload", response_model=FileUploadResponse)
 async def upload_document(request: FileUploadRequest):

@@ -223,12 +223,32 @@ class PdfViewer {
       // 加载PDF文档
       const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfData.buffer) }).promise;
       
+      const pagesContainerEl = document.getElementById(`pdf-pages-${tabId}`);
+      const scrollViewerEl = document.getElementById(`pdf-scroll-viewer-${tabId}`);
+
+      let initialScale = 1.0;
+      let baseViewportWidth = 0;
+
+      try {
+        const firstPage = await pdfDoc.getPage(1);
+        const defaultViewport = firstPage.getViewport({ scale: 1 });
+        baseViewportWidth = defaultViewport.width;
+        const containerWidth = this.getPdfAvailableWidth(scrollViewerEl, pagesContainerEl);
+        if (containerWidth > 0 && baseViewportWidth > 0) {
+          const fittedScale = containerWidth / baseViewportWidth;
+          initialScale = Math.max(0.85, Math.min(fittedScale, 1.2));
+        }
+      } catch (fitError) {
+        console.warn('PDF自动适配宽度失败，使用默认缩放', fitError);
+      }
+
       // 存储PDF文档和状态
       const pdfState = {
         pdfDoc: pdfDoc,
-        scale: 1.5, // 提高默认缩放比例以提升清晰度
-        pagesContainer: document.getElementById(`pdf-pages-${tabId}`),
-        scrollViewer: document.getElementById(`pdf-scroll-viewer-${tabId}`),
+        scale: initialScale,
+        baseViewportWidth,
+        pagesContainer: pagesContainerEl,
+        scrollViewer: scrollViewerEl,
         canvases: new Map(), // 存储所有canvas以便内存管理
         textLayers: new Map() // 存储所有文本层
       };
@@ -261,7 +281,7 @@ class PdfViewer {
   // 渲染所有PDF页面
   async renderAllPdfPages(tabId, pdfState) {
     try {
-      const { pdfDoc, pagesContainer, scale } = pdfState;
+      const { pdfDoc, pagesContainer } = pdfState;
       
       // 清空容器
       pagesContainer.innerHTML = '';
@@ -392,8 +412,8 @@ class PdfViewer {
       if (event.metaKey || event.ctrlKey) { // Command键(Mac)或Ctrl键(Windows)
         event.preventDefault();
         
-        const zoomFactor = event.deltaY > 0 ? 0.7 : 1.4;
-        const newScale = Math.max(0.5, Math.min(5.0, pdfState.scale * zoomFactor));
+        const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
+        const newScale = Math.max(0.5, Math.min(pdfState.scale * zoomFactor, 5.0));
         
         if (newScale !== pdfState.scale) {
           pdfState.scale = newScale;
@@ -414,6 +434,19 @@ class PdfViewer {
       event: 'wheel',
       handler: handleZoom
     });
+  }
+
+  getPdfAvailableWidth(scrollViewer, pagesContainer) {
+    const target = scrollViewer || pagesContainer || this.contentContainer;
+    if (!target) {
+      return 0;
+    }
+    const width = target.clientWidth || target.offsetWidth || 0;
+    if (width <= 0 && target.parentElement) {
+      return target.parentElement.clientWidth || 0;
+    }
+    const marginAllowance = 32;
+    return Math.max(0, width - marginAllowance);
   }
   
   // 清理PDF事件监听器

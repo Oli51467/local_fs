@@ -435,20 +435,8 @@ class DatabaseModule {
 
   // 刷新文件上传状态标记
   async refreshUploadStatus() {
-    // 重新检查所有文件的上传状态
-    const fileItems = document.querySelectorAll('.file-item-file');
-    
-    for (const item of fileItems) {
-      const path = item.dataset.path;
-      if (path) {
-        // 移除现有的上传标记
-        const existingIndicator = item.querySelector('.upload-indicator');
-        if (existingIndicator) {
-          existingIndicator.remove();
-        }
-        
-        // 不再通过API检查上传状态，由上传操作直接控制
-      }
+    if (window.refreshVisibleFolderUploadStatus) {
+      await window.refreshVisibleFolderUploadStatus();
     }
   }
 

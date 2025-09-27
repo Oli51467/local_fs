@@ -11,6 +11,16 @@ class FileTreeModule {
     this.initializeIpcHandlers();
   }
 
+  // 获取相对 data 目录的路径（统一为 data/... 格式）
+  getRelativePath(targetPath) {
+    const relative = path.relative(this.dataRoot, targetPath);
+    if (!relative) {
+      return 'data';
+    }
+    const normalized = relative.split(path.sep).join('/');
+    return `data/${normalized}`;
+  }
+
   // 获取文件类型的排序优先级
   getFileTypePriority(fileName) {
     const ext = path.extname(fileName).toLowerCase();
@@ -33,8 +43,9 @@ class FileTreeModule {
   // 递归获取文件树
   getFileTree(dir) {
     const stats = fs.statSync(dir);
+    const relativePath = this.getRelativePath(dir);
     if (stats.isFile()) {
-      return { name: path.basename(dir), path: dir };
+      return { name: path.basename(dir), path: dir, relativePath };
     }
     const children = fs.readdirSync(dir)
       .filter(f => !f.startsWith('.')) // 过滤隐藏文件
@@ -61,7 +72,7 @@ class FileTreeModule {
         // 如果都是文件夹，按名称排序
         return a.name.localeCompare(b.name);
       });
-    return { name: path.basename(dir), path: dir, children };
+    return { name: path.basename(dir), path: dir, relativePath, children };
   }
 
   // 初始化IPC处理器

@@ -406,9 +406,17 @@ class ExplorerModule {
   async loadFileTree() {
     try {
       const tree = await window.fsAPI.getFileTree();
+      window.fileTreeData = tree;
       this.fileTreeEl.innerHTML = '';
       if (tree && tree.children) {
         tree.children.forEach(child => renderTree(child, this.fileTreeEl, false, 0));
+      }
+      const rootContainer = document.getElementById('file-tree');
+      if (rootContainer) {
+        rootContainer.dataset.parentRelative = 'data';
+      }
+      if (window.updateFolderUploadStatus) {
+        await window.updateFolderUploadStatus('data');
       }
     } catch (error) {
       console.error('加载文件树失败:', error);
