@@ -1,15 +1,20 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Callable, Awaitable
+from typing import Optional, List, Callable, Awaitable, Tuple
 import logging
 import hashlib
 import pathlib
 import re
 import asyncio
+import shutil
+import uuid
 from datetime import datetime
 from typing import Dict, Any
+from PIL import Image
+from service.clip_embedding_service import get_clip_embedding_service
 from service.embedding_service import get_embedding_service
 from service.faiss_service import FaissManager
+from service.image_faiss_service import ImageFaissManager
 from service.sqlite_service import SQLiteManager
 from service.text_splitter_service import init_text_splitter_service, get_text_splitter_service
 from config.config import ServerConfig, DatabaseConfig
@@ -91,6 +96,10 @@ router = APIRouter(prefix="/api/document", tags=["document"])
 faiss_manager = None
 sqlite_manager = None
 text_splitter_service = None
+image_faiss_manager = None
+
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.tiff', '.bmp'}
+MARKDOWN_TYPES = {'md', 'markdown'}
 
 
 def read_text_file_with_fallback(file_path: pathlib.Path) -> str:
@@ -135,6 +144,319 @@ def extract_text_content(file_path: pathlib.Path, file_type: str) -> str:
         return markdown_to_plain_text(raw_text)
     return raw_text
 
+
+def _normalize_markdown_image_target(target: str) -> str:
+    cleaned = (target or "").strip()
+    if not cleaned:
+        return ""
+
+    if cleaned.startswith('<') and cleaned.endswith('>'):
+        cleaned = cleaned[1:-1].strip()
+
+    if cleaned.startswith('http://') or cleaned.startswith('https://'):
+        return ""
+
+    # 移除标题部分
+    if '"' in cleaned:
+        cleaned = cleaned.split('"', 1)[0].strip()
+    elif "'" in cleaned:
+        cleaned = cleaned.split("'", 1)[0].strip()
+
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return ""
+
+    if re.search(r"\s", cleaned):
+        cleaned = cleaned.split()[0]
+
+    return cleaned
+
+
+def _resolve_markdown_image_path(base_dir: pathlib.Path, target: str) -> Optional[pathlib.Path]:
+    if not target:
+        return None
+
+    candidate = pathlib.Path(target)
+    try:
+        if candidate.is_absolute():
+            resolved = candidate.resolve(strict=True)
+        else:
+            resolved = (base_dir / candidate).resolve(strict=True)
+    except (FileNotFoundError, RuntimeError):
+        return None
+
+    if resolved.is_file():
+        return resolved
+    return None
+
+
+def extract_markdown_images(file_path: pathlib.Path, markdown_text: str) -> List[Dict[str, Any]]:
+    images: List[Dict[str, Any]] = []
+    if not markdown_text:
+        return images
+
+    pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+    seen_paths: set[pathlib.Path] = set()
+
+    for match in pattern.finditer(markdown_text):
+        alt_text = match.group(1).strip()
+        target_raw = match.group(2)
+        normalized_target = _normalize_markdown_image_target(target_raw)
+        if not normalized_target:
+            continue
+
+        resolved = _resolve_markdown_image_path(file_path.parent, normalized_target)
+        if not resolved:
+            logger.warning("Markdown图片路径无效或不存在: %s", normalized_target)
+            continue
+
+        if resolved.suffix.lower() not in IMAGE_EXTENSIONS:
+            logger.debug("忽略不支持的图片格式: %s", resolved)
+            continue
+
+        resolved = resolved.resolve()
+        if resolved in seen_paths:
+            logger.debug("跳过重复的图片引用: %s", resolved)
+            continue
+
+        try:
+            file_stat = resolved.stat()
+        except FileNotFoundError:
+            logger.warning("无法获取图片文件信息，文件不存在: %s", resolved)
+            continue
+
+        try:
+            with Image.open(resolved) as image_obj:
+                width, height = image_obj.size
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("读取图片尺寸失败 %s: %s", resolved, exc)
+            continue
+
+        line_number = markdown_text.count('\n', 0, match.start()) + 1
+
+        try:
+            relative_source = str(resolved.relative_to(ServerConfig.PROJECT_ROOT))
+        except ValueError:
+            relative_source = str(resolved)
+
+        images.append({
+            "source_path": resolved,
+            "source_path_relative": relative_source,
+            "line_number": line_number,
+            "alt_text": alt_text,
+            "image_format": resolved.suffix.lstrip('.').lower(),
+            "image_size": file_stat.st_size,
+            "width": width,
+            "height": height,
+            "markdown_target": normalized_target
+        })
+
+        seen_paths.add(resolved)
+
+    return images
+
+
+def extract_text_and_images(file_path: pathlib.Path, file_type: str) -> Tuple[str, List[Dict[str, Any]]]:
+    raw_text = read_text_file_with_fallback(file_path)
+    lowered = file_type.lower()
+    if lowered in MARKDOWN_TYPES:
+        images = extract_markdown_images(file_path, raw_text)
+        return markdown_to_plain_text(raw_text), images
+    return raw_text, []
+
+
+def store_document_images(document_id: int, file_path: pathlib.Path, images: List[Dict[str, Any]]) -> Dict[str, Any]:
+    result = {
+        "stored": 0,
+        "vector_ids": [],
+        "folder": None,
+    }
+
+    if not images:
+        return result
+
+    if sqlite_manager is None or image_faiss_manager is None:
+        logger.warning("图像处理依赖未初始化，跳过图片向量化")
+        return result
+
+    try:
+        clip_service = get_clip_embedding_service()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("加载CLIP模型失败: %s", exc)
+        raise HTTPException(status_code=500, detail=f"加载图片嵌入模型失败: {exc}") from exc
+
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
+    images_root = DatabaseConfig.IMAGES_DIR
+
+    # 创建唯一的图片存储文件夹
+    dest_folder = None
+    for _ in range(3):
+        candidate = images_root / uuid.uuid4().hex
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+            dest_folder = candidate
+            break
+        except FileExistsError:
+            continue
+
+    if dest_folder is None:
+        raise HTTPException(status_code=500, detail="创建图片存储目录失败")
+
+    try:
+        relative_document_path = str(file_path.resolve().relative_to(project_root))
+    except ValueError:
+        relative_document_path = str(file_path.resolve())
+
+    relative_folder = str(dest_folder.relative_to(project_root))
+
+    stored_records: List[Dict[str, Any]] = []
+    vectors: List[List[float]] = []
+    faiss_metadata: List[Dict[str, Any]] = []
+
+    for index, info in enumerate(images):
+        dest_name = f"{index:04d}_{info['source_path'].name}"
+        dest_path = dest_folder / dest_name
+
+        try:
+            shutil.copy2(info['source_path'], dest_path)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("复制图片失败 %s -> %s: %s", info['source_path'], dest_path, exc)
+            continue
+
+        try:
+            vector = clip_service.encode_image_path(dest_path)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.error("向量化图片失败 %s: %s", dest_path, exc)
+            try:
+                dest_path.unlink()
+            except OSError:
+                pass
+            continue
+
+        stored_record = {
+            **info,
+            "storage_path": dest_path,
+            "storage_name": dest_name
+        }
+        stored_records.append(stored_record)
+        vectors.append(vector)
+
+        try:
+            storage_path_rel = str(dest_path.relative_to(project_root))
+        except ValueError:
+            storage_path_rel = str(dest_path)
+
+        faiss_metadata.append({
+            "document_id": document_id,
+            "file_path": relative_document_path,
+            "storage_path": storage_path_rel,
+            "storage_folder": relative_folder,
+            "image_name": dest_name,
+            "image_format": info['image_format'],
+            "image_size": info['image_size'],
+            "width": info['width'],
+            "height": info['height'],
+            "line_number": info.get('line_number'),
+            "alt_text": info.get('alt_text'),
+            "source_path": info.get('source_path_relative'),
+        })
+
+    if not vectors:
+        shutil.rmtree(dest_folder, ignore_errors=True)
+        return result
+
+    import numpy as np
+
+    try:
+        vectors_array = np.array(vectors, dtype=np.float32)
+        vector_ids = image_faiss_manager.add_vectors(vectors_array, faiss_metadata)
+    except Exception as exc:  # pylint: disable=broad-except
+        shutil.rmtree(dest_folder, ignore_errors=True)
+        logger.error("保存图片向量失败: %s", exc)
+        raise HTTPException(status_code=500, detail=f"保存图片向量失败: {exc}") from exc
+
+    for record, vector_id in zip(stored_records, vector_ids):
+        storage_path = record['storage_path']
+        try:
+            storage_path_rel = str(storage_path.relative_to(project_root))
+        except ValueError:
+            storage_path_rel = str(storage_path)
+
+        sqlite_manager.insert_document_image(
+            document_id=document_id,
+            chunk_index=None,
+            line_number=record.get('line_number'),
+            image_name=record['storage_name'],
+            image_format=record['image_format'],
+            image_size=record['image_size'],
+            width=record['width'],
+            height=record['height'],
+            storage_path=storage_path_rel,
+            storage_folder=relative_folder,
+            source_path=record.get('source_path_relative'),
+            vector_id=vector_id
+        )
+
+    result.update({
+        "stored": len(vector_ids),
+        "vector_ids": vector_ids,
+        "folder": relative_folder,
+    })
+    logger.info("成功处理 %d 张图片，存储目录: %s", result['stored'], relative_folder)
+    return result
+
+
+def gather_image_cleanup_targets(relative_path: str, is_folder: bool) -> Tuple[List[int], List[pathlib.Path]]:
+    if sqlite_manager is None:
+        return [], []
+
+    if is_folder:
+        image_vector_ids = sqlite_manager.get_image_vector_ids_by_path_prefix(relative_path)
+        folders = sqlite_manager.get_image_storage_folders_by_path_prefix(relative_path)
+    else:
+        image_vector_ids = sqlite_manager.get_image_vector_ids_by_path(relative_path)
+        folders = sqlite_manager.get_image_storage_folders_by_path(relative_path)
+
+    images_root = DatabaseConfig.IMAGES_DIR.resolve()
+    folder_paths: List[pathlib.Path] = []
+
+    for folder in folders:
+        if not folder:
+            continue
+        candidate = pathlib.Path(folder)
+        if not candidate.is_absolute():
+            candidate = (ServerConfig.PROJECT_ROOT / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+
+        try:
+            candidate.relative_to(images_root)
+        except ValueError:
+            logger.warning("跳过非图片存储目录: %s", candidate)
+            continue
+
+        folder_paths.append(candidate)
+
+    unique_folders = []
+    seen = set()
+    for folder in folder_paths:
+        if folder not in seen:
+            unique_folders.append(folder)
+            seen.add(folder)
+
+    return image_vector_ids, unique_folders
+
+
+def remove_image_folders(folder_paths: List[pathlib.Path]) -> int:
+    removed = 0
+    for folder in folder_paths:
+        try:
+            if folder.exists() and folder.is_dir():
+                shutil.rmtree(folder, ignore_errors=True)
+                removed += 1
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("删除图片目录失败 %s: %s", folder, exc)
+    return removed
 
 def resolve_folder_path(folder_path: str) -> pathlib.Path:
     path_obj = pathlib.Path(folder_path)
@@ -241,11 +563,12 @@ async def run_folder_tasks(
     results = await asyncio.gather(*tasks)
     return results
 
-def init_document_api(faiss_mgr: FaissManager, sqlite_mgr: SQLiteManager):
+def init_document_api(faiss_mgr: FaissManager, sqlite_mgr: SQLiteManager, image_faiss_mgr: ImageFaissManager):
     """初始化文档API"""
-    global faiss_manager, sqlite_manager, text_splitter_service
+    global faiss_manager, sqlite_manager, image_faiss_manager, text_splitter_service
     faiss_manager = faiss_mgr
     sqlite_manager = sqlite_mgr
+    image_faiss_manager = image_faiss_mgr
     
     # 初始化文本分割服务
     if ServerConfig.TEXT_SPLITTER_TYPE == "recursive":
@@ -451,7 +774,12 @@ async def upload_document(request: FileUploadRequest):
         if file_type not in supported_types:
             raise HTTPException(status_code=400, detail=f"暂不支持的文件类型: {file_type}")
 
-        text_content = extract_text_content(file_path, file_type)
+        text_content, extracted_images = extract_text_and_images(file_path, file_type)
+
+        if extracted_images:
+            logger.info("检测到 %d 张Markdown图片待处理", len(extracted_images))
+        else:
+            extracted_images = []
 
         if not text_content.strip():
             raise HTTPException(status_code=400, detail="文件内容为空")
@@ -480,7 +808,17 @@ async def upload_document(request: FileUploadRequest):
             is_reprocessing = True
             logger.info(f"重新处理文档，文档ID: {document_id}")
             # 清理现有的块和向量数据
-            sqlite_manager.delete_document_by_path(str(file_path.relative_to(project_root)))
+            relative_path_str = str(file_path.relative_to(project_root))
+
+            existing_image_vector_ids, existing_folders = gather_image_cleanup_targets(relative_path_str, False)
+            if existing_image_vector_ids and image_faiss_manager:
+                image_faiss_manager.delete_vectors_by_ids(existing_image_vector_ids)
+                logger.info("已删除旧的图片向量数量: %d", len(existing_image_vector_ids))
+            if existing_folders:
+                removed_count = remove_image_folders(existing_folders)
+                logger.info("已清理旧的图片目录数量: %d", removed_count)
+
+            sqlite_manager.delete_document_by_path(relative_path_str)
             # 重新插入文档记录
             document_id = sqlite_manager.insert_document(
                 filename=filename,
@@ -566,6 +904,13 @@ async def upload_document(request: FileUploadRequest):
             chunk_ids.append(chunk_id)
         
         logger.info(f"文本块信息已存储到数据库，块ID列表: {chunk_ids}")
+
+        image_result = store_document_images(document_id, file_path, extracted_images)
+        logger.info(
+            "图片处理完成: 文档ID=%s, 图片数=%d",
+            document_id,
+            image_result.get('stored', 0)
+        )
         
         # 10. 返回上传结果
         return FileUploadResponse(
@@ -578,7 +923,10 @@ async def upload_document(request: FileUploadRequest):
                 "file_hash": file_hash,
                 "file_size": file_path.stat().st_size,
                 "chunks_count": len(chunks),
-                "vector_count": len(vector_ids)
+                "vector_count": len(vector_ids),
+                "image_count": image_result.get('stored', 0),
+                "image_vector_count": len(image_result.get('vector_ids', [])),
+                "image_folder": image_result.get('folder')
             }
         )
         
@@ -762,6 +1110,7 @@ async def update_document_path(request: UpdateDocumentPathRequest):
             logger.info(f"文档路径更新完成，更新了 {updated_count} 个文档")
 
         updated_vectors = 0
+        updated_image_vectors = 0
         if faiss_manager is None:
             logger.warning('Faiss 管理器未初始化，无法同步更新向量路径')
         else:
@@ -790,10 +1139,29 @@ async def update_document_path(request: UpdateDocumentPathRequest):
                     faiss_error
                 )
 
-        if updated_count > 0 or updated_vectors > 0:
+        if image_faiss_manager is None:
+            logger.warning('图片 Faiss 管理器未初始化，无法同步更新图片向量路径')
+        else:
+            try:
+                if request.is_folder:
+                    updated_image_vectors = image_faiss_manager.update_metadata_by_path_prefix(old_path, new_path)
+                else:
+                    updated_image_vectors = image_faiss_manager.update_metadata_by_path(old_path, new_path)
+            except Exception as image_faiss_error:  # pylint: disable=broad-except
+                logger.error(
+                    "更新图片 Faiss 元数据路径失败: %s -> %s，错误: %s",
+                    old_path,
+                    new_path,
+                    image_faiss_error
+                )
+
+        if updated_count > 0 or updated_vectors > 0 or updated_image_vectors > 0:
             return {
                 "status": "success",
-                "message": f"成功更新文档 {updated_count} 个、向量 {updated_vectors} 个路径",
+                "message": (
+                    f"成功更新文档 {updated_count} 个、文本向量 {updated_vectors} 个路径"
+                    f"、图片向量 {updated_image_vectors} 个路径"
+                ),
                 "updated_documents": updated_count,
                 "updated_vectors": updated_vectors
             }
@@ -837,7 +1205,9 @@ async def delete_document(request: DeleteDocumentRequest):
         
         deleted_docs = 0
         deleted_vectors = 0
-        
+        deleted_image_vectors = 0
+        removed_image_dirs = 0
+
         if request.is_folder:
             # 删除文件夹及其下所有文档
             logger.info(f"开始递归删除文件夹: {file_path}")
@@ -845,6 +1215,9 @@ async def delete_document(request: DeleteDocumentRequest):
             # 1. 获取文件夹下所有文档的向量ID
             vector_ids = sqlite_manager.get_vector_ids_by_path_prefix(file_path)
             logger.info(f"找到 {len(vector_ids)} 个向量需要删除")
+
+            image_vector_ids, image_folders = gather_image_cleanup_targets(file_path, True)
+            logger.info("找到 %d 个图片向量需要删除", len(image_vector_ids))
             
             # 2. 从SQLite中删除文档及相关数据
             deleted_docs = sqlite_manager.delete_documents_by_path_prefix(file_path)
@@ -854,6 +1227,14 @@ async def delete_document(request: DeleteDocumentRequest):
             if vector_ids:
                 deleted_vectors = faiss_manager.delete_vectors_by_ids(vector_ids)
                 logger.info(f"从Faiss中删除了 {deleted_vectors} 个向量")
+
+            if image_vector_ids and image_faiss_manager:
+                deleted_image_vectors = image_faiss_manager.delete_vectors_by_ids(image_vector_ids)
+                logger.info("从图片Faiss中删除了 %d 个向量", deleted_image_vectors)
+
+            if image_folders:
+                removed_image_dirs = remove_image_folders(image_folders)
+                logger.info("删除图片目录数量: %d", removed_image_dirs)
             
         else:
             # 删除单个文档
@@ -862,6 +1243,9 @@ async def delete_document(request: DeleteDocumentRequest):
             # 1. 获取文档的向量ID
             vector_ids = sqlite_manager.get_vector_ids_by_path(file_path)
             logger.info(f"找到 {len(vector_ids)} 个向量需要删除")
+
+            image_vector_ids, image_folders = gather_image_cleanup_targets(file_path, False)
+            logger.info("找到 %d 个图片向量需要删除", len(image_vector_ids))
             
             # 2. 从SQLite中删除文档及相关数据
             deleted_docs = sqlite_manager.delete_document_by_path(file_path)
@@ -871,10 +1255,21 @@ async def delete_document(request: DeleteDocumentRequest):
             if vector_ids:
                 deleted_vectors = faiss_manager.delete_vectors_by_ids(vector_ids)
                 logger.info(f"从Faiss中删除了 {deleted_vectors} 个向量")
-        
+
+            if image_vector_ids and image_faiss_manager:
+                deleted_image_vectors = image_faiss_manager.delete_vectors_by_ids(image_vector_ids)
+                logger.info("从图片Faiss中删除了 %d 个向量", deleted_image_vectors)
+
+            if image_folders:
+                removed_image_dirs = remove_image_folders(image_folders)
+                logger.info("删除图片目录数量: %d", removed_image_dirs)
+
         return DeleteDocumentResponse(
             status="success",
-            message=f"成功删除了 {deleted_docs} 个文档和 {deleted_vectors} 个向量",
+            message=(
+                f"成功删除了 {deleted_docs} 个文档、{deleted_vectors} 个文本向量"
+                f" 和 {deleted_image_vectors} 个图片向量"
+            ),
             deleted_documents=deleted_docs,
             deleted_vectors=deleted_vectors
         )
@@ -911,7 +1306,9 @@ async def unmount_document(request: UnmountDocumentRequest):
         
         unmounted_docs = 0
         unmounted_vectors = 0
-        
+        unmounted_image_vectors = 0
+        removed_image_dirs = 0
+
         if request.is_folder:
             # 取消挂载文件夹及其下所有文档
             logger.info(f"开始递归取消挂载文件夹: {file_path}")
@@ -919,6 +1316,9 @@ async def unmount_document(request: UnmountDocumentRequest):
             # 1. 获取文件夹下所有文档的向量ID
             vector_ids = sqlite_manager.get_vector_ids_by_path_prefix(file_path)
             logger.info(f"找到 {len(vector_ids)} 个向量需要取消挂载")
+
+            image_vector_ids, image_folders = gather_image_cleanup_targets(file_path, True)
+            logger.info("找到 %d 个图片向量需要取消挂载", len(image_vector_ids))
             
             # 2. 从SQLite中删除文档及相关数据（但不删除文件）
             unmounted_docs = sqlite_manager.delete_documents_by_path_prefix(file_path)
@@ -928,6 +1328,14 @@ async def unmount_document(request: UnmountDocumentRequest):
             if vector_ids:
                 unmounted_vectors = faiss_manager.delete_vectors_by_ids(vector_ids)
                 logger.info(f"从Faiss中删除了 {unmounted_vectors} 个向量")
+
+            if image_vector_ids and image_faiss_manager:
+                unmounted_image_vectors = image_faiss_manager.delete_vectors_by_ids(image_vector_ids)
+                logger.info("从图片Faiss中删除了 %d 个向量", unmounted_image_vectors)
+
+            if image_folders:
+                removed_image_dirs = remove_image_folders(image_folders)
+                logger.info("删除图片目录数量: %d", removed_image_dirs)
             
         else:
             # 取消挂载单个文档
@@ -936,6 +1344,9 @@ async def unmount_document(request: UnmountDocumentRequest):
             # 1. 获取文档的向量ID
             vector_ids = sqlite_manager.get_vector_ids_by_path(file_path)
             logger.info(f"找到 {len(vector_ids)} 个向量需要取消挂载")
+
+            image_vector_ids, image_folders = gather_image_cleanup_targets(file_path, False)
+            logger.info("找到 %d 个图片向量需要取消挂载", len(image_vector_ids))
             
             # 2. 从SQLite中删除文档及相关数据（但不删除文件）
             unmounted_docs = sqlite_manager.delete_document_by_path(file_path)
@@ -945,10 +1356,21 @@ async def unmount_document(request: UnmountDocumentRequest):
             if vector_ids:
                 unmounted_vectors = faiss_manager.delete_vectors_by_ids(vector_ids)
                 logger.info(f"从Faiss中删除了 {unmounted_vectors} 个向量")
-        
+
+            if image_vector_ids and image_faiss_manager:
+                unmounted_image_vectors = image_faiss_manager.delete_vectors_by_ids(image_vector_ids)
+                logger.info("从图片Faiss中删除了 %d 个向量", unmounted_image_vectors)
+
+            if image_folders:
+                removed_image_dirs = remove_image_folders(image_folders)
+                logger.info("删除图片目录数量: %d", removed_image_dirs)
+
         return UnmountDocumentResponse(
             status="success",
-            message=f"成功取消挂载了 {unmounted_docs} 个文档和 {unmounted_vectors} 个向量",
+            message=(
+                f"成功取消挂载了 {unmounted_docs} 个文档、{unmounted_vectors} 个文本向量"
+                f" 和 {unmounted_image_vectors} 个图片向量"
+            ),
             unmounted_documents=unmounted_docs,
             unmounted_vectors=unmounted_vectors
         )
@@ -1049,7 +1471,10 @@ async def reupload_document(request: ReuploadDocumentRequest):
         # 获取旧向量的ID（用于后续从Faiss删除）
         old_vector_ids = sqlite_manager.get_vector_ids_by_path(relative_file_path)
         logger.info(f"找到 {len(old_vector_ids)} 个旧向量需要删除")
-        
+
+        old_image_vector_ids, old_image_folders = gather_image_cleanup_targets(relative_file_path, False)
+        logger.info("找到 %d 个旧图片向量需要删除", len(old_image_vector_ids))
+
         # 从SQLite中删除文档及相关数据（包括documents、document_chunks和sqlite_sequence）
         deleted_docs = sqlite_manager.delete_document_by_path(relative_file_path)
         if deleted_docs > 0:
@@ -1063,6 +1488,14 @@ async def reupload_document(request: ReuploadDocumentRequest):
         if old_vector_ids and faiss_manager:
             deleted_vectors = faiss_manager.delete_vectors_by_ids(old_vector_ids)
             logger.info(f"从Faiss中删除了 {deleted_vectors} 个向量")
+
+        if old_image_vector_ids and image_faiss_manager:
+            deleted_image_vectors = image_faiss_manager.delete_vectors_by_ids(old_image_vector_ids)
+            logger.info("从图片Faiss中删除了 %d 个向量", deleted_image_vectors)
+
+        if old_image_folders:
+            removed_image_dirs = remove_image_folders(old_image_folders)
+            logger.info("删除旧图片目录数量: %d", removed_image_dirs)
         
         # 6. 重新上传文档（调用现有的上传逻辑）
         logger.info("开始重新上传文档")

@@ -12,6 +12,7 @@ from api.faiss_api import router as faiss_router, init_faiss_api
 from api.cleanup_api import router as cleanup_router
 from service.sqlite_service import SQLiteManager
 from service.faiss_service import FaissManager
+from service.image_faiss_service import ImageFaissManager
 from service.embedding_service import EmbeddingService
 from service.reranker_service import init_reranker_service
 from service.bm25s_service import init_bm25s_service
@@ -49,10 +50,11 @@ async def lifespan(app: FastAPI):
     
     # 初始化Faiss向量数据库管理器
     faiss_instance = FaissManager()
+    image_faiss_instance = ImageFaissManager()
     init_faiss_api(faiss_instance, embedding_instance)
     
     # 初始化文档API
-    init_document_api(faiss_instance, sqlite_instance)
+    init_document_api(faiss_instance, sqlite_instance, image_faiss_instance)
     
     # 初始化清理API
     from api.cleanup_api import init_cleanup_api

@@ -39,6 +39,7 @@ class DatabaseConfig:
     DATABASE_DIR = PROJECT_ROOT / "data"
     SQLITE_DIR = PROJECT_ROOT / "meta" / "sqlite"
     VECTOR_DIR = PROJECT_ROOT / "meta" / "vector"
+    IMAGES_DIR = PROJECT_ROOT / "meta" / "images"
     
     # SQLite数据库路径
     SQLITE_DB_PATH = SQLITE_DIR / "documents.db"
@@ -46,6 +47,8 @@ class DatabaseConfig:
     # Faiss向量数据库路径
     VECTOR_INDEX_PATH = VECTOR_DIR / "vector_index.faiss"
     VECTOR_METADATA_PATH = VECTOR_DIR / "vector_metadata.json"
+    IMAGE_VECTOR_INDEX_PATH = VECTOR_DIR / "image_vector_index.faiss"
+    IMAGE_VECTOR_METADATA_PATH = VECTOR_DIR / "image_vector_metadata.json"
     
     @classmethod
     def ensure_directories(cls):
@@ -53,3 +56,5 @@ class DatabaseConfig:
         cls.DATABASE_DIR.mkdir(parents=True, exist_ok=True)
         cls.SQLITE_DIR.mkdir(parents=True, exist_ok=True)
         cls.VECTOR_DIR.mkdir(parents=True, exist_ok=True)
+        cls.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+

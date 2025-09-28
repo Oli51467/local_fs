@@ -57,6 +57,31 @@ class SQLiteManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_document ON document_chunks(document_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_vector ON document_chunks(vector_id)")
+
+            # 创建文档图片表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS document_images (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id INTEGER NOT NULL,
+                    chunk_index INTEGER,
+                    line_number INTEGER,
+                    image_name TEXT NOT NULL,
+                    image_format TEXT NOT NULL,
+                    image_size INTEGER NOT NULL,
+                    width INTEGER,
+                    height INTEGER,
+                    storage_path TEXT NOT NULL,
+                    storage_folder TEXT NOT NULL,
+                    source_path TEXT,
+                    upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    vector_id INTEGER,
+                    FOREIGN KEY (document_id) REFERENCES documents (id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_document ON document_images(document_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_vector ON document_images(vector_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_folder ON document_images(storage_folder)")
             
             conn.commit()
     
@@ -90,6 +115,59 @@ class SQLiteManager:
                 (document_id, chunk_index, content, vector_id)
                 VALUES (?, ?, ?, ?)
             """, (document_id, chunk_index, content, vector_id))
+            return cursor.lastrowid
+
+    def insert_document_image(
+        self,
+        document_id: int,
+        *,
+        chunk_index: Optional[int],
+        line_number: Optional[int],
+        image_name: str,
+        image_format: str,
+        image_size: int,
+        width: Optional[int],
+        height: Optional[int],
+        storage_path: str,
+        storage_folder: str,
+        source_path: Optional[str],
+        vector_id: Optional[int]
+    ) -> int:
+        """插入文档图片元数据记录"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO document_images (
+                    document_id,
+                    chunk_index,
+                    line_number,
+                    image_name,
+                    image_format,
+                    image_size,
+                    width,
+                    height,
+                    storage_path,
+                    storage_folder,
+                    source_path,
+                    vector_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    document_id,
+                    chunk_index,
+                    line_number,
+                    image_name,
+                    image_format,
+                    image_size,
+                    width,
+                    height,
+                    storage_path,
+                    storage_folder,
+                    source_path,
+                    vector_id,
+                ),
+            )
             return cursor.lastrowid
     
     def get_documents_by_filename(self, filename: str) -> List[Dict]:
@@ -530,6 +608,28 @@ class SQLiteManager:
             logger.error(f"获取文件路径的向量ID失败: {str(e)}")
             return []
 
+    def get_image_vector_ids_by_path(self, file_path: str) -> List[int]:
+        """根据文件路径获取所有相关的图片向量ID"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+
+                cursor.execute("SELECT id FROM documents WHERE file_path = ?", (file_path,))
+                result = cursor.fetchone()
+                if not result:
+                    return []
+
+                doc_id = result[0]
+                cursor.execute(
+                    "SELECT vector_id FROM document_images WHERE document_id = ? AND vector_id IS NOT NULL",
+                    (doc_id,),
+                )
+                return [row[0] for row in cursor.fetchall()]
+
+        except Exception as e:
+            logger.error(f"获取文件路径的图片向量ID失败: {str(e)}")
+            return []
+
     def get_vector_ids_by_path_prefix(self, folder_path: str) -> List[int]:
         """根据文件夹路径前缀获取所有相关的向量ID"""
         try:
@@ -555,6 +655,78 @@ class SQLiteManager:
         except Exception as e:
             logger.error(f"获取文件夹路径前缀的向量ID失败: {str(e)}")
             return []
+
+    def get_image_vector_ids_by_path_prefix(self, folder_path: str) -> List[int]:
+        """根据文件夹路径前缀获取所有相关的图片向量ID"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+
+                if not folder_path.endswith('/'):
+                    folder_path += '/'
+
+                cursor.execute(
+                    """
+                    SELECT di.vector_id
+                    FROM documents d
+                    JOIN document_images di ON d.id = di.document_id
+                    WHERE d.file_path LIKE ? AND di.vector_id IS NOT NULL
+                    """,
+                    (f"{folder_path}%",),
+                )
+
+                return [row[0] for row in cursor.fetchall()]
+
+        except Exception as e:
+            logger.error(f"获取文件夹路径前缀的图片向量ID失败: {str(e)}")
+            return []
+
+    def get_image_storage_folders_by_path(self, file_path: str) -> List[str]:
+        """获取指定文件的图片存储文件夹路径列表"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+
+                cursor.execute("SELECT id FROM documents WHERE file_path = ?", (file_path,))
+                result = cursor.fetchone()
+                if not result:
+                    return []
+
+                doc_id = result[0]
+                cursor.execute(
+                    "SELECT DISTINCT storage_folder FROM document_images WHERE document_id = ?",
+                    (doc_id,),
+                )
+                return [row[0] for row in cursor.fetchall() if row[0]]
+
+        except Exception as e:
+            logger.error(f"获取文件图片存储文件夹失败: {str(e)}")
+            return []
+
+    def get_image_storage_folders_by_path_prefix(self, folder_path: str) -> List[str]:
+        """获取指定文件夹路径前缀对应的所有图片存储文件夹"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+
+                if not folder_path.endswith('/'):
+                    folder_path += '/'
+
+                cursor.execute(
+                    """
+                    SELECT DISTINCT di.storage_folder
+                    FROM documents d
+                    JOIN document_images di ON d.id = di.document_id
+                    WHERE d.file_path LIKE ?
+                    """,
+                    (f"{folder_path}%",),
+                )
+
+                return [row[0] for row in cursor.fetchall() if row[0]]
+
+        except Exception as e:
+            logger.error(f"获取文件夹图片存储文件夹失败: {str(e)}")
+            return []
     
     def cleanup_all(self):
         """清理所有数据"""
@@ -564,10 +736,13 @@ class SQLiteManager:
                 
                 # 删除所有数据（保留表结构）
                 cursor.execute("DELETE FROM document_chunks")
+                cursor.execute("DELETE FROM document_images")
                 cursor.execute("DELETE FROM documents")
                 
                 # 重置自增ID
-                cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('documents', 'document_chunks')")
+                cursor.execute(
+                    "DELETE FROM sqlite_sequence WHERE name IN ('documents', 'document_chunks', 'document_images')"
+                )
                 
                 conn.commit()
                 logger.info("SQLite数据库清理完成")
