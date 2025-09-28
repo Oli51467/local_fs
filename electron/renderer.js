@@ -27,6 +27,11 @@ let searchResultsContainer = null;
 let searchUIInitialized = false;
 let globalLoadingOverlay = null;
 
+const SEARCH_HISTORY_STORAGE_KEY = 'fs_search_history';
+const SEARCH_HISTORY_LIMIT = 5;
+let searchHistory = [];
+let searchHistoryContainer = null;
+
 // initFileViewer 函数已移至 ExplorerModule
 
 // 渲染SVG图标
@@ -38,6 +43,99 @@ function renderIcons() {
   document.getElementById('database-icon').innerHTML = icons.database;
   // 资源管理器相关图标渲染已移至资源管理器模块
 }
+
+function loadSearchHistory() {
+  try {
+    const stored = window.localStorage ? window.localStorage.getItem(SEARCH_HISTORY_STORAGE_KEY) : null;
+    if (!stored) {
+      searchHistory = [];
+      return;
+    }
+    const parsed = JSON.parse(stored);
+    if (Array.isArray(parsed)) {
+      searchHistory = parsed
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter((item) => item)
+        .slice(0, SEARCH_HISTORY_LIMIT);
+    } else {
+      searchHistory = [];
+    }
+  } catch (error) {
+    console.warn('加载搜索历史失败:', error);
+    searchHistory = [];
+  }
+}
+
+function saveSearchHistory() {
+  try {
+    if (window.localStorage) {
+      window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(searchHistory));
+    }
+  } catch (error) {
+    console.warn('保存搜索历史失败:', error);
+  }
+}
+
+function recordSearchHistory(query) {
+  const normalized = (query || '').trim();
+  if (!normalized) {
+    return;
+  }
+
+  searchHistory = searchHistory.filter((item) => item !== normalized);
+  searchHistory.unshift(normalized);
+  if (searchHistory.length > SEARCH_HISTORY_LIMIT) {
+    searchHistory = searchHistory.slice(0, SEARCH_HISTORY_LIMIT);
+  }
+
+  saveSearchHistory();
+  renderSearchHistory();
+}
+
+function renderSearchHistory() {
+  if (!searchHistoryContainer) {
+    searchHistoryContainer = document.getElementById('search-history');
+  }
+
+  if (!searchHistoryContainer) {
+    return;
+  }
+
+  searchHistoryContainer.innerHTML = '';
+
+  if (!searchHistory.length) {
+    searchHistoryContainer.style.display = 'none';
+    return;
+  }
+
+  searchHistoryContainer.style.display = 'block';
+
+  const title = document.createElement('div');
+  title.className = 'search-history-title';
+  title.textContent = '历史搜索';
+  searchHistoryContainer.appendChild(title);
+
+  const list = document.createElement('div');
+  list.className = 'search-history-list';
+  searchHistory.forEach((term) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'search-history-item';
+    item.textContent = term;
+    item.addEventListener('click', () => {
+      const searchInput = document.getElementById('search-input');
+      if (searchInput) {
+        searchInput.value = term;
+      }
+      searchState.query = term;
+      performSearch(term);
+    });
+    list.appendChild(item);
+  });
+  searchHistoryContainer.appendChild(list);
+}
+
+loadSearchHistory();
 
 // 主题设置
 // 拖拽相关CSS样式
@@ -521,6 +619,10 @@ function initializeSearchUI() {
   searchResultsContainer.id = 'search-results-container';
   searchResultsContainer.style.display = 'none';
   fileContentEl.appendChild(searchResultsContainer);
+  if (!searchHistoryContainer) {
+    searchHistoryContainer = document.getElementById('search-history');
+  }
+  renderSearchHistory();
 
   searchUIInitialized = true;
   renderSearchResults();
@@ -699,6 +801,8 @@ async function performSearch(rawQuery) {
     renderSearchResults();
     return;
   }
+
+  recordSearchHistory(normalizedQuery);
 
   searchState.loading = true;
   searchState.error = null;
@@ -978,7 +1082,7 @@ async function highlightSearchMatch(filePath, result) {
     if (!textarea) {
       return false;
     }
-    return highlightTextareaMatch(textarea, snippet, query);
+    return highlightTextareaMatch(textarea, snippet, query, result);
   }
 
   if (container.classList.contains('markdown-content') || displayMode === 'markdown') {
@@ -986,20 +1090,20 @@ async function highlightSearchMatch(filePath, result) {
     if (!textarea) {
       return false;
     }
-    return highlightTextareaMatch(textarea, snippet, query);
+    return highlightTextareaMatch(textarea, snippet, query, result);
   }
 
   // 其他文件类型暂不支持自动定位
   return false;
 }
 
-function highlightTextareaMatch(textarea, snippet, query) {
+function highlightTextareaMatch(textarea, snippet, query, result) {
   if (!textarea) {
     return false;
   }
 
   const value = textarea.value || '';
-  const match = findMatchPositionInText(value, snippet, query);
+  const match = findMatchPositionInText(value, snippet, query, result);
   if (!match) {
     return false;
   }
@@ -1035,12 +1139,12 @@ function highlightTextareaMatch(textarea, snippet, query) {
   return true;
 }
 
-function findMatchPositionInText(text, snippet, query) {
+function findMatchPositionInText(text, snippet, query, result) {
   if (!text) {
     return null;
   }
 
-  const candidates = collectSearchCandidates(snippet, query);
+  const candidates = collectSearchCandidates(snippet, query, result);
   if (!candidates.length) {
     return null;
   }
@@ -1052,22 +1156,27 @@ function findMatchPositionInText(text, snippet, query) {
       continue;
     }
 
-    // 尝试原始匹配
     let index = text.indexOf(candidate);
     if (index !== -1) {
-      return { start: index, end: index + candidate.length, matchedText: candidate };
+      return {
+        start: index,
+        end: index + candidate.length,
+        matchedText: text.slice(index, index + candidate.length)
+      };
     }
 
-    // 尝试去除首尾空白
     const trimmed = candidate.trim();
     if (trimmed && trimmed !== candidate) {
       index = text.indexOf(trimmed);
       if (index !== -1) {
-        return { start: index, end: index + trimmed.length, matchedText: trimmed };
+        return {
+          start: index,
+          end: index + trimmed.length,
+          matchedText: text.slice(index, index + trimmed.length)
+        };
       }
     }
 
-    // 忽略大小写匹配
     const lowerCandidate = candidate.toLowerCase();
     index = lowerText.indexOf(lowerCandidate);
     if (index !== -1) {
@@ -1089,7 +1198,18 @@ function findMatchPositionInText(text, snippet, query) {
       }
     }
 
-    // 正则匹配：忽略多余空白并支持大小写
+    const relaxed = trimmed.replace(/\s+/g, ' ').trim();
+    if (relaxed && relaxed.length >= 2) {
+      index = lowerText.indexOf(relaxed.toLowerCase());
+      if (index !== -1) {
+        return {
+          start: index,
+          end: index + relaxed.length,
+          matchedText: text.slice(index, index + relaxed.length)
+        };
+      }
+    }
+
     try {
       const escaped = candidate.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
       const whitespaceRelaxed = escaped.replace(/\s+/g, '\\s+');
@@ -1110,57 +1230,137 @@ function findMatchPositionInText(text, snippet, query) {
   return null;
 }
 
-function collectSearchCandidates(snippet, query) {
-  const candidates = [];
+function generateCandidateVariants(rawValue) {
+  const results = [];
   const seen = new Set();
 
-  const pushCandidate = (value) => {
-    if (!value) {
+  const pushVariant = (text) => {
+    if (!text) {
       return;
     }
-    const raw = String(value);
-    const key = raw.trim().toLowerCase();
-    if (!key || seen.has(key)) {
+    const unified = String(text).replace(/\u2026/g, '...');
+    const trimmed = unified.trim();
+    const normalized = trimmed.replace(/\s+/g, ' ').trim();
+    const candidate = normalized || trimmed;
+    if (!candidate || candidate.length < 2) {
+      return;
+    }
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    candidates.push(raw);
+    results.push(candidate);
+  };
+
+  const base = String(rawValue || '');
+  if (!base) {
+    return results;
+  }
+
+  const unifiedBase = base.replace(/\u2026/g, '...');
+  const trimmed = unifiedBase.trim();
+  const leadingStripped = trimmed.replace(/^\.{3,}/, '').trim();
+  const trailingStripped = leadingStripped.replace(/\.{3,}$/, '').trim();
+  const withoutEllipsis = trailingStripped.replace(/\.{3,}/g, ' ').trim();
+  const collapsedWhitespace = withoutEllipsis.replace(/\s+/g, ' ').trim();
+  const punctuationSimplified = collapsedWhitespace.replace(/[^0-9A-Za-z\u4e00-\u9fa5\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  pushVariant(unifiedBase);
+  pushVariant(trimmed);
+  pushVariant(leadingStripped);
+  pushVariant(trailingStripped);
+  pushVariant(withoutEllipsis);
+  pushVariant(collapsedWhitespace);
+  pushVariant(punctuationSimplified);
+
+  if (trimmed.length > 16) {
+    pushVariant(trimmed.slice(0, 160));
+    pushVariant(trimmed.slice(-160));
+  }
+
+  return results;
+}
+
+function collectSearchCandidates(snippet, query, result) {
+  const seen = new Set();
+  const candidates = [];
+
+  const addCandidate = (value, options = {}) => {
+    if (!value) {
+      return;
+    }
+
+    const variants = generateCandidateVariants(value);
+    if (!variants.length) {
+      return;
+    }
+
+    if (options.priority) {
+      for (let i = variants.length - 1; i >= 0; i -= 1) {
+        const variant = variants[i];
+        const key = variant.toLowerCase();
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        candidates.unshift(variant);
+      }
+      return;
+    }
+
+    variants.forEach((variant) => {
+      const key = variant.toLowerCase();
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      candidates.push(variant);
+    });
   };
 
   if (snippet) {
-    pushCandidate(snippet);
-    const normalizedNewlines = snippet.replace(/\r\n/g, '\n');
-    if (normalizedNewlines !== snippet) {
-      pushCandidate(normalizedNewlines);
-    }
-    const trimmed = snippet.trim();
-    if (trimmed !== snippet) {
-      pushCandidate(trimmed);
-    }
-    const collapsed = snippet.replace(/[\t\f\v]+/g, ' ').replace(/\s+/g, ' ').trim();
-    if (collapsed && collapsed !== trimmed) {
-      pushCandidate(collapsed);
-    }
-    snippet
+    addCandidate(snippet, { priority: true });
+
+    const unified = snippet
+      .replace(/\u2026/g, '...')
+      .replace(/^\.{3,}/, '')
+      .replace(/\.{3,}$/, '');
+
+    unified
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line.length >= 3)
       .sort((a, b) => b.length - a.length)
-      .forEach(pushCandidate);
+      .forEach((line) => addCandidate(line));
+
+    if (typeof result?.match_position === 'number') {
+      const radius = Math.max(40, ((query || '').length || 0) + 30);
+      const start = Math.max(0, result.match_position - radius);
+      const end = Math.min(unified.length, result.match_position + radius);
+      if (end > start) {
+        addCandidate(unified.slice(start, end), { priority: true });
+      }
+    }
+
+    if (unified.length > 200) {
+      addCandidate(unified.slice(0, 160));
+      addCandidate(unified.slice(-160));
+    }
   }
 
   if (query) {
-    pushCandidate(query);
+    addCandidate(query, { priority: true });
     const trimmedQuery = query.trim();
-    if (trimmedQuery !== query) {
-      pushCandidate(trimmedQuery);
-    }
     trimmedQuery
       .split(/\s+/)
       .map((part) => part.trim())
       .filter((part) => part.length >= 2)
-      .sort((a, b) => b.length - a.length)
-      .forEach(pushCandidate);
+      .forEach((part) => addCandidate(part, { priority: true }));
+  }
+
+  if (!candidates.length && snippet) {
+    addCandidate(snippet);
   }
 
   return candidates;
@@ -1194,6 +1394,7 @@ function applyTextareaHighlight(textarea, overlay, startIndex, endIndex) {
   textarea.dataset.searchHighlight = JSON.stringify({ startIndex, endIndex });
   positionTextareaHighlightOverlay(textarea, overlay);
   overlay.style.opacity = '1';
+  requestAnimationFrame(() => positionTextareaHighlightOverlay(textarea, overlay));
 
   if (!textarea.dataset.searchHighlightScrollHandlerAttached) {
     const handler = () => positionTextareaHighlightOverlay(textarea, overlay);
@@ -1276,6 +1477,11 @@ function scrollTextareaToLine(textarea, index) {
   const lineCount = beforeText ? beforeText.split(/\r\n|\r|\n/).length - 1 : 0;
   const targetTop = Math.max(0, lineCount * lineHeight - textarea.clientHeight / 2);
   textarea.scrollTop = targetTop;
+  if (typeof textarea.scrollTo === 'function') {
+    requestAnimationFrame(() => {
+      textarea.scrollTo({ top: targetTop, behavior: 'smooth' });
+    });
+  }
 }
 
 function flashTextareaForSearch(textarea) {
@@ -3082,6 +3288,7 @@ function switchToSearchMode() {
   
   initializeSearchUI();
   showSearchResultsPane();
+  renderSearchHistory();
 
   // 聚焦搜索输入框
   const searchInput = document.getElementById('search-input');
@@ -3163,6 +3370,10 @@ function bindEventListeners() {
 
     searchInput.addEventListener('input', (e) => {
       searchState.query = e.target.value;
+    });
+
+    searchInput.addEventListener('focus', () => {
+      renderSearchHistory();
     });
   }
   

@@ -186,6 +186,55 @@
   margin-bottom: 10px;
 }
 
+#search-history {
+  display: none;
+  margin-bottom: 12px;
+  padding: 8px 4px 0;
+  border-top: 1px solid var(--tree-border);
+}
+
+.search-history-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+}
+
+.search-history-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.search-history-item {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background-color: rgba(148, 163, 184, 0.12);
+  color: var(--text-color);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+}
+
+.search-history-item:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background-color: rgba(37, 99, 235, 0.12);
+}
+
+.dark-mode .search-history-item {
+  border-color: rgba(71, 85, 105, 0.6);
+  background-color: rgba(71, 85, 105, 0.3);
+}
+
+.dark-mode .search-history-item:hover {
+  border-color: rgba(96, 165, 250, 0.9);
+  color: rgba(148, 197, 255, 0.95);
+  background-color: rgba(37, 99, 235, 0.22);
+}
+
 #search-input {
   width: 100%;
   padding: 4px 12px;
