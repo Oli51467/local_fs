@@ -83,6 +83,31 @@ class ImageFaissManager:
         vector_ids = self.add_vectors(array, [metadata])
         return vector_ids[0]
 
+    def search_vectors(self, query_vectors: np.ndarray, k: int = 10) -> List[List[Dict]]:
+        if self.index is None:
+            raise RuntimeError("Faiss index is not initialized")
+        if query_vectors.ndim != 2:
+            raise ValueError("Expected 2D array for query vectors")
+        if query_vectors.shape[1] != self.dimension:
+            raise ValueError(f"向量维度不匹配，期望 {self.dimension}，实际 {query_vectors.shape[1]}")
+
+        faiss.normalize_L2(query_vectors)
+        distances, indices = self.index.search(query_vectors, k)
+
+        all_results: List[List[Dict]] = []
+        for row_idx, row in enumerate(indices):
+            results: List[Dict] = []
+            for col_idx, vector_index in enumerate(row):
+                if vector_index == -1:
+                    continue
+                if vector_index >= len(self.metadata):
+                    continue
+                metadata_entry = self.metadata[vector_index].copy()
+                metadata_entry['score'] = float(distances[row_idx][col_idx])
+                results.append(metadata_entry)
+            all_results.append(results)
+        return all_results
+
     def delete_vectors_by_ids(self, vector_ids: List[int]) -> int:
         if not vector_ids:
             return 0

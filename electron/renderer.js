@@ -7,25 +7,41 @@ const fileContentEl = document.getElementById('file-content');
 let fileViewer = null;
 
 // 搜索结果状态
+const SEARCH_MODES = {
+  TEXT: 'text',
+  IMAGE: 'image'
+};
+
+const DEFAULT_IMAGE_CONFIDENCE = 0.35;
+const SEARCH_HISTORY_MAX_LABEL = 60;
+
 const searchState = {
   query: '',
   loading: false,
   error: null,
+  mode: SEARCH_MODES.TEXT,
   exact: [],
   semantic: [],
   combined: [],
+  images: [],
   meta: {
     exactTotal: 0,
     semanticTotal: 0,
     combinedTotal: 0,
     bm25sPerformed: false,
     rerankPerformed: false
+  },
+  imageMeta: {
+    total: 0,
+    threshold: 0.6
   }
 };
 
 let searchResultsContainer = null;
 let searchUIInitialized = false;
 let globalLoadingOverlay = null;
+let searchModeToggle = null;
+let searchModeButtons = [];
 
 const SEARCH_HISTORY_STORAGE_KEY = 'fs_search_history';
 const SEARCH_HISTORY_LIMIT = 5;
@@ -121,7 +137,11 @@ function renderSearchHistory() {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'search-history-item';
-    item.textContent = term;
+    const display = term.length > SEARCH_HISTORY_MAX_LABEL
+      ? `${term.slice(0, SEARCH_HISTORY_MAX_LABEL)}…`
+      : term;
+    item.textContent = display;
+    item.title = term;
     item.addEventListener('click', () => {
       const searchInput = document.getElementById('search-input');
       if (searchInput) {
@@ -570,6 +590,83 @@ function initializeSearchUI() {
         white-space: pre-wrap;
       }
 
+      .search-card-image-preview {
+        position: relative;
+        border-radius: 8px;
+        overflow: hidden;
+        background: rgba(148, 163, 184, 0.24);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px;
+        flex: 0 0 140px;
+        max-height: 200px;
+      }
+
+      .search-card-image-preview img {
+        display: block;
+        max-width: 100%;
+        max-height: 188px;
+        width: auto;
+        height: auto;
+        object-fit: contain;
+        background: #0f172a;
+        border-radius: 6px;
+      }
+
+      .search-result-card[data-result-type="image"] {
+        padding: 14px;
+      }
+
+      .search-card-image-layout {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+      }
+
+      .search-card-image-details {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .search-card-image-details .search-card-path {
+        white-space: normal;
+        word-break: break-word;
+      }
+
+      .search-card-image-note {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .search-card-meta {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 6px 12px;
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .search-result-card[data-result-type="image"] .search-card-meta {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      }
+
+      .search-card-meta-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .search-card-meta-row span:first-child {
+        font-weight: 500;
+        color: var(--text-color);
+      }
+
       .search-card-snippet mark {
         background: rgba(59, 130, 246, 0.2);
         color: inherit;
@@ -581,6 +678,10 @@ function initializeSearchUI() {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
+      }
+
+      .search-result-card[data-result-type="image"] .search-card-metrics {
+        justify-content: flex-start;
       }
 
       .search-card-chip {
@@ -607,6 +708,11 @@ function initializeSearchUI() {
         border-color: rgba(59, 130, 246, 0.5);
       }
 
+      .search-card-chip[data-variant="image"] {
+        background: rgba(251, 191, 36, 0.2);
+        border-color: rgba(245, 158, 11, 0.45);
+      }
+
       .search-card-chip[data-variant="source"] {
         background: rgba(99, 102, 241, 0.18);
         border-color: rgba(99, 102, 241, 0.35);
@@ -623,6 +729,20 @@ function initializeSearchUI() {
     searchHistoryContainer = document.getElementById('search-history');
   }
   renderSearchHistory();
+
+  if (!searchModeToggle) {
+    searchModeToggle = document.getElementById('search-mode-toggle');
+    if (searchModeToggle) {
+      searchModeButtons = Array.from(searchModeToggle.querySelectorAll('.search-mode-btn'));
+      searchModeButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const mode = button.dataset.mode === 'image' ? SEARCH_MODES.IMAGE : SEARCH_MODES.TEXT;
+          setSearchMode(mode, { triggerSearch: Boolean(searchState.query) });
+        });
+      });
+      updateSearchModeUI();
+    }
+  }
 
   searchUIInitialized = true;
   renderSearchResults();
@@ -723,9 +843,17 @@ function renderSearchResults() {
     const status = document.createElement('div');
     status.className = 'search-result-status';
     const title = document.createElement('strong');
-    title.textContent = `未找到与 “${searchState.query}” 匹配的内容`;
+    if (searchState.mode === SEARCH_MODES.IMAGE) {
+      title.textContent = `未检索到与 “${searchState.query}” 相关的图片`;
+    } else {
+      title.textContent = `未找到与 “${searchState.query}” 匹配的内容`;
+    }
     const message = document.createElement('span');
-    message.textContent = '尝试调整关键词或缩短查询内容。';
+    if (searchState.mode === SEARCH_MODES.IMAGE) {
+      message.textContent = '尝试描述图片的场景、主体或特征，或换一个关键词。';
+    } else {
+      message.textContent = '尝试调整关键词或缩短查询内容。';
+    }
     status.appendChild(title);
     status.appendChild(message);
     searchResultsContainer.appendChild(status);
@@ -743,9 +871,22 @@ function renderSearchResults() {
   totals.textContent = `匹配 ${searchState.meta.combinedTotal || combinedResults.length} 条记录`;
   summary.appendChild(totals);
 
-  const detail = document.createElement('span');
-  detail.textContent = `字符 ${searchState.meta.exactTotal || searchState.exact.length} · 语义 ${searchState.meta.semanticTotal || searchState.semantic.length}`;
-  summary.appendChild(detail);
+  if (searchState.mode === SEARCH_MODES.IMAGE) {
+    const detail = document.createElement('span');
+    const totalImages = searchState.imageMeta.total || combinedResults.length;
+    detail.textContent = `图片 ${totalImages}`;
+    summary.appendChild(detail);
+  } else {
+    const detail = document.createElement('span');
+    detail.textContent = `字符 ${searchState.meta.exactTotal || searchState.exact.length} · 语义 ${searchState.meta.semanticTotal || searchState.semantic.length}`;
+    summary.appendChild(detail);
+
+    if (searchState.imageMeta.total) {
+      const imageDetail = document.createElement('span');
+      imageDetail.textContent = `图片 ${searchState.imageMeta.total}`;
+      summary.appendChild(imageDetail);
+    }
+  }
 
   if (searchState.meta.bm25sPerformed) {
     const bm25Chip = document.createElement('span');
@@ -763,6 +904,14 @@ function renderSearchResults() {
     summary.appendChild(rerankChip);
   }
 
+  if (searchState.mode === SEARCH_MODES.IMAGE) {
+    const imageChip = document.createElement('span');
+    imageChip.className = 'search-card-chip';
+    imageChip.dataset.variant = 'semantic';
+    imageChip.textContent = 'CLIP 图片检索';
+    summary.appendChild(imageChip);
+  }
+
   searchResultsContainer.appendChild(summary);
 
   combinedResults.forEach((result, index) => {
@@ -772,6 +921,66 @@ function renderSearchResults() {
   });
 
   searchResultsContainer.scrollTop = 0;
+}
+
+function updateSearchModeUI() {
+  if (!Array.isArray(searchModeButtons) || !searchModeButtons.length) {
+    return;
+  }
+  searchModeButtons.forEach((button) => {
+    const mode = button.dataset.mode === 'image' ? SEARCH_MODES.IMAGE : SEARCH_MODES.TEXT;
+    button.classList.toggle('active', searchState.mode === mode);
+  });
+
+  const searchInput = document.getElementById('search-input');
+  if (searchInput) {
+    searchInput.placeholder = searchState.mode === SEARCH_MODES.IMAGE
+      ? '输入图片描述或场景，检索相关图片'
+      : '搜索文件内容';
+  }
+}
+
+function resetSearchResultsState() {
+  searchState.loading = false;
+  searchState.error = null;
+  searchState.exact = [];
+  searchState.semantic = [];
+  searchState.combined = [];
+  searchState.images = [];
+  searchState.meta = {
+    exactTotal: 0,
+    semanticTotal: 0,
+    combinedTotal: 0,
+    bm25sPerformed: false,
+    rerankPerformed: false
+  };
+  searchState.imageMeta = {
+    total: 0,
+    threshold: DEFAULT_IMAGE_CONFIDENCE
+  };
+}
+
+function setSearchMode(mode, options = {}) {
+  const normalizedMode = mode === SEARCH_MODES.IMAGE ? SEARCH_MODES.IMAGE : SEARCH_MODES.TEXT;
+  const triggerSearch = Boolean(options.triggerSearch);
+  const forceRender = Boolean(options.forceRender);
+
+  if (searchState.mode === normalizedMode && !forceRender) {
+    updateSearchModeUI();
+    if (forceRender) {
+      renderSearchResults();
+    }
+    return;
+  }
+
+  searchState.mode = normalizedMode;
+  resetSearchResultsState();
+  updateSearchModeUI();
+  renderSearchResults();
+
+  if (triggerSearch && searchState.query) {
+    performSearch(searchState.query);
+  }
 }
 
 async function performSearch(rawQuery) {
@@ -786,18 +995,8 @@ async function performSearch(rawQuery) {
   searchState.query = normalizedQuery;
 
   if (!normalizedQuery) {
-    searchState.loading = false;
-    searchState.error = null;
-    searchState.exact = [];
-    searchState.semantic = [];
-    searchState.combined = [];
-    searchState.meta = {
-      exactTotal: 0,
-      semanticTotal: 0,
-      combinedTotal: 0,
-      bm25sPerformed: false,
-      rerankPerformed: false
-    };
+    resetSearchResultsState();
+    searchState.query = '';
     renderSearchResults();
     return;
   }
@@ -806,10 +1005,30 @@ async function performSearch(rawQuery) {
 
   searchState.loading = true;
   searchState.error = null;
+  searchState.exact = [];
+  searchState.semantic = [];
+  searchState.combined = [];
+  searchState.images = [];
+  searchState.meta = {
+    exactTotal: 0,
+    semanticTotal: 0,
+    combinedTotal: 0,
+    bm25sPerformed: false,
+    rerankPerformed: false
+  };
+  searchState.imageMeta = {
+    total: 0,
+    threshold: DEFAULT_IMAGE_CONFIDENCE
+  };
   renderSearchResults();
 
   try {
-    const response = await fetch('http://localhost:8000/api/faiss/search', {
+    const isImageMode = searchState.mode === SEARCH_MODES.IMAGE;
+    const endpoint = isImageMode
+      ? 'http://localhost:8000/api/faiss/search-images'
+      : 'http://localhost:8000/api/faiss/search';
+
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -828,20 +1047,50 @@ async function performSearch(rawQuery) {
 
     const data = await response.json();
 
-    const exactResults = Array.isArray(data?.exact_match?.results) ? data.exact_match.results : [];
-    const semanticResults = Array.isArray(data?.semantic_match?.results) ? data.semantic_match.results : [];
-    const combinedResults = Array.isArray(data?.combined?.results) ? data.combined.results : [...exactResults, ...semanticResults];
+    if (isImageMode) {
+      const imageResults = Array.isArray(data?.image_match?.results)
+        ? data.image_match.results
+        : Array.isArray(data?.results)
+          ? data.results
+          : [];
 
-    searchState.exact = exactResults;
-    searchState.semantic = semanticResults;
-    searchState.combined = combinedResults;
-    searchState.meta = {
-      exactTotal: data?.exact_match?.total ?? exactResults.length,
-      semanticTotal: data?.semantic_match?.total ?? semanticResults.length,
-      combinedTotal: data?.combined?.total ?? combinedResults.length,
-      bm25sPerformed: Boolean(data?.bm25s_performed ?? data?.semantic_match?.bm25s_performed),
-      rerankPerformed: Boolean(data?.rerank_performed ?? data?.semantic_match?.rerank_performed)
-    };
+      searchState.exact = [];
+      searchState.semantic = [];
+      searchState.combined = imageResults;
+      searchState.images = imageResults;
+      searchState.meta = {
+        exactTotal: 0,
+        semanticTotal: 0,
+        combinedTotal: data?.total ?? imageResults.length,
+        bm25sPerformed: false,
+        rerankPerformed: false
+      };
+      searchState.imageMeta = {
+        total: data?.image_match?.total ?? imageResults.length,
+        threshold: data?.image_match?.confidence_threshold ?? DEFAULT_IMAGE_CONFIDENCE
+      };
+    } else {
+      const exactResults = Array.isArray(data?.exact_match?.results) ? data.exact_match.results : [];
+      const semanticResults = Array.isArray(data?.semantic_match?.results) ? data.semantic_match.results : [];
+      const combinedResults = Array.isArray(data?.combined?.results) ? data.combined.results : [...exactResults, ...semanticResults];
+      const imageResults = Array.isArray(data?.image_match?.results) ? data.image_match.results : [];
+
+      searchState.exact = exactResults;
+      searchState.semantic = semanticResults;
+      searchState.combined = combinedResults;
+      searchState.images = imageResults;
+      searchState.meta = {
+        exactTotal: data?.exact_match?.total ?? exactResults.length,
+        semanticTotal: data?.semantic_match?.total ?? semanticResults.length,
+        combinedTotal: data?.combined?.total ?? combinedResults.length,
+        bm25sPerformed: Boolean(data?.bm25s_performed ?? data?.semantic_match?.bm25s_performed),
+        rerankPerformed: Boolean(data?.rerank_performed ?? data?.semantic_match?.rerank_performed)
+      };
+      searchState.imageMeta = {
+        total: data?.image_match?.total ?? imageResults.length,
+        threshold: data?.image_match?.confidence_threshold ?? DEFAULT_IMAGE_CONFIDENCE
+      };
+    }
   } catch (error) {
     console.error('搜索失败:', error);
     searchState.error = error.message || '搜索过程中发生错误';
@@ -856,11 +1105,20 @@ function getPrimaryVariant(result) {
     return 'semantic';
   }
   if (Array.isArray(result.sources)) {
-    return result.sources.includes('exact') ? 'exact' : 'semantic';
+    if (result.sources.includes('exact')) {
+      return 'exact';
+    }
+    if (result.sources.includes('image')) {
+      return 'image';
+    }
+    return 'semantic';
   }
   const source = result.source || '';
   if (source.includes('exact')) {
     return 'exact';
+  }
+  if (source.includes('image')) {
+    return 'image';
   }
   return 'semantic';
 }
@@ -869,13 +1127,22 @@ function buildSearchCard(result, variant, index) {
   const card = document.createElement('div');
   card.className = 'search-result-card';
   card.dataset.variant = variant;
+  if (result?.result_type) {
+    card.dataset.resultType = result.result_type;
+  }
+
+  const isImageResult = (result?.result_type === 'image') || (Array.isArray(result?.sources) && result.sources.includes('image'));
 
   const header = document.createElement('div');
   header.className = 'search-card-header';
 
   const title = document.createElement('h4');
   title.className = 'search-card-title';
-  title.textContent = result.filename || result.file_name || `结果 ${index + 1}`;
+  if (isImageResult) {
+    title.textContent = result.image_name || result.filename || `图片结果 ${index + 1}`;
+  } else {
+    title.textContent = result.filename || result.file_name || `结果 ${index + 1}`;
+  }
   header.appendChild(title);
 
   const sourceChip = document.createElement('span');
@@ -887,24 +1154,65 @@ function buildSearchCard(result, variant, index) {
 
   card.appendChild(header);
 
-  const path = document.createElement('div');
-  path.className = 'search-card-path';
-  path.textContent = result.file_path || result.path || '(未知路径)';
-  card.appendChild(path);
-
-  const snippet = document.createElement('div');
-  snippet.className = 'search-card-snippet';
-  const snippetContent = getResultSnippet(result);
-  if (snippetContent && snippetContent.html) {
-    snippet.innerHTML = snippetContent.html;
-  } else {
-    snippet.textContent = (snippetContent && snippetContent.text) || '（暂无内容预览）';
-  }
-  card.appendChild(snippet);
-
   const metrics = buildMetricsChips(result);
-  if (metrics) {
-    card.appendChild(metrics);
+
+  if (isImageResult) {
+    card.classList.add('search-result-card-image');
+
+    const layout = document.createElement('div');
+    layout.className = 'search-card-image-layout';
+
+    const preview = document.createElement('div');
+    preview.className = 'search-card-image-preview';
+    const img = document.createElement('img');
+    const imgSrc = buildImagePreviewSrc(result);
+    if (imgSrc) {
+      img.src = imgSrc;
+    } else {
+      img.alt = '预览不可用';
+    }
+    img.loading = 'lazy';
+    preview.appendChild(img);
+    layout.appendChild(preview);
+
+    const details = document.createElement('div');
+    details.className = 'search-card-image-details';
+
+    const path = document.createElement('div');
+    path.className = 'search-card-path';
+    path.textContent = result.file_path || result.storage_path || result.path || '(未知路径)';
+    details.appendChild(path);
+
+    const imageMeta = buildImageMetadataSection(result);
+    if (imageMeta) {
+      details.appendChild(imageMeta);
+    }
+
+    if (metrics) {
+      details.appendChild(metrics);
+    }
+
+    layout.appendChild(details);
+    card.appendChild(layout);
+  } else {
+    const path = document.createElement('div');
+    path.className = 'search-card-path';
+    path.textContent = result.file_path || result.path || '(未知路径)';
+    card.appendChild(path);
+
+    const snippet = document.createElement('div');
+    snippet.className = 'search-card-snippet';
+    const snippetContent = getResultSnippet(result);
+    if (snippetContent && snippetContent.html) {
+      snippet.innerHTML = snippetContent.html;
+    } else {
+      snippet.textContent = (snippetContent && snippetContent.text) || '（暂无内容预览）';
+    }
+    card.appendChild(snippet);
+
+    if (metrics) {
+      card.appendChild(metrics);
+    }
   }
 
   card.addEventListener('click', () => {
@@ -912,6 +1220,82 @@ function buildSearchCard(result, variant, index) {
   });
 
   return card;
+}
+
+function buildImagePreviewSrc(result) {
+  const absolute = result?.absolute_storage_path || result?.absolute_path;
+  if (!absolute) {
+    return null;
+  }
+  const normalized = String(absolute).replace(/\\/g, '/');
+  const encoded = encodeURI(normalized);
+  if (encoded.startsWith('file://')) {
+    return encoded;
+  }
+  if (encoded.startsWith('/')) {
+    return `file://${encoded}`;
+  }
+  return `file:///${encoded}`;
+}
+
+function buildImageMetadataSection(result) {
+  const rows = [];
+
+  if (result?.image_format) {
+    rows.push({ label: '格式', value: String(result.image_format).toUpperCase() });
+  }
+
+  if (Number.isFinite(result?.width) && Number.isFinite(result?.height)) {
+    rows.push({ label: '尺寸', value: `${result.width} × ${result.height}` });
+  }
+
+  if (Number.isFinite(result?.image_size)) {
+    rows.push({ label: '大小', value: formatBytes(result.image_size) });
+  }
+
+  if (result?.filename) {
+    rows.push({ label: '文档', value: result.filename });
+  }
+
+  const confidence = result?.confidence ?? result?.final_score ?? result?.image_score;
+  const confidenceText = formatPercentage(confidence, 1);
+  if (confidenceText) {
+    rows.push({ label: '置信度', value: confidenceText });
+  }
+
+  if (Number.isFinite(result?.line_number)) {
+    rows.push({ label: '所在行', value: `#${result.line_number}` });
+  }
+
+  if (result?.alt_text) {
+    const text = String(result.alt_text).trim();
+    if (text) {
+      rows.push({ label: 'Alt 文本', value: text.length > 60 ? `${text.slice(0, 60)}…` : text });
+    }
+  }
+
+  if (!rows.length) {
+    return null;
+  }
+
+  const container = document.createElement('div');
+  container.className = 'search-card-meta';
+
+  rows.forEach((row) => {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'search-card-meta-row';
+
+    const label = document.createElement('span');
+    label.textContent = row.label;
+    const value = document.createElement('span');
+    value.textContent = row.value;
+
+    rowEl.appendChild(label);
+    rowEl.appendChild(value);
+    container.appendChild(rowEl);
+  });
+
+  return container;
 }
 
 function buildMetricsChips(result) {
@@ -933,6 +1317,30 @@ function buildMetricsChips(result) {
     if (sourceKey === 'exact') {
       if (metric.match_position !== undefined && metric.match_position !== null) {
         parts.push(`位置 ${metric.match_position}`);
+      }
+    } else if (sourceKey === 'image') {
+      const confidence = metric.confidence ?? result.confidence ?? result.final_score ?? result.image_score;
+      const confidenceText = formatPercentage(confidence, 1);
+      if (confidenceText) {
+        parts.push(`置信度 ${confidenceText}`);
+      }
+
+      const combinedCos = metric.combined_cosine ?? result.combined_cosine ?? result.image_score;
+      const bestCos = metric.best_cosine ?? result.best_cosine ?? result.cosine_similarity ?? combinedCos;
+      const avgCos = metric.avg_cosine ?? result.avg_cosine;
+
+      const combinedText = combinedCos !== undefined ? formatScore(combinedCos, 3) : null;
+      const bestText = bestCos !== undefined ? formatScore(bestCos, 3) : null;
+      const avgText = avgCos !== undefined ? formatScore(avgCos, 3) : null;
+
+      if (bestText) {
+        parts.push(`cos ${bestText}`);
+      }
+      if (avgText) {
+        parts.push(`avg ${avgText}`);
+      }
+      if (combinedText && combinedText !== bestText) {
+        parts.push(`mix ${combinedText}`);
       }
     } else {
       if (metric.mixed_score !== undefined && metric.mixed_score !== null) {
@@ -961,8 +1369,9 @@ function buildMetricsChips(result) {
 
     const chip = document.createElement('span');
     chip.className = 'search-card-chip';
-    chip.dataset.variant = sourceKey === 'exact' ? 'exact' : 'semantic';
-    chip.textContent = `${sourceKey === 'exact' ? '字符' : '语义'} · ${parts.join(' | ')}`;
+    chip.dataset.variant = sourceKey === 'exact' ? 'exact' : sourceKey === 'image' ? 'image' : 'semantic';
+    const label = sourceKey === 'exact' ? '字符' : sourceKey === 'image' ? '图片' : '语义';
+    chip.textContent = `${label} · ${parts.join(' | ')}`;
     metricsContainer.appendChild(chip);
   });
 
@@ -979,6 +1388,9 @@ function getMetricsForSource(result, sourceKey) {
     fallback.rank = result.rank;
     fallback.match_position = result.match_position;
     fallback.match_score = result.match_score;
+  } else if (sourceKey === 'image') {
+    fallback.rank = result.rank ?? result.combined_rank;
+    fallback.confidence = result.confidence ?? result.final_score ?? result.image_score;
   } else {
     fallback.rank = result.rank;
     fallback.mixed_score = result.mixed_score;
@@ -1061,7 +1473,32 @@ function formatScore(value, digits = 3) {
   return numberValue.toFixed(digits);
 }
 
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const normalized = bytes / Math.pow(1024, exponent);
+  const decimals = exponent === 0 ? 0 : normalized >= 100 ? 0 : normalized >= 10 ? 1 : 2;
+  return `${normalized.toFixed(decimals)} ${units[exponent]}`;
+}
+
+function formatPercentage(value, digits = 1) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return null;
+  }
+  const clamped = Math.max(0, Math.min(1, num));
+  return `${(clamped * 100).toFixed(digits)}%`;
+}
+
 async function highlightSearchMatch(filePath, result) {
+  if (result && (result.result_type === 'image' || (Array.isArray(result.sources) && result.sources.includes('image')))) {
+    return false;
+  }
+
   const tabSelector = `[data-tab-id="${cssEscape(filePath)}"]`;
   const container = await waitForElement(tabSelector, 5000);
   if (!container) {
@@ -1505,12 +1942,19 @@ async function openSearchResult(result) {
     return;
   }
 
+  const isImageResult = (result.result_type === 'image') || (Array.isArray(result.sources) && result.sources.includes('image'));
+
   const wasSearchMode = isSearchMode;
   if (wasSearchMode) {
     switchToFileMode();
   }
 
-  let targetPath = result.absolute_path || result.file_path || result.path;
+  let targetPath;
+  if (isImageResult) {
+    targetPath = result.absolute_storage_path || result.absolute_path || result.storage_path || result.file_path || result.path;
+  } else {
+    targetPath = result.absolute_path || result.file_path || result.path;
+  }
   if (!targetPath) {
     showAlert('无法定位检索结果对应的文件', 'error');
     return;
@@ -1542,9 +1986,11 @@ async function openSearchResult(result) {
   try {
     await fileViewer.openFile(targetPath);
     await waitForElement(`[data-tab-id="${cssEscape(targetPath)}"]`, 5000);
-    const highlighted = await highlightSearchMatchWithRetry(targetPath, result);
-    if (!highlighted) {
-      console.warn('未能在文件中定位到检索文本', result);
+    if (!isImageResult) {
+      const highlighted = await highlightSearchMatchWithRetry(targetPath, result);
+      if (!highlighted) {
+        console.warn('未能在文件中定位到检索文本', result);
+      }
     }
 
     const treeSelector = `[data-path="${cssEscape(targetPath)}"]`;
@@ -3300,6 +3746,7 @@ function switchToSearchMode() {
   }
 
   renderSearchResults();
+  updateSearchModeUI();
 }
 
 // 切换到文件模式

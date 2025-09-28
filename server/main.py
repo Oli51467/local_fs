@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
     # 初始化Faiss向量数据库管理器
     faiss_instance = FaissManager()
     image_faiss_instance = ImageFaissManager()
-    init_faiss_api(faiss_instance, embedding_instance)
+    init_faiss_api(faiss_instance, embedding_instance, image_faiss_instance)
     
     # 初始化文档API
     init_document_api(faiss_instance, sqlite_instance, image_faiss_instance)

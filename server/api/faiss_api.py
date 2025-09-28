@@ -4,7 +4,9 @@ from pathlib import Path
 import numpy as np
 import statistics
 from service.faiss_service import FaissManager
+from service.image_faiss_service import ImageFaissManager, get_image_faiss_manager
 from service.embedding_service import EmbeddingService
+from service.clip_embedding_service import get_clip_embedding_service
 from model.faiss_request_model import SearchRequest
 import logging
 from service.reranker_service import RerankerService, init_reranker_service, get_reranker_service
@@ -16,6 +18,7 @@ router = APIRouter(prefix="/api/faiss", tags=["faiss"])
 
 # 全局faiss管理器实例
 faiss_manager = None
+image_faiss_manager = None
 embedding_service = None
 reranker_service = None
 bm25s_service = None
@@ -129,10 +132,172 @@ def filter_semantic_candidates(
 
     return filtered
 
-def init_faiss_api(faiss_mgr: FaissManager, embedding_svc: EmbeddingService = None):
+
+def search_image_vectors(
+    query_text: str,
+    top_k: int,
+    threshold: float = 0.35,
+    recall_multiplier: int = 8,
+) -> List[Dict[str, Any]]:
+    if not query_text:
+        return []
+    if image_faiss_manager is None:
+        return []
+
+    try:
+        clip_service = get_clip_embedding_service()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("CLIP 服务不可用，跳过图片检索: %s", exc)
+        return []
+
+    base_query = query_text.strip()
+    if not base_query:
+        return []
+
+    prompt_candidates = [base_query]
+    base_lower = base_query.lower()
+    prompt_templates = [
+        "a photo of {query}",
+        "an image of {query}",
+        "a picture of {query}",
+        "a close-up photo of {query}",
+        "{query}"
+    ]
+    for template in prompt_templates:
+        prompt_candidates.append(template.format(query=base_lower))
+
+    unique_prompts: List[str] = []
+    seen_prompts = set()
+    for prompt in prompt_candidates:
+        normalized = prompt.strip()
+        if not normalized or normalized in seen_prompts:
+            continue
+        unique_prompts.append(normalized)
+        seen_prompts.add(normalized)
+
+    try:
+        query_embeddings = clip_service.encode_texts(unique_prompts)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("生成CLIP文本向量失败: %s", exc)
+        return []
+
+    if not query_embeddings:
+        return []
+
+    query_embeddings_np = [np.asarray(vec, dtype=np.float32) for vec in query_embeddings]
+
+    aggregate_vector = np.mean(query_embeddings_np, axis=0)
+    aggregate_norm = np.linalg.norm(aggregate_vector)
+    if aggregate_norm <= 0:
+        aggregate_vector = query_embeddings_np[0]
+    else:
+        aggregate_vector = aggregate_vector / aggregate_norm
+
+    search_vector = aggregate_vector.astype(np.float32, copy=False)[np.newaxis, :]
+
+    recall_k = max(top_k * recall_multiplier, 120)
+    try:
+        search_results = image_faiss_manager.search_vectors(search_vector, k=recall_k)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("图片向量检索失败: %s", exc)
+        return []
+
+    matches: List[Dict[str, Any]] = []
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
+
+    candidates = search_results[0] if search_results else []
+    for idx, candidate in enumerate(candidates):
+        vector_index = candidate.get('vector_id')
+        # vector_id is stored separately; fallback to faiss index position
+        faiss_index = candidate.get('vector_id') if candidate.get('vector_id') is not None else idx
+
+        try:
+            reconstructed = image_faiss_manager.index.reconstruct(int(faiss_index))  # type: ignore[arg-type]
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("无法重构图片向量(%s): %s", faiss_index, exc)
+            continue
+
+        candidate_vector = np.array(reconstructed, dtype=np.float32, copy=False)
+        candidate_norm = np.linalg.norm(candidate_vector)
+        if candidate_norm > 0:
+            candidate_vector = candidate_vector / candidate_norm
+
+        cosine_scores = [float(np.dot(candidate_vector, query_vec)) for query_vec in query_embeddings_np]
+        if not cosine_scores:
+            continue
+
+        best_cosine = max(cosine_scores)
+        if best_cosine < threshold:
+            continue
+
+        average_cosine = sum(cosine_scores) / len(cosine_scores)
+        combined_cosine = 0.65 * best_cosine + 0.35 * average_cosine
+        normalized_confidence = clamp_unit((combined_cosine + 1.0) / 2.0)
+
+        record = dict(candidate)
+        storage_path = record.get('storage_path') or ''
+        try:
+            if storage_path:
+                storage_path_obj = Path(storage_path)
+                if storage_path_obj.is_absolute():
+                    absolute_storage = storage_path_obj.resolve()
+                else:
+                    absolute_storage = (project_root / storage_path_obj).resolve()
+                record['absolute_storage_path'] = str(absolute_storage)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("解析图片存储路径失败 (%s): %s", storage_path, exc)
+
+        file_path = record.get('file_path') or ''
+        try:
+            if file_path:
+                file_path_obj = Path(file_path)
+                if file_path_obj.is_absolute():
+                    absolute_doc = file_path_obj.resolve()
+                else:
+                    absolute_doc = (project_root / file_path_obj).resolve()
+                record['absolute_path'] = str(absolute_doc)
+            elif 'absolute_storage_path' in record:
+                record['absolute_path'] = record['absolute_storage_path']
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("解析文档路径失败 (%s): %s", file_path, exc)
+
+        record['result_type'] = 'image'
+        record['source'] = 'image'
+        record['sources'] = ['image']
+        record['vector_index'] = int(faiss_index)
+        record['cosine_similarity'] = best_cosine
+        record['avg_cosine'] = average_cosine
+        record['combined_cosine'] = combined_cosine
+        record['confidence'] = normalized_confidence
+        record['image_score'] = combined_cosine
+        record['final_score'] = normalized_confidence
+        record['rank'] = len(matches) + 1
+        record['metrics'] = {
+            'image': {
+                'rank': record['rank'],
+                'confidence': normalized_confidence,
+                'best_cosine': best_cosine,
+                'avg_cosine': average_cosine,
+                'combined_cosine': combined_cosine
+            }
+        }
+        record.setdefault('filename', record.get('image_name'))
+        record.setdefault('display_name', record.get('image_name'))
+        matches.append(record)
+        if len(matches) >= top_k:
+            break
+
+    return matches
+
+def init_faiss_api(
+    faiss_mgr: FaissManager,
+    embedding_svc: EmbeddingService = None,
+    image_faiss_mgr: ImageFaissManager = None
+):
     """初始化Faiss API"""
-    global faiss_manager, embedding_service, reranker_service, bm25s_service
+    global faiss_manager, image_faiss_manager, embedding_service, reranker_service, bm25s_service
     faiss_manager = faiss_mgr
+    image_faiss_manager = image_faiss_mgr or get_image_faiss_manager()
     embedding_service = embedding_svc
     
     # 初始化Reranker服务
@@ -555,7 +720,19 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 filtered_combined.append(item)
                 rank_counter += 1
 
-        combined_results = filtered_combined
+        text_combined_results = filtered_combined
+
+        image_threshold = 0.3
+        image_results = search_image_vectors(query_text, top_k, threshold=image_threshold)
+
+        combined_results: List[Dict[str, Any]] = []
+        for entry in text_combined_results:
+            combined_results.append(entry)
+        for image_entry in image_results:
+            combined_results.append(image_entry)
+
+        for idx, entry in enumerate(combined_results, start=1):
+            entry['combined_rank'] = idx
 
         response = {
             "status": "success",
@@ -574,6 +751,11 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 "total": len(combined_results),
                 "results": combined_results
             },
+            "image_match": {
+                "total": len(image_results),
+                "results": image_results,
+                "confidence_threshold": image_threshold
+            },
             "bm25s_performed": bm25s_used,
             "rerank_performed": rerank_used
         }
@@ -585,6 +767,36 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to search vectors with reranker: {str(e)}")
         raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
+
+
+@router.post("/search-images")
+async def search_images(request: SearchRequest) -> Dict[str, Any]:
+    try:
+        query_text = (request.query or '').strip()
+        if not query_text:
+            raise HTTPException(status_code=400, detail="查询内容不能为空")
+
+        top_k = max(request.top_k or 10, 1)
+        threshold = 0.3
+
+        matches = search_image_vectors(query_text, top_k, threshold=threshold)
+
+        return {
+            "status": "success",
+            "query": query_text,
+            "total": len(matches),
+            "image_match": {
+                "total": len(matches),
+                "results": matches,
+                "confidence_threshold": threshold
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("图片检索失败: %s", exc)
+        raise HTTPException(status_code=500, detail=f"图片检索失败: {exc}")
 
 @router.get("/vectors/by-type/{doc_type}")
 async def get_vectors_by_type(doc_type: str, limit: int = 100, offset: int = 0) -> Dict[str, Any]:
