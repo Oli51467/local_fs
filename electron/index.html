@@ -251,6 +251,7 @@
         <div class="db-tabs">
           <button class="db-tab-btn active" data-tab="sqlite">SQLite 数据库</button>
           <button class="db-tab-btn" data-tab="faiss">Faiss 向量数据库</button>
+          <button class="db-tab-btn" data-tab="image-vectors">图片向量存储</button>
         </div>
         
         <!-- SQLite 数据库面板 -->
@@ -314,6 +315,47 @@
                 <button id="cleanup-faiss-vectors" class="db-btn delete-btn" style="display: inline-block; margin-left: 10px; background-color: #dc3545;">清空Faiss向量</button>
               </h3>
               <div id="vectors-data-content"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 图片向量存储面板 -->
+        <div id="image-vectors-panel" class="db-panel">
+          <div class="database-controls image-vector-controls">
+            <div class="image-search-group">
+              <input type="text" id="image-vector-search" placeholder="按文件名、路径或图片名搜索" />
+              <button id="search-image-vectors" class="db-btn">搜索</button>
+              <button id="reset-image-vector-search" class="db-btn secondary-btn">重置</button>
+            </div>
+            <div class="image-page-size">
+              <label for="image-vector-page-size">每页数量:</label>
+              <select id="image-vector-page-size">
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="database-status">
+            <div id="image-vectors-status" class="status-indicator"></div>
+          </div>
+
+          <div class="database-results image-vector-results">
+            <div id="image-vector-stats" class="statistics-section">
+              <h3>图片向量统计</h3>
+              <div id="image-vector-stats-content" class="image-stats-content"></div>
+            </div>
+
+            <div id="image-vector-data" class="vectors-data-section">
+              <h3>图片向量列表</h3>
+              <div id="image-vector-table" class="image-vector-table"></div>
+              <div class="image-pagination">
+                <button id="image-vector-prev" class="db-btn secondary-btn">上一页</button>
+                <span id="image-vector-page-info"></span>
+                <button id="image-vector-next" class="db-btn secondary-btn">下一页</button>
+              </div>
             </div>
           </div>
         </div>

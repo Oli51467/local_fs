@@ -6,6 +6,15 @@ class DatabaseModule {
     this.currentVectorTypes = [];
     this.selectedVectorType = null;
     this.currentTab = 'sqlite';
+    this.imageVectorState = {
+      search: '',
+      limit: 100,
+      offset: 0,
+      total: 0,
+      loading: false
+    };
+    this.imageVectorsInitialized = false;
+    this.pendingImageVectorReload = false;
     this.init();
   }
 
@@ -69,6 +78,77 @@ class DatabaseModule {
     document.getElementById('vector-type-select').addEventListener('change', (e) => {
       this.selectedVectorType = e.target.value;
     });
+
+    // 图片向量事件
+    const imageSearchInput = document.getElementById('image-vector-search');
+    const imageSearchButton = document.getElementById('search-image-vectors');
+    const imageResetButton = document.getElementById('reset-image-vector-search');
+    const pageSizeSelect = document.getElementById('image-vector-page-size');
+    const prevButton = document.getElementById('image-vector-prev');
+    const nextButton = document.getElementById('image-vector-next');
+
+    if (imageSearchButton) {
+      imageSearchButton.addEventListener('click', () => {
+        this.imageVectorState.search = (imageSearchInput?.value || '').trim();
+        this.imageVectorState.offset = 0;
+        this.loadImageVectors();
+      });
+    }
+
+    if (imageSearchInput) {
+      imageSearchInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          this.imageVectorState.search = (imageSearchInput.value || '').trim();
+          this.imageVectorState.offset = 0;
+          this.loadImageVectors();
+        }
+      });
+    }
+
+    if (imageResetButton) {
+      imageResetButton.addEventListener('click', () => {
+        if (imageSearchInput) {
+          imageSearchInput.value = '';
+        }
+        this.imageVectorState.search = '';
+        this.imageVectorState.offset = 0;
+        this.loadImageVectors();
+      });
+    }
+
+    if (pageSizeSelect) {
+      pageSizeSelect.addEventListener('change', (event) => {
+        const newLimit = parseInt(event.target.value, 10) || 100;
+        this.imageVectorState.limit = newLimit;
+        this.imageVectorState.offset = 0;
+        this.loadImageVectors();
+      });
+    }
+
+    if (prevButton) {
+      prevButton.addEventListener('click', () => {
+        if (this.imageVectorState.offset <= 0 || this.imageVectorState.loading) {
+          return;
+        }
+        this.imageVectorState.offset = Math.max(0, this.imageVectorState.offset - this.imageVectorState.limit);
+        this.loadImageVectors();
+      });
+    }
+
+    if (nextButton) {
+      nextButton.addEventListener('click', () => {
+        if (this.imageVectorState.loading) {
+          return;
+        }
+        const nextOffset = this.imageVectorState.offset + this.imageVectorState.limit;
+        if (nextOffset >= this.imageVectorState.total) {
+          return;
+        }
+        this.imageVectorState.offset = nextOffset;
+        this.loadImageVectors();
+      });
+    }
   }
 
   showDatabasePage() {
@@ -86,6 +166,8 @@ class DatabaseModule {
       this.testConnection();
     } else if (this.currentTab === 'faiss') {
       this.testFaissConnection();
+    } else if (this.currentTab === 'image-vectors') {
+      this.loadImageVectors();
     }
   }
 
@@ -109,6 +191,8 @@ class DatabaseModule {
       this.testConnection();
     } else if (tabName === 'faiss') {
       this.testFaissConnection();
+    } else if (tabName === 'image-vectors') {
+      this.loadImageVectors();
     }
   }
 
@@ -411,6 +495,35 @@ class DatabaseModule {
     }
   }
 
+  formatBytes(size) {
+    let bytes = Number(size);
+    if (!Number.isFinite(bytes) || bytes < 0) {
+      bytes = 0;
+    }
+    if (bytes === 0) {
+      return '0 B';
+    }
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const value = bytes / Math.pow(1024, exponent);
+    return `${value.toFixed(exponent === 0 ? 0 : 2)} ${units[exponent]}`;
+  }
+
+  formatDateTime(value) {
+    if (!value) {
+      return '-';
+    }
+    let normalized = value;
+    if (typeof value === 'string' && value.includes(' ') && !value.includes('T')) {
+      normalized = value.replace(' ', 'T');
+    }
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+    return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+  }
+
   // 工具方法：截断长文本
   truncateText(text, maxLength = 100) {
     if (typeof text !== 'string') {
@@ -431,6 +544,12 @@ class DatabaseModule {
     
     // 同时刷新文件树中的上传状态标记
     this.refreshUploadStatus();
+
+    if (this.currentTab === 'image-vectors') {
+      this.loadImageVectors(true);
+    } else {
+      this.imageVectorsInitialized = false;
+    }
   }
 
   // 刷新文件上传状态标记
@@ -478,6 +597,197 @@ class DatabaseModule {
     if (indicator) {
       indicator.remove();
     }
+  }
+
+  async loadImageVectors(force = false) {
+    if (this.imageVectorState.loading) {
+      if (force) {
+        this.pendingImageVectorReload = true;
+      }
+      return;
+    }
+
+    this.pendingImageVectorReload = false;
+
+    const statusEl = document.getElementById('image-vectors-status');
+    const tableEl = document.getElementById('image-vector-table');
+    const statsEl = document.getElementById('image-vector-stats-content');
+    const pageInfoEl = document.getElementById('image-vector-page-info');
+    const pageSizeSelect = document.getElementById('image-vector-page-size');
+    const searchInput = document.getElementById('image-vector-search');
+
+    if (!statusEl || !tableEl) {
+      return;
+    }
+
+    if (pageSizeSelect && parseInt(pageSizeSelect.value, 10) !== this.imageVectorState.limit) {
+      pageSizeSelect.value = String(this.imageVectorState.limit);
+    }
+
+    if (searchInput && searchInput !== document.activeElement) {
+      searchInput.value = this.imageVectorState.search;
+    }
+
+    this.imageVectorState.loading = true;
+
+    statusEl.textContent = '正在加载图片向量信息...';
+    statusEl.className = 'status-indicator status-info';
+    tableEl.innerHTML = '<div class="loading">正在查询图片向量数据...</div>';
+    if (statsEl) {
+      statsEl.innerHTML = '';
+    }
+    if (pageInfoEl) {
+      pageInfoEl.textContent = '';
+    }
+
+    try {
+      const params = new URLSearchParams();
+      params.append('limit', String(this.imageVectorState.limit));
+      params.append('offset', String(this.imageVectorState.offset));
+      if (this.imageVectorState.search) {
+        params.append('search', this.imageVectorState.search);
+      }
+
+      const response = await fetch(`${this.baseUrl}/api/database/image-vectors?${params.toString()}`);
+      const data = await response.json();
+
+      if (!response.ok || data.status !== 'success') {
+        throw new Error(data.detail || '获取图片向量信息失败');
+      }
+
+      this.imageVectorState.total = data.total || 0;
+      this.renderImageVectorTable(data.records || []);
+      this.renderImageVectorStats(data.stats || null);
+      this.updateImagePagination();
+
+      const recordCount = Array.isArray(data.records) ? data.records.length : 0;
+      statusEl.textContent = `已加载 ${recordCount} 条图片向量记录`;
+      statusEl.className = 'status-indicator status-success';
+      this.imageVectorsInitialized = true;
+    } catch (error) {
+      console.error('获取图片向量信息失败:', error);
+      statusEl.textContent = `获取图片向量信息失败: ${error.message}`;
+      statusEl.className = 'status-indicator status-error';
+      tableEl.innerHTML = `<div class="error-message">${this.escapeHtml(error.message || '加载失败')}</div>`;
+      if (statsEl) {
+        statsEl.innerHTML = '';
+      }
+    } finally {
+      this.imageVectorState.loading = false;
+      if (this.pendingImageVectorReload) {
+        this.pendingImageVectorReload = false;
+        this.loadImageVectors();
+      }
+    }
+  }
+
+  renderImageVectorStats(stats) {
+    const statsEl = document.getElementById('image-vector-stats-content');
+    if (!statsEl) {
+      return;
+    }
+
+    if (!stats || !stats.total_count) {
+      statsEl.innerHTML = '<div class="loading">暂无图片向量数据</div>';
+      return;
+    }
+
+    const items = [];
+    items.push(`<div class="stat-item"><span>图片总数</span><span>${this.escapeHtml(String(stats.total_count))}</span></div>`);
+    items.push(`<div class="stat-item"><span>关联文档数</span><span>${this.escapeHtml(String(stats.document_count || 0))}</span></div>`);
+    if (typeof stats.total_size === 'number') {
+      items.push(`<div class="stat-item"><span>图片总大小</span><span>${this.escapeHtml(this.formatBytes(stats.total_size))}</span></div>`);
+    }
+
+    const formatEntries = Object.entries(stats.format_breakdown || {});
+    if (formatEntries.length) {
+      const chips = formatEntries
+        .map(([format, count]) => `<span class="format-chip">${this.escapeHtml(String(format).toUpperCase())}: ${this.escapeHtml(String(count))}</span>`)
+        .join('');
+      items.push(`<div class="stat-item format-stat"><span>格式分布</span><span class="format-chip-group">${chips}</span></div>`);
+    }
+
+    statsEl.innerHTML = items.join('');
+  }
+
+  renderImageVectorTable(records) {
+    const tableEl = document.getElementById('image-vector-table');
+    if (!tableEl) {
+      return;
+    }
+
+    if (!records || records.length === 0) {
+      tableEl.innerHTML = '<div class="loading">暂无图片向量数据</div>';
+      return;
+    }
+
+    const header = [
+      '图片名称',
+      '所属文档',
+      '图片格式',
+      '尺寸',
+      '大小',
+      '向量ID',
+      '存储路径',
+      '上传时间'
+    ];
+
+    let html = '<table><thead><tr>';
+    header.forEach((title) => {
+      html += `<th>${this.escapeHtml(title)}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+
+    records.forEach((record) => {
+      const imageName = record.image_name ? this.escapeHtml(record.image_name) : '-';
+      const documentName = record.filename ? this.escapeHtml(record.filename) : '-';
+      const documentPath = record.file_path ? this.escapeHtml(record.file_path) : '';
+      const format = record.image_format ? record.image_format.toUpperCase() : '-';
+      const dimensions = record.width && record.height ? `${this.escapeHtml(String(record.width))} × ${this.escapeHtml(String(record.height))}` : '-';
+      const sizeText = this.escapeHtml(this.formatBytes(record.image_size));
+      const vectorId = record.vector_id != null ? this.escapeHtml(String(record.vector_id)) : '-';
+      const storagePath = record.storage_path ? this.escapeHtml(record.storage_path) : '-';
+      const uploadTime = this.escapeHtml(this.formatDateTime(record.image_upload_time));
+
+      html += '<tr>';
+      html += `<td>${imageName}</td>`;
+      html += `<td><div>${documentName}</div>${documentPath ? `<div class="table-subtext">${documentPath}</div>` : ''}</td>`;
+      html += `<td>${this.escapeHtml(format)}</td>`;
+      html += `<td>${dimensions}</td>`;
+      html += `<td>${sizeText}</td>`;
+      html += `<td>${vectorId}</td>`;
+      html += `<td>${storagePath}</td>`;
+      html += `<td>${uploadTime}</td>`;
+      html += '</tr>';
+    });
+
+    html += '</tbody></table>';
+    tableEl.innerHTML = html;
+  }
+
+  updateImagePagination() {
+    const pageInfoEl = document.getElementById('image-vector-page-info');
+    const prevButton = document.getElementById('image-vector-prev');
+    const nextButton = document.getElementById('image-vector-next');
+
+    if (!pageInfoEl || !prevButton || !nextButton) {
+      return;
+    }
+
+    const { limit, offset, total } = this.imageVectorState;
+    const currentPage = total === 0 ? 0 : Math.floor(offset / limit) + 1;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+
+    if (total === 0) {
+      pageInfoEl.textContent = '暂无数据';
+    } else {
+      pageInfoEl.textContent = `第 ${currentPage} / ${totalPages} 页 · 共 ${total} 条`;
+    }
+
+    prevButton.disabled = offset <= 0;
+    nextButton.disabled = offset + limit >= total;
+    prevButton.classList.toggle('disabled', prevButton.disabled);
+    nextButton.classList.toggle('disabled', nextButton.disabled);
   }
 
   // Faiss数据库相关方法

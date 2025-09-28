@@ -169,6 +169,119 @@ class SQLiteManager:
                 ),
             )
             return cursor.lastrowid
+
+    def get_image_vector_records(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        search: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """分页获取图片向量记录及其所属文档信息"""
+        if limit <= 0:
+            limit = 100
+        if limit > 500:
+            limit = 500
+        if offset < 0:
+            offset = 0
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            base_query = """
+                FROM document_images di
+                LEFT JOIN documents d ON di.document_id = d.id
+            """
+
+            where_clauses: List[str] = []
+            params: List[Any] = []
+
+            if search:
+                search_like = f"%{search.strip()}%"
+                where_clauses.append(
+                    "(d.filename LIKE ? OR d.file_path LIKE ? OR di.image_name LIKE ? OR di.storage_path LIKE ?)"
+                )
+                params.extend([search_like, search_like, search_like, search_like])
+
+            where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+            count_query = f"SELECT COUNT(*) {base_query} {where_sql}"
+            cursor.execute(count_query, params)
+            total = cursor.fetchone()[0]
+
+            query = f"""
+                SELECT
+                    di.id AS image_id,
+                    di.document_id,
+                    di.image_name,
+                    di.image_format,
+                    di.image_size,
+                    di.width,
+                    di.height,
+                    di.line_number,
+                    di.storage_path,
+                    di.storage_folder,
+                    di.source_path,
+                    di.upload_time AS image_upload_time,
+                    di.vector_id,
+                    d.filename,
+                    d.file_path,
+                    d.file_type,
+                    d.file_size,
+                    d.upload_time AS document_upload_time
+                {base_query}
+                {where_sql}
+                ORDER BY di.upload_time DESC, di.id DESC
+                LIMIT ? OFFSET ?
+            """
+
+            query_params = params + [limit, offset]
+            cursor.execute(query, query_params)
+            rows = cursor.fetchall()
+
+            records: List[Dict[str, Any]] = []
+            for row in rows:
+                record = {key: row[key] for key in row.keys()}
+                records.append(record)
+
+            stats = self.get_image_vector_statistics(cursor)
+
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "records": records,
+            "stats": stats
+        }
+
+    def get_image_vector_statistics(self, cursor: sqlite3.Cursor = None) -> Dict[str, Any]:
+        """获取图片向量统计信息"""
+        close_cursor = False
+        if cursor is None:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            close_cursor = True
+        else:
+            conn = None
+
+        try:
+            cursor.execute("SELECT COUNT(*), IFNULL(SUM(image_size), 0), COUNT(DISTINCT document_id) FROM document_images")
+            total_count, total_size, doc_count = cursor.fetchone()
+
+            cursor.execute("SELECT image_format, COUNT(*) FROM document_images GROUP BY image_format")
+            format_rows = cursor.fetchall()
+            format_counts = {row[0]: row[1] for row in format_rows if row[0]}
+
+            return {
+                "total_count": total_count,
+                "total_size": total_size,
+                "document_count": doc_count,
+                "format_breakdown": format_counts
+            }
+        finally:
+            if close_cursor and conn is not None:
+                conn.close()
     
     def get_documents_by_filename(self, filename: str) -> List[Dict]:
         """根据文件名获取文档"""

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from service.sqlite_service import SQLiteManager
 import sqlite3
 import logging
@@ -162,3 +162,22 @@ async def get_database_statistics():
     except Exception as e:
         logger.error(f"获取数据库统计信息失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"获取数据库统计信息失败: {str(e)}")
+
+
+@router.get("/image-vectors")
+async def get_image_vectors(limit: int = 100, offset: int = 0, search: Optional[str] = None):
+    """分页获取图片向量存储信息"""
+    try:
+        if sqlite_manager is None:
+            raise HTTPException(status_code=500, detail="数据库管理器未初始化")
+
+        result = sqlite_manager.get_image_vector_records(limit=limit, offset=offset, search=search)
+        return {
+            "status": "success",
+            **result
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("获取图片向量信息失败: %s", exc)
+        raise HTTPException(status_code=500, detail=f"获取图片向量信息失败: {exc}")
