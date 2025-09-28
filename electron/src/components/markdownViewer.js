@@ -280,7 +280,7 @@ class MarkdownViewer {
   async loadMarkdownFile(filePath) {
     try {
       const content = await window.fsAPI.readFile(filePath);
-      return this.parseMarkdown(content);
+      return this.parseMarkdown(content, filePath);
     } catch (error) {
       console.error('加载Markdown文件失败:', error);
       return `<p>加载Markdown文件失败: ${error.message}</p>`;
@@ -292,7 +292,7 @@ class MarkdownViewer {
    * @param {string} content - Markdown内容
    * @returns {string} 解析后的HTML
    */
-  parseMarkdown(content) {
+  parseMarkdown(content, filePath = null) {
     // 调试信息
     console.log('parseMarkdown called with content length:', content.length);
     console.log('marked available:', typeof marked !== 'undefined');
@@ -323,9 +323,11 @@ class MarkdownViewer {
         }
       });
 
-      const html = marked.parse(content);
-      console.log('Generated HTML length:', html.length);
-      console.log('Generated HTML preview:', html.substring(0, 200) + '...');
+      let bodyHtml = marked.parse(content);
+      console.log('Generated HTML length:', bodyHtml.length);
+      console.log('Generated HTML preview:', bodyHtml.substring(0, 200) + '...');
+
+      bodyHtml = this.enhanceMarkdownHtml(bodyHtml, filePath);
 
       return `
         <!-- GitHub Markdown 样式 -->
@@ -486,12 +488,14 @@ class MarkdownViewer {
         </style>
         
         <div class="markdown-body">
-          ${html}
+          ${bodyHtml}
         </div>
       `;
     } else {
       // 降级到简单解析器
       let html = content
+        // 图片
+        .replace(/!\[([^\]]*)\]\(([^\)]+)\)/gim, '<img alt="$1" src="$2" />')
         // 标题
         .replace(/^### (.*$)/gim, '<h3>$1</h3>')
         .replace(/^## (.*$)/gim, '<h2>$1</h2>')
@@ -518,12 +522,118 @@ class MarkdownViewer {
       html = html.replace(/(<li>.*<\/li>)/gims, '<ul>$1</ul>');
       
       // 添加样式
+      html = this.enhanceMarkdownHtml(html, filePath);
+
       return `
         <div style="padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: var(--text-color);">
           ${html}
         </div>
       `;
     }
+  }
+
+  enhanceMarkdownHtml(html, filePath) {
+    if (!html) {
+      return '';
+    }
+
+    const baseDir = this.getBaseDirectory(filePath);
+    if (!baseDir) {
+      return html;
+    }
+
+    const container = document.createElement('div');
+    container.innerHTML = html;
+
+    container.querySelectorAll('img').forEach((img) => {
+      const rawSrc = (img.getAttribute('src') || '').trim();
+      if (!rawSrc) {
+        return;
+      }
+
+      if (/^(https?:|data:|file:|blob:)/i.test(rawSrc)) {
+        return;
+      }
+
+      const absolutePath = this.resolveRelativePath(baseDir, rawSrc);
+      if (!absolutePath) {
+        return;
+      }
+
+      const fileUrl = this.convertPathToFileUrl(absolutePath);
+      if (fileUrl) {
+        img.setAttribute('src', fileUrl);
+        img.dataset.internalPath = absolutePath;
+      }
+    });
+
+    return container.innerHTML;
+  }
+
+  getBaseDirectory(filePath) {
+    if (!filePath) {
+      return null;
+    }
+    const normalized = String(filePath).replace(/\\/g, '/');
+    const lastSlash = normalized.lastIndexOf('/');
+    if (lastSlash === -1) {
+      return normalized;
+    }
+    return normalized.slice(0, lastSlash);
+  }
+
+  resolveRelativePath(baseDir, relativePath) {
+    if (!relativePath) {
+      return null;
+    }
+
+    let normalizedRelative = String(relativePath).trim().replace(/\\/g, '/');
+    if (/^(https?:|data:|file:|blob:)/i.test(normalizedRelative)) {
+      return normalizedRelative;
+    }
+
+    const base = String(baseDir || '').replace(/\\/g, '/');
+
+    if (normalizedRelative.startsWith('/')) {
+      if (/^[a-zA-Z]:/.test(base)) {
+        const drive = base.split('/')[0];
+        return `${drive}${normalizedRelative}`;
+      }
+      return normalizedRelative;
+    }
+
+    const segments = base ? base.split('/') : [];
+
+    normalizedRelative.split('/').forEach((part) => {
+      if (!part || part === '.') {
+        return;
+      }
+      if (part === '..') {
+        if (segments.length) {
+          segments.pop();
+        }
+      } else {
+        segments.push(part);
+      }
+    });
+
+    return segments.join('/');
+  }
+
+  convertPathToFileUrl(absPath) {
+    if (!absPath) {
+      return null;
+    }
+
+    if (/^(https?:|data:|file:|blob:)/i.test(absPath)) {
+      return absPath;
+    }
+
+    let normalized = String(absPath).replace(/\\/g, '/');
+    if (!normalized.startsWith('/')) {
+      normalized = `/${normalized}`;
+    }
+    return encodeURI(`file://${normalized}`);
   }
 
   /**
@@ -585,7 +695,9 @@ class MarkdownViewer {
     const preview = document.getElementById(`preview-${tabId}`);
     if (!preview) return;
 
-    const html = this.parseMarkdown(content);
+    const tabState = this.tabStates.get(tabId);
+    const filePath = tabState ? tabState.filePath : null;
+    const html = this.parseMarkdown(content, filePath);
     preview.innerHTML = html;
   }
 
