@@ -17,17 +17,13 @@ class ServerConfig:
     BM25S_WEIGHT = 0.7  # BM25S分数权重
     EMBEDDING_WEIGHT = 0.3  # 向量相似度分数权重
     
-    # 文本分割器配置
-    TEXT_SPLITTER_TYPE = "recursive"  # 分割器类型: "recursive" 或 "semantic"
+    # 文本分割器配置（仅支持递归分割器，保留选项用于兼容旧配置）
+    TEXT_SPLITTER_TYPE = "recursive"
     
     # 递归字符分割器配置（默认）
     RECURSIVE_CHUNK_SIZE = 300
     RECURSIVE_CHUNK_OVERLAP = 80
     RECURSIVE_SEPARATORS = ["\n\n", "\n", " ", ""]
-    
-    # 语义分割器配置
-    SEMANTIC_BREAKPOINT_THRESHOLD_TYPE = "percentile"  # 断点阈值类型
-    SEMANTIC_BREAKPOINT_THRESHOLD_AMOUNT = 90.0  # 断点阈值量
 
 class DatabaseConfig:
     """数据库配置"""

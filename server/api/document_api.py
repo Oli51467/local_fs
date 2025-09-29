@@ -751,20 +751,13 @@ def init_document_api(faiss_mgr: FaissManager, sqlite_mgr: SQLiteManager, image_
     sqlite_manager = sqlite_mgr
     image_faiss_manager = image_faiss_mgr
     
-    # 初始化文本分割服务
-    if ServerConfig.TEXT_SPLITTER_TYPE == "recursive":
-        init_text_splitter_service(
-            "recursive",
-            chunk_size=ServerConfig.RECURSIVE_CHUNK_SIZE,
-            chunk_overlap=ServerConfig.RECURSIVE_CHUNK_OVERLAP,
-            separators=ServerConfig.RECURSIVE_SEPARATORS
-        )
-    else:  # semantic
-        init_text_splitter_service(
-            "semantic",
-            breakpoint_threshold_type=ServerConfig.SEMANTIC_BREAKPOINT_THRESHOLD_TYPE,
-            breakpoint_threshold_amount=ServerConfig.SEMANTIC_BREAKPOINT_THRESHOLD_AMOUNT
-        )
+    # 初始化文本分割服务（仅支持递归分割器，保留旧配置参数兼容性）
+    init_text_splitter_service(
+        ServerConfig.TEXT_SPLITTER_TYPE,
+        chunk_size=ServerConfig.RECURSIVE_CHUNK_SIZE,
+        chunk_overlap=ServerConfig.RECURSIVE_CHUNK_OVERLAP,
+        separators=ServerConfig.RECURSIVE_SEPARATORS,
+    )
     
     text_splitter_service = get_text_splitter_service()
     logger.info(f"Document API initialized with {text_splitter_service.get_splitter_info()['type']} text splitter")

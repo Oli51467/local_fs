@@ -10,5 +10,8 @@ bm25s[full]
 langchain
 python-multipart
 Pillow>=9.0.0
+jieba
 python-docx>=0.8.11
 pypandoc-binary>=1.13
+huggingface_hub>=0.23.0
+magic-pdf[full]
