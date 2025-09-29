@@ -101,23 +101,66 @@
   box-sizing: border-box; /* 包含padding在宽度计算内 */
 }
 
-/* 文件名显示样式 - 更精确的选择器 */
-.file-item > div > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-}
+/* 文件名显示样式 */
 
-/* 确保contentDiv也支持flex收缩 */
-.file-item > div {
+.file-item-content {
   min-width: 0;
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 4px;
-  width: 100%; /* 确保占满父容器宽度 */
+  gap: 6px;
+  width: 100%;
+}
+
+.file-item-content span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.file-item-file .file-name {
+  margin-left: 12px;
+}
+
+.file-name-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-icon-wrapper {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.folder-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  font-size: 10px;
+  color: #888;
+  transition: transform 0.2s ease;
+  flex: 0 0 auto;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.file-item-content .upload-indicator {
+  margin-left: 6px;
 }
 
 .file-item:hover {

@@ -9,3 +9,6 @@ faiss-cpu==1.8.0
 bm25s[full]
 langchain
 python-multipart
+Pillow>=9.0.0
+python-docx>=0.8.11
+pypandoc-binary>=1.13

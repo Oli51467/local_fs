@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Callable, Awaitable, Tuple
+from typing import Optional, List, Callable, Awaitable, Tuple, Set
 import logging
 import hashlib
 import pathlib
@@ -9,8 +9,12 @@ import asyncio
 import shutil
 import uuid
 from datetime import datetime
+import tempfile
 from typing import Dict, Any
 from PIL import Image
+import pypandoc
+from docx import Document
+from docx.opc.constants import RELATIONSHIP_TYPE as DOCX_RELATIONSHIP_TYPE
 from service.clip_embedding_service import get_clip_embedding_service
 from service.embedding_service import get_embedding_service
 from service.faiss_service import FaissManager
@@ -100,6 +104,9 @@ image_faiss_manager = None
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.tiff', '.bmp'}
 MARKDOWN_TYPES = {'md', 'markdown'}
+DOCX_TYPES = {'docx'}
+DOC_TYPES = {'doc'}
+WORD_TYPES = DOC_TYPES.union(DOCX_TYPES)
 
 
 def read_text_file_with_fallback(file_path: pathlib.Path) -> str:
@@ -138,10 +145,20 @@ def markdown_to_plain_text(markdown_text: str) -> str:
 
 
 def extract_text_content(file_path: pathlib.Path, file_type: str) -> str:
-    raw_text = read_text_file_with_fallback(file_path)
     lowered = file_type.lower()
-    if lowered in {'md', 'markdown'}:
+    if lowered in MARKDOWN_TYPES:
+        raw_text = read_text_file_with_fallback(file_path)
         return markdown_to_plain_text(raw_text)
+
+    if lowered in DOCX_TYPES:
+        text_content, _ = extract_docx_text_and_images(file_path, collect_images=False)
+        return text_content
+
+    if lowered in DOC_TYPES:
+        text_content, _ = extract_doc_text_and_images(file_path, collect_images=False)
+        return text_content
+
+    raw_text = read_text_file_with_fallback(file_path)
     return raw_text
 
 
@@ -256,12 +273,157 @@ def extract_markdown_images(file_path: pathlib.Path, markdown_text: str) -> List
     return images
 
 
+def _extract_docx_paragraph_text(document: Document) -> List[str]:
+    lines: List[str] = []
+
+    def append_if_content(value: Optional[str]) -> None:
+        if value:
+            stripped = value.strip()
+            if stripped:
+                lines.append(stripped)
+
+    for paragraph in document.paragraphs:
+        append_if_content(paragraph.text)
+
+    for table in document.tables:
+        for row in table.rows:
+            cell_texts = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
+            if cell_texts:
+                lines.append('\t'.join(cell_texts))
+
+    return lines
+
+
+def _collect_docx_alt_text_map(document: Document) -> Dict[str, str]:
+    alt_map: Dict[str, str] = {}
+    for inline_shape in document.inline_shapes:
+        inline = inline_shape._inline  # type: ignore[attr-defined]
+        doc_pr = getattr(inline, 'docPr', None)
+        alt_text = ''
+        if doc_pr is not None and hasattr(doc_pr, 'attrib'):
+            alt_text = (doc_pr.attrib.get('descr') or doc_pr.attrib.get('title') or '').strip()
+        try:
+            blip = inline.graphic.graphicData.pic.blipFill.blip  # type: ignore[attr-defined]
+            embed_id = getattr(blip, 'embed', None)
+            if embed_id:
+                alt_map[embed_id] = alt_text
+        except AttributeError:
+            continue
+    return alt_map
+
+
+def extract_docx_text_and_images(file_path: pathlib.Path, collect_images: bool = True) -> Tuple[str, List[Dict[str, Any]]]:
+    try:
+        document = Document(str(file_path))
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("读取DOCX文档失败 %s: %s", file_path, exc)
+        raise HTTPException(status_code=400, detail=f"无法解析DOCX文档: {exc}") from exc
+
+    paragraph_lines = _extract_docx_paragraph_text(document)
+    text_content = '\n'.join(paragraph_lines).strip()
+
+    if not collect_images:
+        return text_content, []
+
+    images: List[Dict[str, Any]] = []
+    temp_dir: Optional[pathlib.Path] = None
+    alt_map = _collect_docx_alt_text_map(document)
+
+    try:
+        for rel in document.part.rels.values():  # type: ignore[attr-defined]
+            if rel.reltype != DOCX_RELATIONSHIP_TYPE.IMAGE:
+                continue
+            image_part = rel.target_part
+            image_name = pathlib.Path(str(image_part.partname)).name
+            suffix = pathlib.Path(image_name).suffix.lower()
+
+            if suffix and suffix not in IMAGE_EXTENSIONS:
+                # 跳过不支持的图片格式
+                continue
+
+            if temp_dir is None:
+                temp_dir = pathlib.Path(tempfile.mkdtemp(prefix='docx_img_'))
+
+            dest_path = temp_dir / image_name
+            try:
+                with open(dest_path, 'wb') as handle:
+                    handle.write(image_part.blob)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("提取DOCX图片失败 %s: %s", image_name, exc)
+                continue
+
+            width = height = None
+            try:
+                with Image.open(dest_path) as pil_image:
+                    width, height = pil_image.size
+            except Exception:  # pylint: disable=broad-except
+                width = height = None
+
+            stat_info = dest_path.stat()
+            images.append({
+                "source_path": dest_path,
+                "source_path_relative": None,
+                "line_number": None,
+                "alt_text": alt_map.get(rel.rId, ''),
+                "image_format": suffix.lstrip('.'),
+                "image_size": stat_info.st_size,
+                "width": width,
+                "height": height,
+                "docx_relationship_id": rel.rId,
+                "temp_dir": temp_dir
+            })
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("解析DOCX图片失败: %s", exc)
+
+    return text_content, images
+
+
+def convert_doc_to_docx(source_path: pathlib.Path) -> Tuple[pathlib.Path, pathlib.Path]:
+    temp_dir = pathlib.Path(tempfile.mkdtemp(prefix='doc_convert_'))
+    output_path = temp_dir / f"{source_path.stem}.docx"
+    try:
+        pypandoc.convert_file(str(source_path), 'docx', outputfile=str(output_path))
+    except Exception as exc:  # pylint: disable=broad-except
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.error("转换DOC到DOCX失败 %s: %s", source_path, exc)
+        raise HTTPException(status_code=400, detail=f"无法转换DOC文档: {exc}") from exc
+
+    if not output_path.exists():
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="DOC文档转换失败，输出文件不存在")
+
+    return output_path, temp_dir
+
+
+def extract_doc_text_and_images(file_path: pathlib.Path, collect_images: bool = True) -> Tuple[str, List[Dict[str, Any]]]:
+    converted_path, temp_dir = convert_doc_to_docx(file_path)
+    try:
+        text_content, images = extract_docx_text_and_images(converted_path, collect_images=collect_images)
+    finally:
+        try:
+            converted_path.unlink(missing_ok=True)
+        except Exception:  # pylint: disable=broad-except
+            pass
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return text_content, images
+
+
 def extract_text_and_images(file_path: pathlib.Path, file_type: str) -> Tuple[str, List[Dict[str, Any]]]:
-    raw_text = read_text_file_with_fallback(file_path)
     lowered = file_type.lower()
+
     if lowered in MARKDOWN_TYPES:
+        raw_text = read_text_file_with_fallback(file_path)
         images = extract_markdown_images(file_path, raw_text)
         return markdown_to_plain_text(raw_text), images
+
+    if lowered in DOCX_TYPES:
+        return extract_docx_text_and_images(file_path, collect_images=True)
+
+    if lowered in DOC_TYPES:
+        return extract_doc_text_and_images(file_path)
+
+    raw_text = read_text_file_with_fallback(file_path)
     return raw_text, []
 
 
@@ -312,98 +474,117 @@ def store_document_images(document_id: int, file_path: pathlib.Path, images: Lis
     stored_records: List[Dict[str, Any]] = []
     vectors: List[List[float]] = []
     faiss_metadata: List[Dict[str, Any]] = []
-
-    for index, info in enumerate(images):
-        dest_name = f"{index:04d}_{info['source_path'].name}"
-        dest_path = dest_folder / dest_name
-
-        try:
-            shutil.copy2(info['source_path'], dest_path)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("复制图片失败 %s -> %s: %s", info['source_path'], dest_path, exc)
-            continue
-
-        try:
-            vector = clip_service.encode_image_path(dest_path)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.error("向量化图片失败 %s: %s", dest_path, exc)
-            try:
-                dest_path.unlink()
-            except OSError:
-                pass
-            continue
-
-        stored_record = {
-            **info,
-            "storage_path": dest_path,
-            "storage_name": dest_name
-        }
-        stored_records.append(stored_record)
-        vectors.append(vector)
-
-        try:
-            storage_path_rel = str(dest_path.relative_to(project_root))
-        except ValueError:
-            storage_path_rel = str(dest_path)
-
-        faiss_metadata.append({
-            "document_id": document_id,
-            "file_path": relative_document_path,
-            "storage_path": storage_path_rel,
-            "storage_folder": relative_folder,
-            "image_name": dest_name,
-            "image_format": info['image_format'],
-            "image_size": info['image_size'],
-            "width": info['width'],
-            "height": info['height'],
-            "line_number": info.get('line_number'),
-            "alt_text": info.get('alt_text'),
-            "source_path": info.get('source_path_relative'),
-        })
-
-    if not vectors:
-        shutil.rmtree(dest_folder, ignore_errors=True)
-        return result
-
-    import numpy as np
+    cleanup_dirs: Set[pathlib.Path] = set()
 
     try:
-        vectors_array = np.array(vectors, dtype=np.float32)
-        vector_ids = image_faiss_manager.add_vectors(vectors_array, faiss_metadata)
-    except Exception as exc:  # pylint: disable=broad-except
-        shutil.rmtree(dest_folder, ignore_errors=True)
-        logger.error("保存图片向量失败: %s", exc)
-        raise HTTPException(status_code=500, detail=f"保存图片向量失败: {exc}") from exc
+        for index, info in enumerate(images):
+            temp_dir = info.get('temp_dir')
+            if temp_dir:
+                cleanup_dirs.add(pathlib.Path(temp_dir))
 
-    for record, vector_id in zip(stored_records, vector_ids):
-        storage_path = record['storage_path']
+            source_path = info.get('source_path')
+            if not source_path:
+                logger.warning("图片源路径缺失，跳过当前图片")
+                continue
+
+            source_path_path = pathlib.Path(source_path)
+
+            dest_name = f"{index:04d}_{source_path_path.name}"
+            dest_path = dest_folder / dest_name
+
+            try:
+                shutil.copy2(source_path_path, dest_path)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("复制图片失败 %s -> %s: %s", source_path_path, dest_path, exc)
+                continue
+
+            try:
+                vector = clip_service.encode_image_path(dest_path)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.error("向量化图片失败 %s: %s", dest_path, exc)
+                try:
+                    dest_path.unlink()
+                except OSError:
+                    pass
+                continue
+
+            stored_record = {
+                **info,
+                "storage_path": dest_path,
+                "storage_name": dest_name
+            }
+            stored_records.append(stored_record)
+            vectors.append(vector)
+
+            try:
+                storage_path_rel = str(dest_path.relative_to(project_root))
+            except ValueError:
+                storage_path_rel = str(dest_path)
+
+            faiss_metadata.append({
+                "document_id": document_id,
+                "file_path": relative_document_path,
+                "storage_path": storage_path_rel,
+                "storage_folder": relative_folder,
+                "image_name": dest_name,
+                "image_format": info['image_format'],
+                "image_size": info['image_size'],
+                "width": info['width'],
+                "height": info['height'],
+                "line_number": info.get('line_number'),
+                "alt_text": info.get('alt_text'),
+                "source_path": info.get('source_path_relative'),
+            })
+
+        if not vectors:
+            shutil.rmtree(dest_folder, ignore_errors=True)
+            return result
+
+        import numpy as np
+
         try:
-            storage_path_rel = str(storage_path.relative_to(project_root))
-        except ValueError:
-            storage_path_rel = str(storage_path)
+            vectors_array = np.array(vectors, dtype=np.float32)
+            vector_ids = image_faiss_manager.add_vectors(vectors_array, faiss_metadata)
+        except Exception as exc:  # pylint: disable=broad-except
+            shutil.rmtree(dest_folder, ignore_errors=True)
+            logger.error("保存图片向量失败: %s", exc)
+            raise HTTPException(status_code=500, detail=f"保存图片向量失败: {exc}") from exc
 
-        sqlite_manager.insert_document_image(
-            document_id=document_id,
-            chunk_index=None,
-            line_number=record.get('line_number'),
-            image_name=record['storage_name'],
-            image_format=record['image_format'],
-            image_size=record['image_size'],
-            width=record['width'],
-            height=record['height'],
-            storage_path=storage_path_rel,
-            storage_folder=relative_folder,
-            source_path=record.get('source_path_relative'),
-            vector_id=vector_id
-        )
+        for record, vector_id in zip(stored_records, vector_ids):
+            storage_path = record['storage_path']
+            try:
+                storage_path_rel = str(storage_path.relative_to(project_root))
+            except ValueError:
+                storage_path_rel = str(storage_path)
 
-    result.update({
-        "stored": len(vector_ids),
-        "vector_ids": vector_ids,
-        "folder": relative_folder,
-    })
-    logger.info("成功处理 %d 张图片，存储目录: %s", result['stored'], relative_folder)
-    return result
+            sqlite_manager.insert_document_image(
+                document_id=document_id,
+                chunk_index=None,
+                line_number=record.get('line_number'),
+                image_name=record['storage_name'],
+                image_format=record['image_format'],
+                image_size=record['image_size'],
+                width=record['width'],
+                height=record['height'],
+                storage_path=storage_path_rel,
+                storage_folder=relative_folder,
+                source_path=record.get('source_path_relative'),
+                vector_id=vector_id
+            )
+
+        result.update({
+            "stored": len(vector_ids),
+            "vector_ids": vector_ids,
+            "folder": relative_folder,
+        })
+        logger.info("成功处理 %d 张图片，存储目录: %s", result['stored'], relative_folder)
+        return result
+    finally:
+        for temp_dir in cleanup_dirs:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:  # pylint: disable=broad-except
+                pass
 
 
 def gather_image_cleanup_targets(relative_path: str, is_folder: bool) -> Tuple[List[int], List[pathlib.Path]]:
@@ -770,7 +951,7 @@ async def upload_document(request: FileUploadRequest):
                         )
         
         # 4. 根据文档类型提取文本
-        supported_types = {"txt", "md", "markdown"}
+        supported_types = {"txt", "md", "markdown", "docx", "doc"}
         if file_type not in supported_types:
             raise HTTPException(status_code=400, detail=f"暂不支持的文件类型: {file_type}")
 

@@ -348,12 +348,9 @@ function ensureUploadIndicatorElement(fileElement) {
     indicator = document.createElement('div');
     indicator.className = 'upload-indicator';
     indicator.title = '已上传';
-    const contentDiv = fileElement.querySelector('div');
-    if (contentDiv) {
-      contentDiv.appendChild(indicator);
-    } else {
-      fileElement.appendChild(indicator);
-    }
+    const contentDiv = fileElement.querySelector('.file-item-content');
+    const targetContainer = contentDiv || fileElement;
+    targetContainer.appendChild(indicator);
   }
   indicator.classList.remove('uploading', 'reuploading');
   return indicator;
@@ -3513,9 +3510,7 @@ function renderTree(node, container, isRoot = false, depth = 0) {
   
   // 创建内容容器
   const contentDiv = document.createElement('div');
-  contentDiv.style.display = 'flex';
-  contentDiv.style.alignItems = 'center';
-  contentDiv.style.gap = '4px';
+  contentDiv.className = 'file-item-content';
   
   // 设置选中状态
   if (selectedItemPath === node.path) {
@@ -3525,37 +3520,34 @@ function renderTree(node, container, isRoot = false, depth = 0) {
   if (node.children) {
     div.classList.add('folder-item');
     
+    const isExpanded = expandedFolders.has(node.path);
+
     // 添加箭头图标
     const arrow = document.createElement('span');
     arrow.textContent = '▶';
-    arrow.style.fontSize = '8px';
-    arrow.style.color = '#888';
-    arrow.style.transition = 'transform 0.2s';
     arrow.className = 'folder-arrow';
-    arrow.style.transform = 'rotate(90deg)'; // 默认展开状态
+    arrow.style.transform = isExpanded ? 'rotate(90deg)' : 'rotate(0deg)';
     contentDiv.appendChild(arrow);
-    
-    // 添加文件夹图标
+
+    // 添加文件夹图标和名称容器
+    const nameWrapper = document.createElement('span');
+    nameWrapper.className = 'file-name';
+
     const folderIcon = document.createElement('span');
-    const isExpanded = expandedFolders.has(node.path);
+    folderIcon.className = 'file-icon-wrapper';
     folderIcon.innerHTML = getFileIcon(node.name, true, isExpanded);
-    folderIcon.style.display = 'flex';
-    folderIcon.style.alignItems = 'center';
-    folderIcon.style.fontSize = '10px';
-    folderIcon.style.width = '13px';
-    folderIcon.style.height = '13px';
-    folderIcon.className = 'folder-icon';
-    contentDiv.appendChild(folderIcon);
-    
-    // 添加文件名
+    nameWrapper.appendChild(folderIcon);
+
     const nameSpan = document.createElement('span');
+    nameSpan.className = 'file-name-text';
     nameSpan.textContent = node.name;
-    nameSpan.style.fontSize = '13px';
-    contentDiv.appendChild(nameSpan);
-    
+    nameWrapper.appendChild(nameSpan);
+
+    contentDiv.appendChild(nameWrapper);
+
     div.appendChild(contentDiv);
     container.appendChild(div);
-    
+
     // 添加拖拽功能
     addDragAndDropSupport(div, node, true);
     
@@ -3628,25 +3620,24 @@ function renderTree(node, container, isRoot = false, depth = 0) {
     div.classList.add('file-item-file');
     div.dataset.fileName = node.name;
     
-    // 添加文件图标
-    const fileIcon = document.createElement('span');
-    fileIcon.innerHTML = getFileIcon(node.name, false);
-    fileIcon.style.display = 'flex';
-    fileIcon.style.alignItems = 'center';
-    fileIcon.style.fontSize = '10px';
-    fileIcon.style.width = '12px';
-    fileIcon.style.height = '12px';
-    fileIcon.style.marginLeft = '11px'; // 与文件夹箭头对齐
-    contentDiv.appendChild(fileIcon);
-    
-    // 添加文件名
+    // 添加文件图标与名称
+    const nameWrapper = document.createElement('span');
+    nameWrapper.className = 'file-name';
+
+    const fileIconWrapper = document.createElement('span');
+    fileIconWrapper.className = 'file-icon-wrapper';
+    fileIconWrapper.innerHTML = getFileIcon(node.name, false);
+    nameWrapper.appendChild(fileIconWrapper);
+
     const nameSpan = document.createElement('span');
+    nameSpan.className = 'file-name-text';
     nameSpan.textContent = node.name;
-    nameSpan.style.fontSize = '12px';
-    contentDiv.appendChild(nameSpan);
-    
+    nameWrapper.appendChild(nameSpan);
+
+    contentDiv.appendChild(nameWrapper);
+
     div.appendChild(contentDiv);
-    
+
     // 添加拖拽功能
     addDragAndDropSupport(div, node, false);
     
