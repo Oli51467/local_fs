@@ -156,6 +156,27 @@ class FileViewer {
         opacity: 0.6;
       }
 
+      .image-file-viewer {
+        flex: 1;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg-color);
+        overflow: auto;
+        cursor: zoom-in;
+      }
+
+      .image-file-viewer img {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        border-radius: 12px;
+        box-shadow: 0 18px 36px rgba(15, 23, 42, 0.25);
+        background: #0f172a;
+      }
+
       /* 文本编辑器样式已移至TextViewer模块 */
 
 
@@ -204,8 +225,22 @@ class FileViewer {
       let content;
       let displayMode = 'text'; // 'text' 或 'html'
       let isEditable = true;
-      
-      switch (fileExt) {
+      let handled = false;
+
+      const hasIsImageFile = window.fsAPI && typeof window.fsAPI.isImageFile === 'function';
+      const isImageFile = hasIsImageFile
+        ? await window.fsAPI.isImageFile(filePath)
+        : this.isImageExtension(fileExt);
+
+      if (isImageFile) {
+        this.createImageView(tabId, filePath, fileName);
+        displayMode = 'image';
+        isEditable = false;
+        handled = true;
+      }
+
+      if (!handled) {
+        switch (fileExt) {
         case 'txt':
           // 使用TextViewer处理txt文件
           const result = await this.textViewer.openTextFile(filePath, tabId, fileName);
@@ -282,6 +317,7 @@ class FileViewer {
         default:
           this.createErrorView(tabId, '不支持的文件类型');
       }
+      }
       
       // 存储显示模式信息到内容元素的数据属性
       const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
@@ -334,27 +370,20 @@ class FileViewer {
       // 根据显示模式更新内容区域
       const displayMode = contentElement.dataset.displayMode;
       const isEditable = contentElement.dataset.isEditable === 'true';
-      const fileContent = contentElement.querySelector('.txt-editor');
-      const fileDisplay = contentElement.querySelector('.word-viewer, .error-message');
-      
-      if (displayMode === 'html') {
-        // 显示HTML内容
-        if (fileContent) {
-          fileContent.style.display = 'none';
-        }
-        if (fileDisplay) {
-          fileDisplay.style.display = 'block';
-        }
-      } else {
-        // 显示文本内容
-        if (fileDisplay) {
-          fileDisplay.style.display = 'none';
-        }
-        if (fileContent) {
-          fileContent.style.display = 'block';
-          fileContent.disabled = !isEditable;
-        }
-      }
+      const textEditors = contentElement.querySelectorAll('.txt-editor');
+      const viewerSelectors = '.word-viewer, .error-message, .html-viewer, .pdf-viewer-container, .pptx-viewer, .pptx-content, .docx-preview, .docx-preview-full, .docx-content, .image-file-viewer';
+      const viewerElements = contentElement.querySelectorAll(viewerSelectors);
+
+      const showText = displayMode === 'text' || displayMode === 'markdown';
+
+      textEditors.forEach((editor) => {
+        editor.style.display = showText ? 'block' : 'none';
+        editor.disabled = !showText || !isEditable;
+      });
+
+      viewerElements.forEach((viewer) => {
+        viewer.style.display = showText ? 'none' : '';
+      });
     }
   }
 
@@ -422,6 +451,76 @@ class FileViewer {
         welcomeMessage.style.display = 'flex';
       }
     }
+  }
+
+  isImageExtension(fileExt) {
+    const supported = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'svg'];
+    return supported.includes((fileExt || '').toLowerCase());
+  }
+
+  toFileUrl(filePath) {
+    if (!filePath) {
+      return '';
+    }
+    const normalized = filePath.replace(/\\/g, '/');
+    if (normalized.startsWith('file://')) {
+      return encodeURI(normalized);
+    }
+    if (normalized.startsWith('/')) {
+      return encodeURI(`file://${normalized}`);
+    }
+    return encodeURI(`file:///${normalized}`);
+  }
+
+  ensureImageViewer() {
+    if (window.__globalImageViewer) {
+      return window.__globalImageViewer;
+    }
+    if (!this.imageViewerInstance && window.ImageViewer) {
+      try {
+        this.imageViewerInstance = new window.ImageViewer();
+        window.__globalImageViewer = this.imageViewerInstance;
+      } catch (error) {
+        console.error('初始化图片查看器失败:', error);
+      }
+    }
+    return this.imageViewerInstance;
+  }
+
+  createImageView(tabId, filePath, fileName) {
+    const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
+    if (!contentElement) {
+      return;
+    }
+
+    contentElement.classList.add('image-content');
+    contentElement.innerHTML = '';
+    contentElement.style.padding = '0';
+    contentElement.style.margin = '0';
+
+    const viewer = document.createElement('div');
+    viewer.className = 'image-file-viewer';
+
+    const img = document.createElement('img');
+    const fileUrl = this.toFileUrl(filePath);
+    const altText = fileName || '图片预览';
+    if (fileUrl) {
+      img.src = fileUrl;
+    }
+    img.alt = altText;
+
+    viewer.appendChild(img);
+    viewer.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const viewerInstance = this.ensureImageViewer();
+      if (viewerInstance && typeof viewerInstance.show === 'function') {
+        viewerInstance.show(fileUrl, altText);
+      }
+    });
+
+    contentElement.appendChild(viewer);
+    contentElement.dataset.displayMode = 'image';
+    contentElement.dataset.isEditable = 'false';
   }
 
   // loadTextFile方法已移至TextViewer模块

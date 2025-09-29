@@ -5,6 +5,7 @@ const fileContentEl = document.getElementById('file-content');
 
 // 初始化文件查看器
 let fileViewer = null;
+let imageViewer = null;
 
 // 搜索结果状态
 const SEARCH_MODES = {
@@ -602,6 +603,7 @@ function initializeSearchUI() {
         padding: 6px;
         flex: 0 0 140px;
         max-height: 200px;
+        cursor: zoom-in;
       }
 
       .search-card-image-preview img {
@@ -613,6 +615,11 @@ function initializeSearchUI() {
         object-fit: contain;
         background: #0f172a;
         border-radius: 6px;
+        transition: transform 0.18s ease;
+      }
+
+      .search-card-image-preview:hover img {
+        transform: scale(1.02);
       }
 
       .search-result-card[data-result-type="image"] {
@@ -629,7 +636,7 @@ function initializeSearchUI() {
         flex: 1;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 8px;
         min-width: 0;
       }
 
@@ -645,26 +652,35 @@ function initializeSearchUI() {
       }
 
       .search-card-meta {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 6px 12px;
-        font-size: 12px;
-        color: var(--text-muted);
-      }
-
-      .search-result-card[data-result-type="image"] .search-card-meta {
-        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      }
-
-      .search-card-meta-row {
         display: flex;
-        justify-content: space-between;
-        gap: 8px;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
       }
 
-      .search-card-meta-row span:first-child {
+      .search-card-meta-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
         font-weight: 500;
-        color: var(--text-color);
+        background: rgba(148, 163, 184, 0.18);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        color: rgba(71, 85, 105, 0.92);
+        white-space: nowrap;
+      }
+
+      .dark-mode .search-card-meta-chip {
+        background: rgba(59, 130, 246, 0.12);
+        border-color: rgba(59, 130, 246, 0.4);
+        color: rgba(226, 232, 240, 0.85);
+      }
+
+      .search-result-card[data-result-type="image"] .search-card-path {
+        font-size: 11px;
+        line-height: 1.45;
       }
 
       .search-card-snippet mark {
@@ -1168,6 +1184,11 @@ function buildSearchCard(result, variant, index) {
     const imgSrc = buildImagePreviewSrc(result);
     if (imgSrc) {
       img.src = imgSrc;
+      preview.title = '点击预览图片';
+      preview.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openImagePreview(result, imgSrc);
+      });
     } else {
       img.alt = '预览不可用';
     }
@@ -1238,39 +1259,86 @@ function buildImagePreviewSrc(result) {
   return `file:///${encoded}`;
 }
 
+function ensureGlobalImageViewer() {
+  if (window.__globalImageViewer && window.__globalImageViewer !== imageViewer) {
+    imageViewer = window.__globalImageViewer;
+    return imageViewer;
+  }
+
+  if (!imageViewer && window.ImageViewer) {
+    try {
+      imageViewer = new window.ImageViewer();
+      window.__globalImageViewer = imageViewer;
+    } catch (viewerError) {
+      console.error('ImageViewer 初始化失败:', viewerError);
+      imageViewer = null;
+    }
+  }
+
+  return imageViewer;
+}
+
+function openImagePreview(result, src) {
+  if (!src) {
+    return;
+  }
+
+  const viewer = ensureGlobalImageViewer();
+  if (viewer && typeof viewer.show === 'function') {
+    const title = result?.image_name || result?.display_name || result?.filename || '';
+    viewer.show(src, title || src);
+    return;
+  }
+
+  // 作为降级方案，尝试通过新窗口打开
+  try {
+    window.open(src, '_blank');
+  } catch (error) {
+    console.warn('无法预览图片:', error);
+  }
+}
+
 function buildImageMetadataSection(result) {
   const rows = [];
 
   if (result?.image_format) {
-    rows.push({ label: '格式', value: String(result.image_format).toUpperCase() });
+    rows.push({ key: 'format', label: '格式', value: String(result.image_format).toUpperCase() });
   }
 
   if (Number.isFinite(result?.width) && Number.isFinite(result?.height)) {
-    rows.push({ label: '尺寸', value: `${result.width} × ${result.height}` });
+    rows.push({ key: 'dimensions', label: '尺寸', value: `${result.width} × ${result.height}` });
   }
 
   if (Number.isFinite(result?.image_size)) {
-    rows.push({ label: '大小', value: formatBytes(result.image_size) });
-  }
-
-  if (result?.filename) {
-    rows.push({ label: '文档', value: result.filename });
+    rows.push({ key: 'size', label: '大小', value: formatBytes(result.image_size) });
   }
 
   const confidence = result?.confidence ?? result?.final_score ?? result?.image_score;
   const confidenceText = formatPercentage(confidence, 1);
   if (confidenceText) {
-    rows.push({ label: '置信度', value: confidenceText });
+    rows.push({ key: 'confidence', label: '置信度', value: confidenceText });
   }
 
-  if (Number.isFinite(result?.line_number)) {
-    rows.push({ label: '所在行', value: `#${result.line_number}` });
+  const lineHints = [result?.line_number, result?.line, result?.lineNumber];
+  const lineValue = lineHints
+    .map((hint) => {
+      const num = Number(hint);
+      return Number.isFinite(num) ? num : null;
+    })
+    .find((num) => num && num > 0);
+  if (lineValue) {
+    rows.push({ key: 'line', label: '行', value: `#${lineValue}` });
+  }
+
+  if (result?.filename) {
+    rows.push({ key: 'document', label: '文档', value: result.filename, title: result.filename });
   }
 
   if (result?.alt_text) {
     const text = String(result.alt_text).trim();
     if (text) {
-      rows.push({ label: 'Alt 文本', value: text.length > 60 ? `${text.slice(0, 60)}…` : text });
+      const truncated = text.length > 48 ? `${text.slice(0, 48)}…` : text;
+      rows.push({ key: 'alt', label: 'Alt', value: truncated, title: text });
     }
   }
 
@@ -1282,17 +1350,18 @@ function buildImageMetadataSection(result) {
   container.className = 'search-card-meta';
 
   rows.forEach((row) => {
-    const rowEl = document.createElement('div');
-    rowEl.className = 'search-card-meta-row';
-
-    const label = document.createElement('span');
-    label.textContent = row.label;
-    const value = document.createElement('span');
-    value.textContent = row.value;
-
-    rowEl.appendChild(label);
-    rowEl.appendChild(value);
-    container.appendChild(rowEl);
+    const chip = document.createElement('span');
+    chip.className = 'search-card-meta-chip';
+    if (row.key) {
+      chip.dataset.metaKey = row.key;
+    }
+    chip.textContent = row.value ? `${row.label} · ${row.value}` : row.label;
+    if (row.title) {
+      chip.title = row.title;
+    } else if (row.value) {
+      chip.title = `${row.label}: ${row.value}`;
+    }
+    container.appendChild(chip);
   });
 
   return container;
@@ -1495,10 +1564,6 @@ function formatPercentage(value, digits = 1) {
 }
 
 async function highlightSearchMatch(filePath, result) {
-  if (result && (result.result_type === 'image' || (Array.isArray(result.sources) && result.sources.includes('image')))) {
-    return false;
-  }
-
   const tabSelector = `[data-tab-id="${cssEscape(filePath)}"]`;
   const container = await waitForElement(tabSelector, 5000);
   if (!container) {
@@ -1508,7 +1573,14 @@ async function highlightSearchMatch(filePath, result) {
 
   const snippet = (result?.chunk_text || result?.text || '').trim();
   const query = (searchState.query || '').trim();
-  if (!snippet && !query) {
+  const lineHints = [result?.line_number, result?.line, result?.lineNumber, result?.lineIndex, result?.line_no];
+  const targetLine = lineHints
+    .map((hint) => {
+      const num = Number(hint);
+      return Number.isFinite(num) ? num : null;
+    })
+    .find((num) => num && num > 0);
+  if (!snippet && !query && !targetLine) {
     return false;
   }
 
@@ -1540,7 +1612,28 @@ function highlightTextareaMatch(textarea, snippet, query, result) {
   }
 
   const value = textarea.value || '';
-  const match = findMatchPositionInText(value, snippet, query, result);
+  let match = findMatchPositionInText(value, snippet, query, result);
+
+  if (!match) {
+    const lineHints = [
+      result?.line_number,
+      result?.line,
+      result?.lineIndex,
+      result?.line_no,
+      result?.lineNumber
+    ];
+    const targetLine = lineHints
+      .map((hint) => {
+        const num = Number(hint);
+        return Number.isFinite(num) ? num : null;
+      })
+      .find((num) => num && num > 0);
+
+    if (targetLine) {
+      match = findLineRangeByNumber(value, targetLine);
+    }
+  }
+
   if (!match) {
     return false;
   }
@@ -1558,7 +1651,24 @@ function highlightTextareaMatch(textarea, snippet, query, result) {
     }
   }
 
-  const { start, end, matchedText } = match;
+  let { start, end, matchedText } = match;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return false;
+  }
+  if (end <= start) {
+    let fallbackStart = Math.max(0, start - 1);
+    let fallbackEnd = Math.min(value.length, fallbackStart + 1);
+    if (fallbackEnd <= fallbackStart) {
+      fallbackStart = Math.max(0, start);
+      fallbackEnd = Math.min(value.length, fallbackStart + 1);
+    }
+    start = fallbackStart;
+    end = fallbackEnd;
+    matchedText = value.slice(start, end);
+    if (end <= start) {
+      return false;
+    }
+  }
   try {
     textarea.setSelectionRange(start, end);
   } catch (error) {
@@ -1665,6 +1775,47 @@ function findMatchPositionInText(text, snippet, query, result) {
   }
 
   return null;
+}
+
+function findLineRangeByNumber(text, lineNumber) {
+  const lineValue = Number(lineNumber);
+  if (!Number.isFinite(lineValue) || lineValue <= 0) {
+    return null;
+  }
+
+  const targetLine = Math.max(1, Math.floor(lineValue));
+  let currentLine = 1;
+  let index = 0;
+
+  while (currentLine < targetLine && index < text.length) {
+    const nextBreak = text.indexOf('\n', index);
+    if (nextBreak === -1) {
+      return null;
+    }
+    index = nextBreak + 1;
+    currentLine += 1;
+  }
+
+  if (currentLine !== targetLine) {
+    return null;
+  }
+
+  const start = index;
+  let end = text.indexOf('\n', start);
+  if (end === -1) {
+    end = text.length;
+  }
+
+  if (end > start && text[end - 1] === '\r') {
+    end -= 1;
+  }
+
+  const matchedText = text.slice(start, Math.max(start, end));
+  return {
+    start,
+    end: Math.max(start, end),
+    matchedText
+  };
 }
 
 function generateCandidateVariants(rawValue) {
@@ -1794,6 +1945,22 @@ function collectSearchCandidates(snippet, query, result) {
       .map((part) => part.trim())
       .filter((part) => part.length >= 2)
       .forEach((part) => addCandidate(part, { priority: true }));
+  }
+
+  if (result) {
+    const imageRelated = [
+      result.image_name,
+      result.display_name,
+      result.filename,
+      result.image_basename,
+      result.alt_text,
+      result.caption,
+      result.description
+    ];
+    imageRelated.forEach((value, idx) => {
+      const isPriority = idx <= 1;
+      addCandidate(value, isPriority ? { priority: true } : {});
+    });
   }
 
   if (!candidates.length && snippet) {
@@ -1949,11 +2116,69 @@ async function openSearchResult(result) {
     switchToFileMode();
   }
 
+  const normalizeForCompare = (path) => {
+    if (!path) {
+      return '';
+    }
+    return String(path)
+      .trim()
+      .replace(/^file:\/*/i, '')
+      .replace(/\\/g, '/')
+      .replace(/\/+/g, '/');
+  };
+
+  const pickFirst = (candidates = []) => {
+    for (const candidate of candidates) {
+      if (candidate && typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed) {
+          return trimmed;
+        }
+      }
+    }
+    return null;
+  };
+
+  const storagePath = pickFirst([
+    result.absolute_storage_path,
+    result.storage_path,
+    result.preview_path,
+    result.image_path
+  ]);
+
+  const documentPath = pickFirst([
+    result.absolute_path,
+    result.file_path,
+    result.document_path,
+    result.path,
+    result.source_path,
+    result.original_path
+  ]);
+
+  const hasDistinctDocument = documentPath && (!storagePath || normalizeForCompare(documentPath) !== normalizeForCompare(storagePath));
+
   let targetPath;
+  let openedDocumentForImage = false;
+
   if (isImageResult) {
-    targetPath = result.absolute_storage_path || result.absolute_path || result.storage_path || result.file_path || result.path;
+    if (hasDistinctDocument) {
+      targetPath = documentPath;
+      openedDocumentForImage = true;
+    } else {
+      targetPath = documentPath || storagePath;
+    }
   } else {
-    targetPath = result.absolute_path || result.file_path || result.path;
+    targetPath = documentPath || storagePath;
+  }
+
+  if (!targetPath) {
+    targetPath = pickFirst([
+      result.absolute_path,
+      result.file_path,
+      result.path,
+      result.absolute_storage_path,
+      result.storage_path
+    ]);
   }
   if (!targetPath) {
     showAlert('无法定位检索结果对应的文件', 'error');
@@ -1986,7 +2211,8 @@ async function openSearchResult(result) {
   try {
     await fileViewer.openFile(targetPath);
     await waitForElement(`[data-tab-id="${cssEscape(targetPath)}"]`, 5000);
-    if (!isImageResult) {
+    const shouldHighlight = !isImageResult || openedDocumentForImage;
+    if (shouldHighlight) {
       const highlighted = await highlightSearchMatchWithRetry(targetPath, result);
       if (!highlighted) {
         console.warn('未能在文件中定位到检索文本', result);
@@ -2072,6 +2298,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 获取ExplorerModule中的fileViewer实例
     fileViewer = explorerModule.getFileViewer();
     console.log('FileViewer初始化状态:', fileViewer ? '成功' : '失败');
+
+    ensureGlobalImageViewer();
+
     initializeSearchUI();
     
     // 绑定剩余的事件监听器
@@ -2315,6 +2544,23 @@ function getFileIcon(fileName, isFolder = false, isExpanded = false) {
       return '<img src="./dist/assets/ppt.png" style="width: 13px; height: 13px;" />';
     case 'json':
       return '<img src="./dist/assets/json.png" style="width: 13px; height: 13px;" />';
+    case 'png':
+    case 'apng':
+    case 'bmp':
+    case 'webp':
+    case 'tif':
+    case 'tiff':
+    case 'svg':
+    case 'heic':
+    case 'heif':
+      return '<img src="./dist/assets/png.png" style="width: 13px; height: 13px;" />';
+    case 'jpg':
+    case 'jpe':
+      return '<img src="./dist/assets/jpg.png" style="width: 13px; height: 13px;" />';
+    case 'jpeg':
+      return '<img src="./dist/assets/jpeg.png" style="width: 13px; height: 13px;" />';
+    case 'gif':
+      return '<img src="./dist/assets/gif.png" style="width: 13px; height: 13px;" />';
     default:
       // 其他文件类型使用默认文件图标
       return window.icons.file;
