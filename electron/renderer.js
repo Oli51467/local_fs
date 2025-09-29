@@ -1375,6 +1375,24 @@ function buildMetricsChips(result) {
     ? result.sources
     : [result.source || getPrimaryVariant(result)];
 
+  const matchFieldLabel = (field) => {
+    if (!field) {
+      return null;
+    }
+    switch (String(field)) {
+      case 'chunk_text':
+      case 'text':
+      case 'content':
+        return '内容';
+      case 'filename':
+        return '文件名';
+      case 'file_path':
+        return '路径';
+      default:
+        return field;
+    }
+  };
+
   sources.forEach((sourceKey) => {
     const metric = getMetricsForSource(result, sourceKey) || {};
     const parts = [];
@@ -1384,8 +1402,17 @@ function buildMetricsChips(result) {
     }
 
     if (sourceKey === 'exact') {
-      if (metric.match_position !== undefined && metric.match_position !== null) {
-        parts.push(`位置 ${metric.match_position}`);
+      const posValue = metric.match_position !== undefined && metric.match_position !== null
+        ? Number(metric.match_position)
+        : null;
+      if (Number.isFinite(posValue) && posValue >= 0) {
+        parts.push(`位置 ${posValue + 1}`);
+      }
+
+      const matchField = metric.match_field || result.match_field;
+      const fieldLabel = matchFieldLabel(matchField);
+      if (fieldLabel && fieldLabel !== '内容') {
+        parts.push(fieldLabel);
       }
     } else if (sourceKey === 'image') {
       const confidence = metric.confidence ?? result.confidence ?? result.final_score ?? result.image_score;
@@ -1456,6 +1483,8 @@ function getMetricsForSource(result, sourceKey) {
   if (sourceKey === 'exact') {
     fallback.rank = result.rank;
     fallback.match_position = result.match_position;
+    fallback.match_field = result.match_field;
+    fallback.match_length = result.match_length;
     fallback.match_score = result.match_score;
   } else if (sourceKey === 'image') {
     fallback.rank = result.rank ?? result.combined_rank;
@@ -1484,51 +1513,62 @@ function escapeRegExp(str) {
 }
 
 function getResultSnippet(result) {
-  const raw = result.chunk_text || result.text || '';
-  if (!raw) {
+  const previewRaw = typeof result.match_preview === 'string' ? result.match_preview : '';
+  const preview = previewRaw.trim();
+  const baseRaw = result.chunk_text || result.text || '';
+  const primaryRaw = preview || baseRaw;
+
+  if (!primaryRaw) {
     return { text: '（暂无内容预览）' };
   }
 
   const isExact = (Array.isArray(result.sources) && result.sources.includes('exact'))
     || (typeof result.source === 'string' && result.source.includes('exact'));
 
-  const singleLine = raw.replace(/\s+/g, ' ').trim();
   const MAX_LENGTH = 260;
-
-  if (!isExact) {
-    const truncated = singleLine.length <= MAX_LENGTH ? singleLine : `${singleLine.slice(0, MAX_LENGTH)}…`;
-    return { text: truncated };
+  const sources = [];
+  if (preview) {
+    sources.push(preview);
   }
+  if (baseRaw && (!preview || baseRaw !== preview)) {
+    sources.push(baseRaw);
+  }
+
+  const truncate = (text) => {
+    const singleLine = text.replace(/\s+/g, ' ').trim();
+    return singleLine.length <= MAX_LENGTH ? singleLine : `${singleLine.slice(0, MAX_LENGTH)}…`;
+  };
 
   const query = (searchState.query || '').trim();
-  if (!query) {
-    const truncated = singleLine.length <= MAX_LENGTH ? singleLine : `${singleLine.slice(0, MAX_LENGTH)}…`;
-    return { text: truncated };
+  if (!isExact || !query) {
+    return { text: truncate(primaryRaw) };
   }
 
-  const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const lower = normalized.toLowerCase();
   const qLower = query.toLowerCase();
+  const CONTEXT = 80;
 
-  let index = lower.indexOf(qLower);
-  if (index === -1) {
-    const truncated = singleLine.length <= MAX_LENGTH ? singleLine : `${singleLine.slice(0, MAX_LENGTH)}…`;
-    return { text: truncated };
+  for (const source of sources) {
+    const normalized = source.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lower = normalized.toLowerCase();
+    const index = lower.indexOf(qLower);
+    if (index === -1) {
+      continue;
+    }
+
+    const start = Math.max(0, index - CONTEXT);
+    const end = Math.min(normalized.length, index + query.length + CONTEXT);
+    const snippetSection = normalized.slice(start, end);
+    const regex = new RegExp(escapeRegExp(query), 'gi');
+    const highlighted = escapeHtml(snippetSection).replace(regex, (match) => `<mark>${match}</mark>`);
+    const prefix = start > 0 ? '…' : '';
+    const suffix = end < normalized.length ? '…' : '';
+
+    return {
+      html: `${prefix}${highlighted}${suffix}`
+    };
   }
 
-  const CONTEXT = 80;
-  let start = Math.max(0, index - CONTEXT);
-  let end = Math.min(normalized.length, index + query.length + CONTEXT);
-  let snippetSection = normalized.slice(start, end);
-
-  const regex = new RegExp(escapeRegExp(query), 'gi');
-  const highlighted = escapeHtml(snippetSection).replace(regex, (match) => `<mark>${match}</mark>`);
-  const prefix = start > 0 ? '…' : '';
-  const suffix = end < normalized.length ? '…' : '';
-
-  return {
-    html: `${prefix}${highlighted}${suffix}`
-  };
+  return { text: truncate(primaryRaw) };
 }
 
 function formatScore(value, digits = 3) {
@@ -1571,7 +1611,13 @@ async function highlightSearchMatch(filePath, result) {
     return false;
   }
 
-  const snippet = (result?.chunk_text || result?.text || '').trim();
+  const matchField = (result?.match_field || '').toLowerCase();
+  const textLikeFields = ['chunk_text', 'text', 'content'];
+  const hasTextMatch = !matchField || textLikeFields.includes(matchField);
+
+  const snippetSource = (result?.chunk_text || result?.text || '').trim();
+  const fallbackSnippet = (result?.match_preview || '').trim();
+  const snippet = snippetSource || fallbackSnippet;
   const query = (searchState.query || '').trim();
   const lineHints = [result?.line_number, result?.line, result?.lineNumber, result?.lineIndex, result?.line_no];
   const targetLine = lineHints
@@ -1584,6 +1630,10 @@ async function highlightSearchMatch(filePath, result) {
     return false;
   }
 
+  if (!hasTextMatch && !targetLine) {
+    return false;
+  }
+
   const displayMode = (container.dataset.displayMode || '').toLowerCase();
 
   if (container.classList.contains('txt-content') || displayMode === 'text') {
@@ -1591,7 +1641,7 @@ async function highlightSearchMatch(filePath, result) {
     if (!textarea) {
       return false;
     }
-    return highlightTextareaMatch(textarea, snippet, query, result);
+    return highlightTextareaMatch(textarea, snippetSource || snippet, query, result);
   }
 
   if (container.classList.contains('markdown-content') || displayMode === 'markdown') {
@@ -1599,7 +1649,7 @@ async function highlightSearchMatch(filePath, result) {
     if (!textarea) {
       return false;
     }
-    return highlightTextareaMatch(textarea, snippet, query, result);
+    return highlightTextareaMatch(textarea, snippetSource || snippet, query, result);
   }
 
   // 其他文件类型暂不支持自动定位
@@ -1961,6 +2011,10 @@ function collectSearchCandidates(snippet, query, result) {
       const isPriority = idx <= 1;
       addCandidate(value, isPriority ? { priority: true } : {});
     });
+
+    if (result.match_preview) {
+      addCandidate(result.match_preview, { priority: true });
+    }
   }
 
   if (!candidates.length && snippet) {

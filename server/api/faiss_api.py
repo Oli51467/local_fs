@@ -487,6 +487,27 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 data.update(overrides)
             return data
 
+        field_priorities = {
+            'chunk_text': 0,
+            'text': 0,
+            'filename': 1,
+            'file_path': 2
+        }
+
+        def build_match_preview(source_text: str, position: int, length: int, max_length: int = 160) -> str:
+            if not source_text:
+                return ''
+            safe_position = max(0, position)
+            safe_length = max(1, length)
+            end_pos = safe_position + safe_length
+            radius = max(20, (max_length - safe_length) // 2)
+            start = max(0, safe_position - radius)
+            end = min(len(source_text), end_pos + radius)
+            snippet = source_text[start:end]
+            prefix = '…' if start > 0 else ''
+            suffix = '…' if end < len(source_text) else ''
+            return f"{prefix}{snippet}{suffix}".strip()
+
         def build_chunk_key(meta: Dict[str, Any]) -> tuple:
             vector_id = meta.get('vector_id')
             if vector_id is not None:
@@ -508,16 +529,39 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
             filename = meta.get('filename') or ''
             file_path = meta.get('file_path') or meta.get('path') or ''
 
-            match_position = None
-            for candidate in (chunk_text, filename, file_path):
+            best_match: Optional[Dict[str, Any]] = None
+            for field_name, candidate in (
+                ('chunk_text', chunk_text),
+                ('filename', filename),
+                ('file_path', file_path)
+            ):
                 if not candidate:
                     continue
-                candidate_lower = str(candidate).lower()
+                text = str(candidate)
+                candidate_lower = text.lower()
                 pos = candidate_lower.find(query_lower)
                 if pos != -1:
-                    if match_position is None or pos < match_position:
-                        match_position = pos
-            if match_position is None:
+                    match_info = {
+                        'field': field_name,
+                        'position': pos,
+                        'text': text
+                    }
+                    if best_match is None:
+                        best_match = match_info
+                    else:
+                        current_priority = field_priorities.get(best_match['field'], 99)
+                        candidate_priority = field_priorities.get(field_name, 99)
+                        if candidate_priority < current_priority:
+                            best_match = match_info
+                        elif candidate_priority == current_priority and pos < best_match['position']:
+                            best_match = match_info
+                        elif candidate_priority == current_priority and pos == best_match['position'] and len(text) < len(best_match['text']):
+                            best_match = match_info
+
+            if best_match is None:
+                continue
+
+            if best_match['field'] == 'filename':
                 continue
 
             key = build_chunk_key(meta)
@@ -526,13 +570,18 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
             seen_exact.add(key)
 
             rank = len(exact_results) + 1
+            match_length = len(query_text)
+            match_preview = build_match_preview(best_match['text'], best_match['position'], match_length)
             exact_results.append(
                 build_result(
                     meta,
                     'exact',
                     {
                         'rank': rank,
-                        'match_position': match_position,
+                        'match_position': best_match['position'],
+                        'match_field': best_match['field'],
+                        'match_length': match_length,
+                        'match_preview': match_preview,
                         'match_score': 1.0,
                     }
                 )
@@ -659,6 +708,8 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
             return {
                 'rank': result.get('rank'),
                 'match_position': result.get('match_position'),
+                'match_field': result.get('match_field'),
+                'match_length': result.get('match_length'),
                 'match_score': result.get('match_score'),
                 'embedding_score': result.get('embedding_score'),
                 'bm25s_score': result.get('bm25s_score'),
@@ -680,6 +731,9 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 for field in (
                     'rank',
                     'match_position',
+                    'match_field',
+                    'match_length',
+                    'match_preview',
                     'match_score',
                     'embedding_score',
                     'bm25s_score',
