@@ -184,8 +184,8 @@ class FileViewer {
       /* Word查看器样式已移至WordViewer模块 */
 
       .error-message {
-        padding: 20px;
-        color: #e74c3c;
+        padding: 0;
+        color: inherit;
         text-align: center;
       }
 
@@ -316,6 +316,9 @@ class FileViewer {
           break;
         default:
           this.createErrorView(tabId, '不支持的文件类型');
+          displayMode = 'error';
+          isEditable = false;
+          handled = true;
       }
       }
       
@@ -610,11 +613,39 @@ class FileViewer {
     const contentElement = this.contentContainer.querySelector(`[data-tab-id="${tabId}"]`);
     if (!contentElement) return;
 
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-message';
-    errorDiv.textContent = message;
+    const wrapper = document.createElement('div');
+    wrapper.style.width = '100%';
+    wrapper.style.height = '100%';
+    wrapper.style.display = 'flex';
+    wrapper.style.alignItems = 'center';
+    wrapper.style.justifyContent = 'center';
+    wrapper.style.boxSizing = 'border-box';
 
-    contentElement.appendChild(errorDiv);
+    const inner = document.createElement('div');
+    inner.style.maxWidth = '360px';
+    inner.style.textAlign = 'center';
+    inner.style.padding = '18px 24px';
+    inner.style.color = '#1f2937';
+    inner.style.background = '#ffffff';
+    inner.style.borderRadius = '12px';
+    inner.style.boxShadow = '0 18px 36px rgba(15, 23, 42, 0.12)';
+
+    const title = document.createElement('div');
+    title.textContent = message || '不支持的文件类型';
+    title.style.fontSize = '16px';
+    title.style.fontWeight = '600';
+    title.style.marginBottom = '8px';
+
+    const hint = document.createElement('div');
+    hint.textContent = '该文件暂不支持在线预览，请在其他应用中打开或转换为受支持的格式。';
+    hint.style.fontSize = '13px';
+    hint.style.lineHeight = '1.6';
+    hint.style.color = '#6b7280';
+
+    inner.appendChild(title);
+    inner.appendChild(hint);
+    wrapper.appendChild(inner);
+    contentElement.appendChild(wrapper);
   }
 
 

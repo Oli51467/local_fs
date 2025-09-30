@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, List, Callable, Awaitable, Tuple, Set
 import logging
@@ -7,7 +7,7 @@ import pathlib
 import re
 import asyncio
 import shutil
-import uuid
+import threading
 from datetime import datetime
 import tempfile
 from typing import Dict, Any
@@ -26,6 +26,7 @@ from service.pdf_extraction_service import (
     generate_pdf_markdown,
     PdfExtractionError,
 )
+from uuid import uuid4
 from config.config import ServerConfig, DatabaseConfig
 from model.document_request_model import (
     FileUploadRequest,
@@ -86,6 +87,9 @@ class PdfParseResponse(BaseModel):
     message: str
     markdown_path: Optional[str] = None
     filename: Optional[str] = None
+    task_id: Optional[str] = None
+    progress: Optional[float] = None
+    stage: Optional[str] = None
 
 
 class FolderUploadStatusRequest(BaseModel):
@@ -126,6 +130,28 @@ DOCX_TYPES = {'docx'}
 DOC_TYPES = {'doc'}
 WORD_TYPES = DOC_TYPES.union(DOCX_TYPES)
 PDF_TYPES = {'pdf'}
+
+_pdf_parse_tasks: Dict[str, Dict[str, Any]] = {}
+_pdf_parse_lock = threading.Lock()
+
+
+def _create_pdf_task(task_id: str, data: Dict[str, Any]) -> None:
+    with _pdf_parse_lock:
+        _pdf_parse_tasks[task_id] = data
+
+
+def _update_pdf_task(task_id: str, **kwargs: Any) -> None:
+    with _pdf_parse_lock:
+        task = _pdf_parse_tasks.get(task_id)
+        if not task:
+            return
+        task.update(kwargs)
+
+
+def _get_pdf_task(task_id: str) -> Optional[Dict[str, Any]]:
+    with _pdf_parse_lock:
+        task = _pdf_parse_tasks.get(task_id)
+        return dict(task) if task else None
 
 
 def read_text_file_with_fallback(file_path: pathlib.Path) -> str:
@@ -452,6 +478,64 @@ def build_pdf_markdown_output_path(pdf_path: pathlib.Path) -> pathlib.Path:
         counter += 1
 
 
+def _run_pdf_parse_task(task_id: str, pdf_path: pathlib.Path) -> None:
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
+
+    def progress_callback(value: float, stage: str) -> None:
+        try:
+            clamped = max(0.0, min(1.0, float(value)))
+        except Exception:  # pylint: disable=broad-except
+            clamped = 0.0
+        _update_pdf_task(task_id, progress=clamped, stage=stage, message=stage)
+
+    try:
+        _update_pdf_task(task_id, status='processing', stage='准备解析', progress=0.01, message='准备解析')
+        output_path = build_pdf_markdown_output_path(pdf_path)
+        generate_pdf_markdown(
+            pdf_path,
+            output_path,
+            plain_text_converter=markdown_to_plain_text,
+            progress_callback=progress_callback
+        )
+
+        try:
+            relative_output = str(output_path.relative_to(project_root))
+        except ValueError:
+            relative_output = str(output_path)
+
+        _update_pdf_task(
+            task_id,
+            status='success',
+            message='PDF解析成功，已生成Markdown文件',
+            stage='解析完成',
+            progress=1.0,
+            markdown_path=relative_output,
+            filename=output_path.name
+        )
+    except PdfExtractionError as exc:
+        logger.error("PDF解析失败: %s", exc)
+        _update_pdf_task(
+            task_id,
+            status='error',
+            message=str(exc),
+            stage='解析失败',
+            progress=1.0,
+            markdown_path=None,
+            filename=None
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("PDF解析任务异常: %s", exc)
+        _update_pdf_task(
+            task_id,
+            status='error',
+            message=f"PDF解析失败: {exc}",
+            stage='解析失败',
+            progress=1.0,
+            markdown_path=None,
+            filename=None
+        )
+
+
 def extract_text_and_images(
     file_path: pathlib.Path,
     file_type: str
@@ -510,7 +594,7 @@ def store_document_images(document_id: int, file_path: pathlib.Path, images: Lis
     # 创建唯一的图片存储文件夹
     dest_folder = None
     for _ in range(3):
-        candidate = images_root / uuid.uuid4().hex
+        candidate = images_root / uuid4().hex
         try:
             candidate.mkdir(parents=True, exist_ok=False)
             dest_folder = candidate
@@ -565,10 +649,20 @@ def store_document_images(document_id: int, file_path: pathlib.Path, images: Lis
                     pass
                 continue
 
+            chunk_index_value = info.get('chunk_index')
+            if chunk_index_value is None:
+                chunk_index_value = index
+
+            line_number_value = info.get('line_number')
+            if line_number_value is None:
+                line_number_value = chunk_index_value if chunk_index_value is not None else index
+
             stored_record = {
                 **info,
                 "storage_path": dest_path,
-                "storage_name": dest_name
+                "storage_name": dest_name,
+                "chunk_index": int(chunk_index_value) if chunk_index_value is not None else index,
+                "line_number": int(line_number_value) if line_number_value is not None else index,
             }
             stored_records.append(stored_record)
             vectors.append(vector)
@@ -607,17 +701,25 @@ def store_document_images(document_id: int, file_path: pathlib.Path, images: Lis
             logger.error("保存图片向量失败: %s", exc)
             raise HTTPException(status_code=500, detail=f"保存图片向量失败: {exc}") from exc
 
-        for record, vector_id in zip(stored_records, vector_ids):
+        for idx, (record, vector_id) in enumerate(zip(stored_records, vector_ids)):
             storage_path = record['storage_path']
             try:
                 storage_path_rel = str(storage_path.relative_to(project_root))
             except ValueError:
                 storage_path_rel = str(storage_path)
 
+            chunk_index_value = record.get('chunk_index')
+            if chunk_index_value is None:
+                chunk_index_value = idx
+
+            line_number_value = record.get('line_number')
+            if line_number_value is None:
+                line_number_value = chunk_index_value if chunk_index_value is not None else idx
+
             sqlite_manager.insert_document_image(
                 document_id=document_id,
-                chunk_index=None,
-                line_number=record.get('line_number'),
+                chunk_index=int(chunk_index_value) if chunk_index_value is not None else None,
+                line_number=int(line_number_value) if line_number_value is not None else None,
                 image_name=record['storage_name'],
                 image_format=record['image_format'],
                 image_size=record['image_size'],
@@ -1175,8 +1277,11 @@ async def upload_document(request: FileUploadRequest):
 
 
 @router.post("/parse-pdf", response_model=PdfParseResponse)
-async def parse_pdf_to_markdown(request: PdfParseRequest) -> PdfParseResponse:
-    """解析PDF并在同目录生成Markdown文件"""
+async def parse_pdf_to_markdown(
+    request: PdfParseRequest,
+    background_tasks: BackgroundTasks
+) -> PdfParseResponse:
+    """启动PDF解析任务并返回任务ID"""
     try:
         pdf_path = pathlib.Path(request.file_path)
         if not pdf_path.is_absolute():
@@ -1196,33 +1301,42 @@ async def parse_pdf_to_markdown(request: PdfParseRequest) -> PdfParseResponse:
         if pdf_path.suffix.lower() != ".pdf":
             raise HTTPException(status_code=400, detail="仅支持对PDF文件进行解析")
 
-        output_path = build_pdf_markdown_output_path(pdf_path)
-
-        try:
-            generate_pdf_markdown(pdf_path, output_path)
-        except PdfExtractionError as exc:
-            logger.error("PDF解析失败 %s: %s", pdf_path, exc)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        try:
-            relative_output = str(output_path.relative_to(project_root))
-        except ValueError:
-            relative_output = str(output_path)
-
-        logger.info("PDF解析成功，生成Markdown: %s", output_path)
-
-        return PdfParseResponse(
-            status="success",
-            message="PDF解析成功，已生成Markdown文件",
-            markdown_path=relative_output,
-            filename=output_path.name
+        task_id = uuid4().hex
+        _create_pdf_task(
+            task_id,
+            {
+                'status': 'processing',
+                'message': '解析任务已启动',
+                'stage': '准备中',
+                'progress': 0.0,
+                'markdown_path': None,
+                'filename': None,
+                'task_id': task_id
+            }
         )
 
+        background_tasks.add_task(_run_pdf_parse_task, task_id, pdf_path)
+
+        return PdfParseResponse(
+            status='processing',
+            message='解析任务已启动',
+            stage='准备中',
+            progress=0.0,
+            task_id=task_id
+        )
     except HTTPException:
         raise
     except Exception as exc:  # pylint: disable=broad-except
-        logger.error("PDF解析过程中发生错误: %s", exc)
-        raise HTTPException(status_code=500, detail=f"PDF解析失败: {exc}") from exc
+        logger.error("PDF解析任务创建失败: %s", exc)
+        raise HTTPException(status_code=500, detail=f"无法启动解析任务: {exc}") from exc
+
+
+@router.get("/parse-pdf/status/{task_id}", response_model=PdfParseResponse)
+async def get_pdf_parse_status(task_id: str) -> PdfParseResponse:
+    task = _get_pdf_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在或已完成清理")
+    return PdfParseResponse(**task)
 
 
 @router.post("/mount-folder")

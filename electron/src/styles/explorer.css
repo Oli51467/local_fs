@@ -9,7 +9,13 @@
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--tree-border);
-  position: relative;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 20;
 }
 
 /* 拖拽调整宽度的把手 */
@@ -32,6 +38,10 @@
   padding: 0 10px;
   border-bottom: 1px solid var(--tree-border);
   font-weight: bold;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--tree-bg);
 }
 
 #resource-title {
@@ -43,7 +53,7 @@
   align-items: center;
 }
 
-#file-tree-header > div {
+#file-tree-header>div {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -80,11 +90,7 @@
 
 /* 文件树 */
 #file-tree {
-  flex: 1;
-  overflow-y: auto;
   padding: 5px 10px;
-  min-height: 100%; /* 确保容器至少占满可用空间 */
-  min-height: 200px; /* 确保至少有200px的高度用于拖拽 */
   box-sizing: border-box;
 }
 
@@ -96,9 +102,12 @@
   display: flex;
   align-items: center;
   user-select: none;
-  min-width: 0; /* 允许flex子元素收缩 */
-  width: 100%; /* 确保整行宽度 */
-  box-sizing: border-box; /* 包含padding在宽度计算内 */
+  min-width: 0;
+  /* 允许flex子元素收缩 */
+  width: 100%;
+  /* 确保整行宽度 */
+  box-sizing: border-box;
+  /* 包含padding在宽度计算内 */
 }
 
 /* 文件名显示样式 */
@@ -220,9 +229,25 @@
 
 /* 搜索区域样式 */
 #search-area {
-  flex: 1;
+  flex: 0 0 auto;
   padding: 10px;
-  overflow: auto;
+}
+
+#file-tree-container::-webkit-scrollbar {
+  width: 1px;
+}
+
+#file-tree-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#file-tree-container::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.4);
+  border-radius: 999px;
+}
+
+#file-tree-container:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.65);
 }
 
 #search-input-container {
@@ -419,8 +444,10 @@
   height: 8px;
   border-radius: 50%;
   background-color: #10b981;
-  margin-left: auto; /* 推到最右边 */
-  margin-right: 8px; /* 右边距 */
+  margin-left: auto;
+  /* 推到最右边 */
+  margin-right: 8px;
+  /* 右边距 */
   flex-shrink: 0;
   box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.3);
 }
@@ -436,9 +463,12 @@
 }
 
 @keyframes pulse {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.5;
   }

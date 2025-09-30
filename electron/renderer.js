@@ -41,8 +41,14 @@ const searchState = {
 let searchResultsContainer = null;
 let searchUIInitialized = false;
 let globalLoadingOverlay = null;
+let globalLoadingSpinner = null;
+let globalLoadingProgress = null;
+let globalLoadingProgressFill = null;
+let globalLoadingStage = null;
 let searchModeToggle = null;
 let searchModeButtons = [];
+let loadingProgressTimer = null;
+let loadingProgressState = null;
 
 const SEARCH_HISTORY_STORAGE_KEY = 'fs_search_history';
 const SEARCH_HISTORY_LIMIT = 5;
@@ -221,10 +227,31 @@ function ensureLoadingOverlayStyles() {
       border-top-color: rgba(37, 99, 235, 0.85);
       animation: global-loading-spin 0.8s linear infinite;
     }
+    .global-loading-progress {
+      width: 100%;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.3);
+      overflow: hidden;
+      display: none;
+    }
+    .global-loading-progress-bar {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, rgba(37, 99, 235, 0.95), rgba(59, 130, 246, 0.95));
+      transition: width 0.2s ease;
+    }
     .global-loading-message {
       font-size: 14px;
       color: var(--text-muted, rgba(75, 85, 99, 0.85));
       letter-spacing: 0.01em;
+    }
+    .global-loading-stage {
+      font-size: 12px;
+      color: rgba(100, 116, 139, 0.95);
+      letter-spacing: 0.01em;
+      display: none;
     }
     @keyframes global-loading-spin {
       to { transform: rotate(360deg); }
@@ -249,15 +276,44 @@ function showLoadingOverlay(message = '处理中，请稍候…') {
     text.className = 'global-loading-message';
     text.textContent = message;
 
+    const progress = document.createElement('div');
+    progress.className = 'global-loading-progress';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'global-loading-progress-bar';
+    progress.appendChild(progressBar);
+
+    const stage = document.createElement('div');
+    stage.className = 'global-loading-stage';
+
     dialog.appendChild(spinner);
+    dialog.appendChild(progress);
     dialog.appendChild(text);
+    dialog.appendChild(stage);
     overlay.appendChild(dialog);
     globalLoadingOverlay = overlay;
+    globalLoadingSpinner = spinner;
+    globalLoadingProgress = progress;
+    globalLoadingProgressFill = progressBar;
+    globalLoadingStage = stage;
   } else {
     const text = globalLoadingOverlay.querySelector('.global-loading-message');
     if (text) {
       text.textContent = message;
     }
+  }
+
+  if (globalLoadingSpinner) {
+    globalLoadingSpinner.style.display = 'block';
+  }
+  if (globalLoadingProgress) {
+    globalLoadingProgress.style.display = 'none';
+  }
+  if (globalLoadingProgressFill) {
+    globalLoadingProgressFill.style.width = '0%';
+  }
+  if (globalLoadingStage) {
+    globalLoadingStage.style.display = 'none';
+    globalLoadingStage.textContent = '';
   }
 
   if (!document.body.contains(globalLoadingOverlay)) {
@@ -266,9 +322,166 @@ function showLoadingOverlay(message = '处理中，请稍候…') {
 }
 
 function hideLoadingOverlay() {
+  stopLoadingOverlayProgressLoop();
   if (globalLoadingOverlay && globalLoadingOverlay.parentNode) {
     globalLoadingOverlay.parentNode.removeChild(globalLoadingOverlay);
   }
+  if (globalLoadingSpinner) {
+    globalLoadingSpinner.style.display = 'block';
+  }
+  if (globalLoadingProgress) {
+    globalLoadingProgress.style.display = 'none';
+  }
+  if (globalLoadingProgressFill) {
+    globalLoadingProgressFill.style.width = '0%';
+  }
+  if (globalLoadingStage) {
+    globalLoadingStage.style.display = 'none';
+    globalLoadingStage.textContent = '';
+  }
+}
+
+function setLoadingOverlayProgress(progress = 0, options = {}) {
+  ensureLoadingOverlayStyles();
+  const { message, stage } = options;
+  if (!globalLoadingOverlay || !document.body.contains(globalLoadingOverlay)) {
+    showLoadingOverlay(message || '处理中，请稍候…');
+  }
+
+  const clamped = Math.max(0, Math.min(1, Number(progress) || 0));
+
+  if (typeof message === 'string') {
+    const text = globalLoadingOverlay.querySelector('.global-loading-message');
+    if (text) {
+      text.textContent = message;
+    }
+  }
+
+  if (globalLoadingSpinner) {
+    globalLoadingSpinner.style.display = 'none';
+  }
+  if (globalLoadingProgress) {
+    globalLoadingProgress.style.display = 'block';
+  }
+  if (globalLoadingProgressFill) {
+    globalLoadingProgressFill.style.width = `${(clamped * 100).toFixed(1)}%`;
+  }
+
+  if (globalLoadingStage) {
+    const percentLabel = `${Math.round(clamped * 100)}%`;
+    if (stage) {
+      globalLoadingStage.textContent = `${stage} · ${percentLabel}`;
+      globalLoadingStage.style.display = 'block';
+    } else {
+      globalLoadingStage.textContent = percentLabel;
+      globalLoadingStage.style.display = 'block';
+    }
+  }
+}
+
+function startLoadingOverlayProgressLoop(optionsOrMessage = '处理中，请稍候…', initialStage = '') {
+  stopLoadingOverlayProgressLoop();
+
+  const options =
+    typeof optionsOrMessage === 'object' && optionsOrMessage !== null
+      ? optionsOrMessage
+      : { message: optionsOrMessage, stage: initialStage };
+
+  const {
+    message = '处理中，请稍候…',
+    stage = '准备解析',
+    sizeBytes = null
+  } = options;
+
+  const sizeMB = Math.max(0.5, sizeBytes ? sizeBytes / (1024 * 1024) : 0.5);
+  const estimatedDuration = 2600 + Math.min(15000, Math.pow(sizeMB, 0.6) * 2200);
+  const stagePlan = {
+    '准备解析': { target: 0.28, duration: estimatedDuration * 0.25 },
+    '解析中': { target: 0.75, duration: estimatedDuration * 0.5 },
+    '整理结果中': { target: 0.95, duration: estimatedDuration * 0.25 },
+    default: { target: 0.9, duration: estimatedDuration * 0.3 }
+  };
+
+  const initialTarget = stagePlan[stage]?.target ?? stagePlan.default.target;
+
+  loadingProgressState = {
+    message,
+    stage,
+    progress: 0.02,
+    startProgress: 0.02,
+    targetProgress: initialTarget,
+    stageStart: performance.now(),
+    stageDuration: stagePlan[stage]?.duration ?? stagePlan.default.duration,
+    stagePlan,
+    sizeBytes,
+    timerResolution: 60
+  };
+
+  setLoadingOverlayProgress(loadingProgressState.progress, loadingProgressState);
+
+  loadingProgressTimer = setInterval(() => {
+    if (!loadingProgressState) {
+      return;
+    }
+
+    const now = performance.now();
+    const elapsed = now - loadingProgressState.stageStart;
+    const duration = Math.max(400, loadingProgressState.stageDuration || 1000);
+    const ratio = Math.min(1, elapsed / duration);
+
+    const nextProgress = loadingProgressState.startProgress +
+      (loadingProgressState.targetProgress - loadingProgressState.startProgress) * ratio;
+
+    if (nextProgress > loadingProgressState.progress) {
+      loadingProgressState.progress = nextProgress;
+      setLoadingOverlayProgress(loadingProgressState.progress, loadingProgressState);
+    }
+
+    if (ratio >= 1 && loadingProgressState.progress < loadingProgressState.targetProgress) {
+      loadingProgressState.progress = loadingProgressState.targetProgress;
+      setLoadingOverlayProgress(loadingProgressState.progress, loadingProgressState);
+    }
+  }, loadingProgressState.timerResolution);
+}
+
+function updateLoadingOverlayProgressLoop({ message, stage } = {}) {
+  if (!loadingProgressState) {
+    return;
+  }
+
+  if (typeof message === 'string') {
+    loadingProgressState.message = message;
+  }
+
+  if (typeof stage === 'string' && stage) {
+    const stageInfo = loadingProgressState.stagePlan[stage] || loadingProgressState.stagePlan.default;
+    loadingProgressState.stage = stage;
+    loadingProgressState.startProgress = loadingProgressState.progress;
+    loadingProgressState.targetProgress = Math.max(
+      loadingProgressState.progress + 0.05,
+      stageInfo.target
+    );
+    loadingProgressState.stageDuration = stageInfo.duration;
+    loadingProgressState.stageStart = performance.now();
+  }
+
+  setLoadingOverlayProgress(loadingProgressState.progress, loadingProgressState);
+}
+
+function stopLoadingOverlayProgressLoop(finalState) {
+  if (loadingProgressTimer) {
+    clearInterval(loadingProgressTimer);
+    loadingProgressTimer = null;
+  }
+
+  const output = {
+    message: (finalState && finalState.message) || (loadingProgressState && loadingProgressState.message) || '处理中，请稍候…',
+    stage: (finalState && finalState.stage) || (loadingProgressState && loadingProgressState.stage) || ''
+  };
+  const finalProgress = finalState && typeof finalState.progress === 'number' ? finalState.progress : 1;
+  setLoadingOverlayProgress(finalProgress, output);
+
+  loadingProgressState = null;
 }
 
 // 初始化设置模块、资源管理器模块、测试模块、数据库模块和事件绑定
@@ -2641,7 +2854,7 @@ function createContextMenu(x, y, itemPath, isFolder) {
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
   const isPdfFile = !isFolder && itemPath.toLowerCase().endsWith('.pdf');
-  
+
   // 重命名菜单项
   const renameItem = document.createElement('div');
   renameItem.className = 'context-menu-item';
@@ -2664,6 +2877,9 @@ function createContextMenu(x, y, itemPath, isFolder) {
     }
   });
 
+  const separator1 = document.createElement('div');
+  separator1.className = 'context-menu-separator';
+
   // 挂载菜单项（仅对文件显示）
   const mountItem = document.createElement('div');
   mountItem.className = 'context-menu-item';
@@ -2685,7 +2901,7 @@ function createContextMenu(x, y, itemPath, isFolder) {
   if (isPdfFile) {
     parsePdfItem = document.createElement('div');
     parsePdfItem.className = 'context-menu-item';
-    parsePdfItem.innerHTML = `<span class="context-menu-icon">${window.icons.file}</span>解析PDF`;
+    parsePdfItem.innerHTML = `<span class="context-menu-icon">${window.icons.file}</span>解析为Markdown`;
     parsePdfItem.addEventListener('click', () => {
       hideContextMenu();
       parsePdfToMarkdown(itemPath);
@@ -2719,15 +2935,19 @@ function createContextMenu(x, y, itemPath, isFolder) {
       unmountDocument(itemPath, isFolder);
     }
   });
-  
+  const separator2 = document.createElement('div');
+  separator2.className = 'context-menu-separator';
+
   menu.appendChild(renameItem);
   menu.appendChild(deleteItem);
+  menu.appendChild(separator1);
   menu.appendChild(mountItem);
+  menu.appendChild(unmountItem);
+  menu.appendChild(remountItem);
   if (parsePdfItem) {
+    menu.appendChild(separator2);
     menu.appendChild(parsePdfItem);
   }
-  menu.appendChild(remountItem);
-  menu.appendChild(unmountItem);
   
   document.body.appendChild(menu);
   
@@ -3061,6 +3281,111 @@ function handleFolderOperationResult(title, data) {
   });
 }
 
+const PDF_PARSE_POLL_INTERVAL = 1200;
+
+async function pollPdfParseStatus(taskId) {
+  const endpoint = `http://localhost:8000/api/document/parse-pdf/status/${taskId}`;
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, PDF_PARSE_POLL_INTERVAL));
+
+    let response;
+    try {
+      response = await fetch(endpoint);
+    } catch (error) {
+      throw new Error(error.message || '进度查询失败');
+    }
+
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      throw new Error('解析进度响应格式错误');
+    }
+
+    if (!response.ok) {
+      throw new Error(payload.detail || payload.error || `HTTP错误 ${response.status}`);
+    }
+
+    const progressValue = typeof payload.progress === 'number' ? payload.progress : 0;
+    setLoadingOverlayProgress(progressValue, {
+      message: '正在解析 PDF…',
+      stage: payload.stage || payload.message
+    });
+
+    if (payload.status === 'success') {
+      return payload;
+    }
+
+    if (payload.status === 'error') {
+      throw new Error(payload.message || payload.detail || 'PDF解析失败');
+    }
+  }
+}
+
+async function handlePdfParseSuccess(result) {
+  const markdownPath = result.markdown_path ? `\n位置：${result.markdown_path}` : '';
+  showSuccessModal(`PDF解析成功${markdownPath}`.trim());
+
+  setTimeout(async () => {
+    try {
+      if (window.explorerModule && window.explorerModule.refreshFileTree) {
+        await window.explorerModule.refreshFileTree();
+      } else {
+        await loadFileTree();
+      }
+    } catch (refreshError) {
+      console.warn('刷新文件树失败:', refreshError);
+    }
+  }, 400);
+}
+
+function extractFileName(filePath) {
+  if (!filePath) {
+    return '';
+  }
+  const normalized = String(filePath).trim();
+  if (!normalized) {
+    return '';
+  }
+  const segments = normalized.split(/[\\/]/).filter(Boolean);
+  return segments.length ? segments[segments.length - 1] : normalized;
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size < 0) {
+    return '';
+  }
+  if (size === 0) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const exponent = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
+  const value = size / 1024 ** exponent;
+  return `${value.toFixed(value >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`;
+}
+
+function showUploadSummaryModal(result, filePath) {
+  const status = (result && result.status) || 'success';
+  let message = '挂载完成';
+  let modalType = 'success';
+
+  if (status === 'updated') {
+    message = '重新挂载完成';
+    modalType = 'info';
+  } else if (status === 'exists') {
+    message = '文件已挂载';
+    modalType = 'info';
+  }
+
+  showModal({
+    type: modalType,
+    title: '提示',
+    message,
+    showCancel: false
+  });
+}
+
 // 解析PDF为Markdown
 async function parsePdfToMarkdown(filePath) {
   showLoadingOverlay('正在解析 PDF…');
@@ -3082,42 +3407,39 @@ async function parsePdfToMarkdown(filePath) {
       })
     });
 
-    const result = await response.json();
-
-    if (!response.ok) {
-      const errorMessage = result.detail || result.error || `HTTP错误 ${response.status}`;
-      showModal({
-        type: 'error',
-        title: 'PDF解析失败',
-        message: errorMessage,
-        showCancel: false
-      });
-      return;
+    let result;
+    try {
+      result = await response.json();
+    } catch (error) {
+      throw new Error('解析任务响应格式错误');
     }
 
-    if (result.status === 'success') {
-      const markdownPath = result.markdown_path ? `\n位置：${result.markdown_path}` : '';
-      showSuccessModal(`PDF解析成功${markdownPath}`.trim());
+    if (!response.ok) {
+      throw new Error(result.detail || result.error || `HTTP错误 ${response.status}`);
+    }
 
-      setTimeout(async () => {
-        try {
-          if (window.explorerModule && window.explorerModule.refreshFileTree) {
-            await window.explorerModule.refreshFileTree();
-          } else {
-            await loadFileTree();
-          }
-        } catch (refreshError) {
-          console.warn('刷新文件树失败:', refreshError);
-        }
-      }, 400);
-    } else {
-      const errorMessage = result.message || result.error || 'PDF解析失败';
-      showModal({
-        type: 'error',
-        title: 'PDF解析失败',
-        message: errorMessage,
-        showCancel: false
+    if (result.status === 'processing' && result.task_id) {
+      const initialProgress = typeof result.progress === 'number' ? result.progress : 0;
+      setLoadingOverlayProgress(initialProgress, {
+        message: '正在解析 PDF…',
+        stage: result.stage || result.message
       });
+      const finalResult = await pollPdfParseStatus(result.task_id);
+      setLoadingOverlayProgress(1, {
+        message: '正在解析 PDF…',
+        stage: finalResult.stage || '解析完成'
+      });
+      await handlePdfParseSuccess(finalResult);
+    } else if (result.status === 'success') {
+      setLoadingOverlayProgress(1, {
+        message: '正在解析 PDF…',
+        stage: result.stage || '解析完成'
+      });
+      await handlePdfParseSuccess(result);
+    } else if (result.status === 'error') {
+      throw new Error(result.message || 'PDF解析失败');
+    } else {
+      throw new Error(result.message || '未知的解析状态');
     }
   } catch (error) {
     const errorMessage = error.message || '解析请求失败，请检查后端服务';
@@ -3134,88 +3456,119 @@ async function parsePdfToMarkdown(filePath) {
 
 // 上传文件函数
 async function uploadFile(filePath) {
-  showLoadingOverlay('正在挂载…');
-  try {
-    // 确保使用完整路径，因为后端需要验证文件存在
-    let uploadPath = filePath;
-    
-    // 如果传入的是相对路径，转换为绝对路径
-    if (!filePath.startsWith('/')) {
-      // 假设是相对路径，添加项目根目录前缀
-      uploadPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
+  const isPdfFile = filePath.toLowerCase().endsWith('.pdf');
+  const overlayMessage = isPdfFile ? '正在挂载 PDF…' : '正在挂载…';
+
+  showLoadingOverlay(overlayMessage);
+
+  let fileSizeBytes = null;
+  if (typeof window.fsAPI?.getFileInfo === 'function') {
+    try {
+      const infoResult = await window.fsAPI.getFileInfo(uploadPath);
+      if (infoResult && infoResult.success && infoResult.info && typeof infoResult.info.size === 'number') {
+        fileSizeBytes = infoResult.info.size;
+      }
+    } catch (statError) {
+      console.warn('获取文件大小失败:', statError);
     }
-    
+  }
+
+  if (isPdfFile) {
+    startLoadingOverlayProgressLoop({
+      message: overlayMessage,
+      stage: '准备解析',
+      sizeBytes: fileSizeBytes
+    });
+  }
+
+  let uploadPath = filePath;
+  if (!filePath.startsWith('/')) {
+    uploadPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
+  }
+
+  let fileItem = null;
+  try {
     console.log('上传文件路径:', uploadPath);
-    
-    // 显示上传状态
-    const fileItem = document.querySelector(`[data-path="${filePath}"]`);
+
+    fileItem = document.querySelector(`[data-path="${filePath}"]`);
     if (fileItem) {
       const indicator = fileItem.querySelector('.upload-indicator');
       if (indicator) {
         indicator.classList.add('uploading');
       }
     }
-    
-    // 调用后端上传接口
+
     const response = await fetch('http://localhost:8000/api/document/upload', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         file_path: uploadPath
       })
     });
-    
-    const result = await response.json();
-    
-    // 检查HTTP响应状态
-    if (!response.ok) {
-      // HTTP错误（4xx, 5xx等）
-      const errorMessage = result.detail || result.error || `HTTP错误 ${response.status}`;
-      console.error('文件上传失败:', errorMessage);
-      showAlert(`上传失败: ${errorMessage}`, 'error');
-      return;
+
+    if (isPdfFile) {
+      updateLoadingOverlayProgressLoop({ stage: '解析中', message: overlayMessage });
     }
-    
-    // 检查业务逻辑状态
-    if (result.status === 'success') {
-      // 新文件上传成功
+
+    let result;
+    try {
+      result = await response.json();
+    } catch (error) {
+      throw new Error('解析上传响应失败');
+    }
+
+    if (!response.ok) {
+      const errorMessage = result.detail || result.error || `HTTP错误 ${response.status}`;
+      throw new Error(errorMessage);
+    }
+
+    if (isPdfFile) {
+      updateLoadingOverlayProgressLoop({ stage: '整理结果中', message: overlayMessage });
+    }
+
+    const status = result.status;
+    if (status === 'success' || status === 'exists' || status === 'updated') {
       addUploadIndicator(filePath);
-      console.log('文件上传成功:', uploadPath);
-      // 显示成功提示（使用自定义模态框）
-      showSuccessModal('文件上传成功');
-    } else if (result.status === 'exists') {
-      // 文件已存在（相同内容的文件已上传过）
-      addUploadIndicator(filePath);
-      console.log('文件已上传:', uploadPath);
-      // 显示已存在提示（使用自定义模态框）
-      showSuccessModal('文件已上传');
-    } else if (result.status === 'updated') {
-      // 文件路径更新（检测到文件移动）
-      addUploadIndicator(filePath);
-      console.log('文件路径已更新:', uploadPath);
-      // 显示路径更新提示（使用自定义模态框）
-      showSuccessModal('文件已上传');
+
+      if (isPdfFile) {
+        stopLoadingOverlayProgressLoop({ progress: 1, message: overlayMessage, stage: '挂载完成' });
+      }
+
+      showUploadSummaryModal(result, filePath);
+
+      if (window.explorerModule && window.explorerModule.refreshFileTree) {
+        try {
+          await window.explorerModule.refreshFileTree();
+        } catch (refreshError) {
+          console.warn('刷新文件树失败:', refreshError);
+        }
+      }
     } else {
-      // 处理业务逻辑错误
       const errorMessage = result.message || result.error || result.detail || '未知错误';
-      console.error('文件上传失败:', errorMessage);
-      showAlert(`上传失败: ${errorMessage}`, 'error');
+      throw new Error(errorMessage);
     }
   } catch (error) {
     console.error('上传请求失败:', error);
-    // 显示更详细的错误信息
+    if (isPdfFile) {
+      stopLoadingOverlayProgressLoop({ progress: 1, message: overlayMessage, stage: '发生错误' });
+    }
     const errorMessage = error.message || '上传请求失败，请检查后端服务';
     showAlert(`上传失败: ${errorMessage}`, 'error');
   } finally {
+    if (isPdfFile) {
+      stopLoadingOverlayProgressLoop();
+    }
     hideLoadingOverlay();
-    // 移除上传状态
-    const fileItem = document.querySelector(`[data-path="${filePath}"]`);
+
+    if (!fileItem) {
+      fileItem = document.querySelector(`[data-path="${filePath}"]`);
+    }
     if (fileItem) {
       const indicator = fileItem.querySelector('.upload-indicator');
       if (indicator) {
-        indicator.classList.remove('uploading');
+        indicator.classList.remove('uploading', 'reuploading');
       }
     }
   }
