@@ -2640,6 +2640,7 @@ function createContextMenu(x, y, itemPath, isFolder) {
   menu.className = 'context-menu';
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
+  const isPdfFile = !isFolder && itemPath.toLowerCase().endsWith('.pdf');
   
   // 重命名菜单项
   const renameItem = document.createElement('div');
@@ -2680,6 +2681,17 @@ function createContextMenu(x, y, itemPath, isFolder) {
     });
   }
 
+  let parsePdfItem = null;
+  if (isPdfFile) {
+    parsePdfItem = document.createElement('div');
+    parsePdfItem.className = 'context-menu-item';
+    parsePdfItem.innerHTML = `<span class="context-menu-icon">${window.icons.file}</span>解析PDF`;
+    parsePdfItem.addEventListener('click', () => {
+      hideContextMenu();
+      parsePdfToMarkdown(itemPath);
+    });
+  }
+
   const remountItem = document.createElement('div');
   remountItem.className = 'context-menu-item';
   remountItem.innerHTML = `<span class="context-menu-icon">${window.icons.import}</span>重新挂载`;
@@ -2711,6 +2723,9 @@ function createContextMenu(x, y, itemPath, isFolder) {
   menu.appendChild(renameItem);
   menu.appendChild(deleteItem);
   menu.appendChild(mountItem);
+  if (parsePdfItem) {
+    menu.appendChild(parsePdfItem);
+  }
   menu.appendChild(remountItem);
   menu.appendChild(unmountItem);
   
@@ -3044,6 +3059,77 @@ function handleFolderOperationResult(title, data) {
       }
     }
   });
+}
+
+// 解析PDF为Markdown
+async function parsePdfToMarkdown(filePath) {
+  showLoadingOverlay('正在解析 PDF…');
+  try {
+    closeAllModals();
+
+    let requestPath = filePath;
+    if (!filePath.startsWith('/')) {
+      requestPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
+    }
+
+    const response = await fetch('http://localhost:8000/api/document/parse-pdf', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        file_path: requestPath
+      })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      const errorMessage = result.detail || result.error || `HTTP错误 ${response.status}`;
+      showModal({
+        type: 'error',
+        title: 'PDF解析失败',
+        message: errorMessage,
+        showCancel: false
+      });
+      return;
+    }
+
+    if (result.status === 'success') {
+      const markdownPath = result.markdown_path ? `\n位置：${result.markdown_path}` : '';
+      showSuccessModal(`PDF解析成功${markdownPath}`.trim());
+
+      setTimeout(async () => {
+        try {
+          if (window.explorerModule && window.explorerModule.refreshFileTree) {
+            await window.explorerModule.refreshFileTree();
+          } else {
+            await loadFileTree();
+          }
+        } catch (refreshError) {
+          console.warn('刷新文件树失败:', refreshError);
+        }
+      }, 400);
+    } else {
+      const errorMessage = result.message || result.error || 'PDF解析失败';
+      showModal({
+        type: 'error',
+        title: 'PDF解析失败',
+        message: errorMessage,
+        showCancel: false
+      });
+    }
+  } catch (error) {
+    const errorMessage = error.message || '解析请求失败，请检查后端服务';
+    showModal({
+      type: 'error',
+      title: 'PDF解析失败',
+      message: errorMessage,
+      showCancel: false
+    });
+  } finally {
+    hideLoadingOverlay();
+  }
 }
 
 // 上传文件函数

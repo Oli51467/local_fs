@@ -21,6 +21,11 @@ from service.faiss_service import FaissManager
 from service.image_faiss_service import ImageFaissManager
 from service.sqlite_service import SQLiteManager
 from service.text_splitter_service import init_text_splitter_service, get_text_splitter_service
+from service.pdf_extraction_service import (
+    parse_pdf_document,
+    generate_pdf_markdown,
+    PdfExtractionError,
+)
 from config.config import ServerConfig, DatabaseConfig
 from model.document_request_model import (
     FileUploadRequest,
@@ -70,6 +75,19 @@ class ReuploadDocumentResponse(BaseModel):
     file_info: Optional[Dict[str, Any]] = None
 
 
+class PdfParseRequest(BaseModel):
+    """PDF解析请求模型"""
+    file_path: str
+
+
+class PdfParseResponse(BaseModel):
+    """PDF解析响应模型"""
+    status: str
+    message: str
+    markdown_path: Optional[str] = None
+    filename: Optional[str] = None
+
+
 class FolderUploadStatusRequest(BaseModel):
     """文件夹上传状态请求模型"""
     folder_path: str
@@ -107,6 +125,7 @@ MARKDOWN_TYPES = {'md', 'markdown'}
 DOCX_TYPES = {'docx'}
 DOC_TYPES = {'doc'}
 WORD_TYPES = DOC_TYPES.union(DOCX_TYPES)
+PDF_TYPES = {'pdf'}
 
 
 def read_text_file_with_fallback(file_path: pathlib.Path) -> str:
@@ -157,6 +176,17 @@ def extract_text_content(file_path: pathlib.Path, file_type: str) -> str:
     if lowered in DOC_TYPES:
         text_content, _ = extract_doc_text_and_images(file_path, collect_images=False)
         return text_content
+
+    if lowered in PDF_TYPES:
+        try:
+            result = parse_pdf_document(file_path, markdown_to_plain_text)
+        except PdfExtractionError as exc:
+            logger.error("解析PDF文本失败 %s: %s", file_path, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            if 'result' in locals():
+                shutil.rmtree(result.temp_dir, ignore_errors=True)
+        return result.plain_text
 
     raw_text = read_text_file_with_fallback(file_path)
     return raw_text
@@ -409,22 +439,49 @@ def extract_doc_text_and_images(file_path: pathlib.Path, collect_images: bool = 
     return text_content, images
 
 
-def extract_text_and_images(file_path: pathlib.Path, file_type: str) -> Tuple[str, List[Dict[str, Any]]]:
+def build_pdf_markdown_output_path(pdf_path: pathlib.Path) -> pathlib.Path:
+    base_candidate = pdf_path.with_name(f"{pdf_path.stem}.mineru.md")
+    if not base_candidate.exists():
+        return base_candidate
+
+    counter = 1
+    while True:
+        candidate = pdf_path.with_name(f"{pdf_path.stem}.mineru({counter}).md")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def extract_text_and_images(
+    file_path: pathlib.Path,
+    file_type: str
+) -> Tuple[str, List[Dict[str, Any]], List[pathlib.Path]]:
     lowered = file_type.lower()
 
     if lowered in MARKDOWN_TYPES:
         raw_text = read_text_file_with_fallback(file_path)
         images = extract_markdown_images(file_path, raw_text)
-        return markdown_to_plain_text(raw_text), images
+        return markdown_to_plain_text(raw_text), images, []
 
     if lowered in DOCX_TYPES:
-        return extract_docx_text_and_images(file_path, collect_images=True)
+        text, images = extract_docx_text_and_images(file_path, collect_images=True)
+        return text, images, []
 
     if lowered in DOC_TYPES:
-        return extract_doc_text_and_images(file_path)
+        text, images = extract_doc_text_and_images(file_path)
+        return text, images, []
+
+    if lowered in PDF_TYPES:
+        try:
+            result = parse_pdf_document(file_path, markdown_to_plain_text)
+        except PdfExtractionError as exc:
+            logger.error("解析PDF失败 %s: %s", file_path, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        cleanup_dirs = [result.temp_dir]
+        return result.plain_text, result.images, cleanup_dirs
 
     raw_text = read_text_file_with_fallback(file_path)
-    return raw_text, []
+    return raw_text, [], []
 
 
 def store_document_images(document_id: int, file_path: pathlib.Path, images: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -944,171 +1001,228 @@ async def upload_document(request: FileUploadRequest):
                         )
         
         # 4. 根据文档类型提取文本
-        supported_types = {"txt", "md", "markdown", "docx", "doc"}
+        supported_types = {"txt", "md", "markdown", "docx", "doc", "pdf"}
         if file_type not in supported_types:
             raise HTTPException(status_code=400, detail=f"暂不支持的文件类型: {file_type}")
 
-        text_content, extracted_images = extract_text_and_images(file_path, file_type)
+        cleanup_paths: List[pathlib.Path] = []
+        try:
+            text_content, extracted_images, cleanup_paths = extract_text_and_images(file_path, file_type)
 
-        if extracted_images:
-            logger.info("检测到 %d 张Markdown图片待处理", len(extracted_images))
-        else:
-            extracted_images = []
+            if extracted_images:
+                logger.info("检测到 %d 张Markdown图片待处理", len(extracted_images))
+            else:
+                extracted_images = []
 
-        if not text_content.strip():
-            raise HTTPException(status_code=400, detail="文件内容为空")
-        
-        logger.info(f"文本提取完成，长度: {len(text_content)}")
-        
-        # 5. 分割文本
-        if not text_splitter_service:
-            raise HTTPException(status_code=500, detail="文本分割器未初始化")
-        
-        # 使用配置的文本分割器分割文本
-        chunks = text_splitter_service.split_text(text_content)
-        splitter_info = text_splitter_service.get_splitter_info()
-        logger.info(f"文本分割完成，共 {len(chunks)} 个块，分割器类型: {splitter_info['type']}")
-        
-        if not chunks:
-            raise HTTPException(status_code=400, detail="文本分割后无有效内容")
-        
-        # 6. 存储文档到SQLite数据库
-        if not sqlite_manager:
-            raise HTTPException(status_code=500, detail="数据库管理器未初始化")
-        
-        # 检查是否是重新处理的情况
-        is_reprocessing = False
-        if 'document_id' in locals():
-            is_reprocessing = True
-            logger.info(f"重新处理文档，文档ID: {document_id}")
-            # 清理现有的块和向量数据
-            relative_path_str = str(file_path.relative_to(project_root))
+            if not text_content.strip():
+                raise HTTPException(status_code=400, detail="文件内容为空")
 
-            existing_image_vector_ids, existing_folders = gather_image_cleanup_targets(relative_path_str, False)
-            if existing_image_vector_ids and image_faiss_manager:
-                image_faiss_manager.delete_vectors_by_ids(existing_image_vector_ids)
-                logger.info("已删除旧的图片向量数量: %d", len(existing_image_vector_ids))
-            if existing_folders:
-                removed_count = remove_image_folders(existing_folders)
-                logger.info("已清理旧的图片目录数量: %d", removed_count)
+            logger.info(f"文本提取完成，长度: {len(text_content)}")
 
-            sqlite_manager.delete_document_by_path(relative_path_str)
-            # 重新插入文档记录
-            document_id = sqlite_manager.insert_document(
-                filename=filename,
-                file_path=str(file_path.relative_to(project_root)),
-                file_type=file_type,
-                file_size=file_path.stat().st_size,
-                file_hash=file_hash,
-                content=text_content,
-                metadata={
-                    "upload_time": datetime.now().isoformat(),
-                    "chunks_count": len(chunks),
-                    "original_path": request.file_path
+            # 5. 分割文本
+            if not text_splitter_service:
+                raise HTTPException(status_code=500, detail="文本分割器未初始化")
+
+            # 使用配置的文本分割器分割文本
+            chunks = text_splitter_service.split_text(text_content)
+            splitter_info = text_splitter_service.get_splitter_info()
+            logger.info(f"文本分割完成，共 {len(chunks)} 个块，分割器类型: {splitter_info['type']}")
+
+            if not chunks:
+                raise HTTPException(status_code=400, detail="文本分割后无有效内容")
+
+            # 6. 存储文档到SQLite数据库
+            if not sqlite_manager:
+                raise HTTPException(status_code=500, detail="数据库管理器未初始化")
+
+            # 检查是否是重新处理的情况
+            is_reprocessing = False
+            if 'document_id' in locals():
+                is_reprocessing = True
+                logger.info(f"重新处理文档，文档ID: {document_id}")
+                # 清理现有的块和向量数据
+                relative_path_str = str(file_path.relative_to(project_root))
+
+                existing_image_vector_ids, existing_folders = gather_image_cleanup_targets(relative_path_str, False)
+                if existing_image_vector_ids and image_faiss_manager:
+                    image_faiss_manager.delete_vectors_by_ids(existing_image_vector_ids)
+                    logger.info("已删除旧的图片向量数量: %d", len(existing_image_vector_ids))
+                if existing_folders:
+                    removed_count = remove_image_folders(existing_folders)
+                    logger.info("已清理旧的图片目录数量: %d", removed_count)
+
+                sqlite_manager.delete_document_by_path(relative_path_str)
+                # 重新插入文档记录
+                document_id = sqlite_manager.insert_document(
+                    filename=filename,
+                    file_path=str(file_path.relative_to(project_root)),
+                    file_type=file_type,
+                    file_size=file_path.stat().st_size,
+                    file_hash=file_hash,
+                    content=text_content,
+                    metadata={
+                        "upload_time": datetime.now().isoformat(),
+                        "chunks_count": len(chunks),
+                        "original_path": request.file_path
+                    }
+                )
+            else:
+                # 新文档，正常插入
+                document_id = sqlite_manager.insert_document(
+                    filename=filename,
+                    file_path=str(file_path.relative_to(project_root)),
+                    file_type=file_type,
+                    file_size=file_path.stat().st_size,
+                    file_hash=file_hash,
+                    content=text_content,
+                    metadata={
+                        "upload_time": datetime.now().isoformat(),
+                        "chunks_count": len(chunks),
+                        "original_path": request.file_path
+                    }
+                )
+                logger.info(f"文档已存储到SQLite，文档ID: {document_id}")
+
+            # 7. 生成文本嵌入向量
+            embedding_service = get_embedding_service()
+            if not embedding_service:
+                raise HTTPException(status_code=500, detail="嵌入服务未初始化")
+
+            embeddings = []
+            for i, chunk in enumerate(chunks):
+                try:
+                    embedding = embedding_service.encode_text(chunk)
+                    embeddings.append(embedding)
+                    logger.debug(f"已生成第 {i+1} 个文本块的嵌入向量")
+                except Exception as e:
+                    logger.error(f"生成嵌入向量失败: {str(e)}")
+                    raise HTTPException(status_code=500, detail=f"生成嵌入向量失败: {str(e)}")
+
+            logger.info(f"嵌入向量生成完成，共 {len(embeddings)} 个向量")
+
+            if not faiss_manager:
+                raise HTTPException(status_code=500, detail="Faiss管理器未初始化")
+
+            vector_metadata = []
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                metadata = {
+                    "document_id": document_id,
+                    "chunk_index": i,
+                    "chunk_text": chunk[:200] + "..." if len(chunk) > 200 else chunk,
+                    "chunk_size": len(chunk),
+                    "file_path": str(file_path.relative_to(project_root)),
+                    "filename": filename,
+                    "file_type": file_type
                 }
+                vector_metadata.append(metadata)
+
+            import numpy as np
+            embeddings_array = np.array(embeddings, dtype=np.float32)
+            vector_ids = faiss_manager.add_vectors(embeddings_array, vector_metadata)
+            logger.info(f"向量已存储到Faiss索引，向量ID列表: {vector_ids}")
+
+            chunk_ids = []
+            for i, (chunk, vector_id) in enumerate(zip(chunks, vector_ids)):
+                chunk_id = sqlite_manager.insert_chunk(
+                    document_id=document_id,
+                    chunk_index=i,
+                    content=chunk,
+                    vector_id=vector_id
+                )
+                chunk_ids.append(chunk_id)
+
+            logger.info(f"文本块信息已存储到数据库，块ID列表: {chunk_ids}")
+
+            image_result = store_document_images(document_id, file_path, extracted_images)
+            logger.info(
+                "图片处理完成: 文档ID=%s, 图片数=%d",
+                document_id,
+                image_result.get('stored', 0)
             )
-        else:
-            # 新文档，正常插入
-            document_id = sqlite_manager.insert_document(
-                filename=filename,
-                file_path=str(file_path.relative_to(project_root)),
-                file_type=file_type,
-                file_size=file_path.stat().st_size,
-                file_hash=file_hash,
-                content=text_content,
-                metadata={
-                    "upload_time": datetime.now().isoformat(),
-                    "chunks_count": len(chunks),
-                    "original_path": request.file_path
-                }
-            )
-            logger.info(f"文档已存储到SQLite，文档ID: {document_id}")
-        
-        # 7. 生成文本嵌入向量
-        embedding_service = get_embedding_service()
-        if not embedding_service:
-            raise HTTPException(status_code=500, detail="嵌入服务未初始化")
-        
-        # 为每个文本块生成嵌入向量
-        embeddings = []
-        for i, chunk in enumerate(chunks):
-            try:
-                embedding = embedding_service.encode_text(chunk)
-                embeddings.append(embedding)
-                logger.debug(f"已生成第 {i+1} 个文本块的嵌入向量")
-            except Exception as e:
-                logger.error(f"生成嵌入向量失败: {str(e)}")
-                raise HTTPException(status_code=500, detail=f"生成嵌入向量失败: {str(e)}")
-        
-        logger.info(f"嵌入向量生成完成，共 {len(embeddings)} 个向量")
-        
-        # 8. 存储向量到Faiss索引
-        if not faiss_manager:
-            raise HTTPException(status_code=500, detail="Faiss管理器未初始化")
-        
-        # 为每个向量准备元数据
-        vector_metadata = []
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            metadata = {
-                "document_id": document_id,
-                "chunk_index": i,
-                "chunk_text": chunk[:200] + "..." if len(chunk) > 200 else chunk,  # 存储前200字符作为预览
-                "chunk_size": len(chunk),
-                "file_path": str(file_path.relative_to(project_root)),
-                "filename": filename,
-                "file_type": file_type
-            }
-            vector_metadata.append(metadata)
-        
-        # 批量添加向量到索引
-        import numpy as np
-        embeddings_array = np.array(embeddings, dtype=np.float32)
-        vector_ids = faiss_manager.add_vectors(embeddings_array, vector_metadata)
-        logger.info(f"向量已存储到Faiss索引，向量ID列表: {vector_ids}")
-        
-        # 9. 存储文本块信息到数据库
-        chunk_ids = []
-        for i, (chunk, vector_id) in enumerate(zip(chunks, vector_ids)):
-            chunk_id = sqlite_manager.insert_chunk(
+
+            return FileUploadResponse(
+                status="success",
+                message=f"文档上传成功，文档ID: {document_id}",
                 document_id=document_id,
-                chunk_index=i,
-                content=chunk,
-                vector_id=vector_id
+                file_info={
+                    "filename": filename,
+                    "file_type": file_type,
+                    "file_hash": file_hash,
+                    "file_size": file_path.stat().st_size,
+                    "chunks_count": len(chunks),
+                    "vector_count": len(vector_ids),
+                    "image_count": image_result.get('stored', 0),
+                    "image_vector_count": len(image_result.get('vector_ids', [])),
+                    "image_folder": image_result.get('folder')
+                }
             )
-            chunk_ids.append(chunk_id)
-        
-        logger.info(f"文本块信息已存储到数据库，块ID列表: {chunk_ids}")
-
-        image_result = store_document_images(document_id, file_path, extracted_images)
-        logger.info(
-            "图片处理完成: 文档ID=%s, 图片数=%d",
-            document_id,
-            image_result.get('stored', 0)
-        )
-        
-        # 10. 返回上传结果
-        return FileUploadResponse(
-            status="success",
-            message=f"文档上传成功，文档ID: {document_id}",
-            document_id=document_id,
-            file_info={
-                "filename": filename,
-                "file_type": file_type,
-                "file_hash": file_hash,
-                "file_size": file_path.stat().st_size,
-                "chunks_count": len(chunks),
-                "vector_count": len(vector_ids),
-                "image_count": image_result.get('stored', 0),
-                "image_vector_count": len(image_result.get('vector_ids', [])),
-                "image_folder": image_result.get('folder')
-            }
-        )
+        finally:
+            cleanup_seen: Set[pathlib.Path] = set()
+            for temp_dir in cleanup_paths:
+                if not temp_dir or temp_dir in cleanup_seen:
+                    continue
+                cleanup_seen.add(temp_dir)
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:  # pylint: disable=broad-except
+                    pass
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"文档上传失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"文档上传失败: {str(e)}")
+
+
+@router.post("/parse-pdf", response_model=PdfParseResponse)
+async def parse_pdf_to_markdown(request: PdfParseRequest) -> PdfParseResponse:
+    """解析PDF并在同目录生成Markdown文件"""
+    try:
+        pdf_path = pathlib.Path(request.file_path)
+        if not pdf_path.is_absolute():
+            pdf_path = (ServerConfig.PROJECT_ROOT / pdf_path).resolve()
+        else:
+            pdf_path = pdf_path.resolve()
+
+        project_root = ServerConfig.PROJECT_ROOT.resolve()
+        try:
+            pdf_path.relative_to(project_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="文件必须位于项目根目录内") from exc
+
+        if not pdf_path.exists() or not pdf_path.is_file():
+            raise HTTPException(status_code=404, detail=f"文件不存在: {pdf_path}")
+
+        if pdf_path.suffix.lower() != ".pdf":
+            raise HTTPException(status_code=400, detail="仅支持对PDF文件进行解析")
+
+        output_path = build_pdf_markdown_output_path(pdf_path)
+
+        try:
+            generate_pdf_markdown(pdf_path, output_path)
+        except PdfExtractionError as exc:
+            logger.error("PDF解析失败 %s: %s", pdf_path, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            relative_output = str(output_path.relative_to(project_root))
+        except ValueError:
+            relative_output = str(output_path)
+
+        logger.info("PDF解析成功，生成Markdown: %s", output_path)
+
+        return PdfParseResponse(
+            status="success",
+            message="PDF解析成功，已生成Markdown文件",
+            markdown_path=relative_output,
+            filename=output_path.name
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("PDF解析过程中发生错误: %s", exc)
+        raise HTTPException(status_code=500, detail=f"PDF解析失败: {exc}") from exc
 
 
 @router.post("/mount-folder")
