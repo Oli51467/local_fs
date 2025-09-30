@@ -1,31 +1,53 @@
-# LoFS - Load once Fast Search
+# 🗂️ LoFS · Load once Fast Search
 
-LoFS (Load once Fast Search) is a desktop application that turns your local folders into an instantly searchable knowledge base.
+**English** ｜ [中文](README.md)
 
-## Core Highlights
-- **Load once, search fast**: parse and vectorize multiple document formats once, then enjoy millisecond semantic search.
-- **Smart parsing**: native support for Markdown, TXT, Word, PDF and more, with automatic text/image extraction and chunking.
-- **Local-first**: everything runs offline with SQLite + Faiss, keeping data safely on your machine.
-- **Friendly UI**: the Electron client offers a file tree, context menus, PDF parsing progress, and mount status indicators.
+LoFS (Load once Fast Search) is a desktop-oriented knowledge base manager for local files. Load a folder once and enjoy millisecond semantic and keyword search thereafter.
 
-## Project Overview
-LoFS combines an Electron desktop shell with a FastAPI backend to modernize local file management:
-- Batch mount folders or parse PDFs from the context menu to build your knowledge base quickly.
-- Real-time progress bars and completion notices guide every document operation.
-- Innovative coupling of single-pass mounting with multimodal (text + image) embeddings removes repetitive processing costs.
+## ✨ Core Highlights
+- 🔍 **Mount once, search fast**: parse Markdown, TXT, Word, PDF (and more), then vectorize both text and images for instant recall.
+- 📁 **Modern explorer UX**: context menus for mount/remount/unmount, PDF-specific parsing, and real-time progress indicators.
+- 🧠 **Hybrid retrieval engine**: Faiss for semantic vectors, BM25s for keyword recall, plus reranking transformers for precision.
+- 🔒 **Local-first**: SQLite + Faiss live entirely on disk; no network connection is required after setup.
+- 🛠️ **Ready-to-ship desktop app**: Electron front end + FastAPI backend with multi-platform packaging scripts.
 
-## Getting Started
-### Setup
+## 🎨 UI Glimpse
+| Welcome | PDF Parsing | Search View |
+|:--:|:--:|:--:|
+| ![Welcome](img/welcome_page.png) | ![PDF](img/pdf_viewer.png) | ![PPT](img/ppt_viewer.png) |
+
+## 🧭 Project Overview
+LoFS blends classic file management with modern semantic retrieval. Key innovations include:
+- **Single-pass mounting + persistent embeddings**: eliminates repetitive parsing and re-embedding overhead.
+- **Multimodal awareness**: extracts images from Markdown/Word/PDF and vectorizes them via CLIP for text+image search.
+- **Transparent workflows**: progress bars and completion notices for mounting, parsing, and remounting keep users informed.
+
+## 🚀 Quick Start
+### ✅ Requirements
+| Component | Minimum | Recommended |
+| --- | --- | --- |
+| Python | 3.8 | 3.10+ |
+| Node.js | 16 | 18+ |
+| npm | 8 | Latest LTS |
+| OS | Windows / macOS / Linux | — |
+
+### ⚙️ Installation
 ```bash
+# Clone the repository
+git clone <repository-url>
+cd LocalFS
+
+# Backend dependencies
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r server/requirements.txt
 
+# Frontend dependencies
 cd electron
 npm install
 ```
 
-### Development Run
+### ▶️ Run in Development
 ```bash
 # Terminal 1 — FastAPI backend
 python server/main.py
@@ -35,18 +57,18 @@ cd electron
 npm run dev
 ```
 
-### Packaging
+### 📦 Package the Desktop App
 ```bash
-python package.py        # build desktop installers
+python package.py        # all-in-one packaging
 ./build.sh               # macOS / Linux helper
 build.bat                # Windows helper
 ```
 
-## Tech Stack
-- **Frontend**: Electron, vanilla HTML/CSS/JavaScript
-- **Backend**: FastAPI, Pydantic, Uvicorn
-- **Search**: Faiss, BM25s, FlagEmbedding (BGE family)
+## 🧱 Tech Stack
+- **Frontend**: Electron · vanilla HTML/CSS/JavaScript · Axios
+- **Backend**: FastAPI · Pydantic · Uvicorn
+- **Search**: Faiss · BM25s · FlagEmbedding (BGE family) · CLIP
 - **Storage**: SQLite plus the local filesystem
 
 ---
-LoFS delivers a “load once, search fast” experience for anyone who wants a powerful yet lightweight local knowledge hub.
+LoFS = Local File System + Load once Fast Search — delivering a “load once, search fast” experience for local knowledge bases.

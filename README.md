@@ -1,31 +1,53 @@
-# LoFS - Load once Fast Search
+# 🗂️ LoFS · Load once Fast Search
 
-LoFS（Load once Fast Search）是一款面向本地文件的智能检索与管理桌面应用，让「一次加载，快速搜索」成为日常工作流的默认体验。
+[English](README_EN.md) ｜ **中文**
 
-## 核心特性
-- **一次挂载，快速搜索**：多格式文件统一解析并向量化，挂载后即可进行毫秒级语义检索。
-- **智能解析**：原生支持 Markdown、TXT、Word、PDF 等文档，自动提取文本与图片，并生成结构化片段。
-- **本地优先**：全部数据落地本地 SQLite 与 Faiss，离线环境亦可完成检索与管理。
-- **可视化操作**：Electron 桌面端提供文件树、右键菜单、解析进度条、挂载状态等直观反馈。
+LoFS（Load once Fast Search）是一款面向本地知识库的桌面级文件管理与语义检索工具。“加载一次，快速搜索” 是它的核心理念：只需挂载一次，随时获得毫秒级的全文与语义搜索体验。
 
-## 项目介绍
-LoFS 结合 Electron + FastAPI 双端架构，将传统文件管理与现代向量检索融合在一起：
-- 通过批量挂载文件夹、右键解析 PDF 等方式快速构建知识库。
-- 前端实时展示解析进度、挂载结果并支持智能提示。
-- 创新地将一次挂载与多模态（文本、图片）向量存储结合，降低重复处理成本。
+## ✨ 核心特性
+- 🔍 **一次挂载，极速搜索**：自动解析 Markdown、TXT、Word、PDF 等格式，向量化存储文本与图片内容。
+- 📁 **现代化文件树交互**：支持右键挂载/取消挂载、PDF 专属解析、解析进度实时可视化。
+- 🧠 **混合检索引擎**：结合 Faiss 向量索引、BM25s 关键词召回与重排序模型，实现精准结果。
+- 🔒 **本地优先**：所有文件、向量与索引均保存在本地 SQLite 与 Faiss，中断网络也可使用。
+- 🛠️ **开箱即用的桌面应用**：Electron 桌面端 + FastAPI 后端的双核架构，支持多平台打包。
 
-## 快速部署
-### 环境准备
+## 📸 界面一览
+| 欢迎页 | PDF 解析 | 搜索结果 |
+|:--:|:--:|:--:|
+| ![欢迎页面](img/welcome_page.png) | ![PDF查看器](img/pdf_viewer.png) | ![PPT查看器](img/ppt_viewer.png) |
+
+## 🧭 项目简介
+LoFS 将传统文件管理与现代语义检索融合，创新点包括：
+- **单次挂载 + 持久化向量库**：降低重复解析、重复嵌入的成本。
+- **文本 + 图片双模态**：提取 Markdown/Word/PDF 中的图片并进行 CLIP 向量化，实现图文混合检索。
+- **解析工作流可视化**：挂载、解析、重挂载的全过程都有实时进度与成功提示。
+
+## 🚀 快速开始
+### ✅ 环境要求
+| 组件 | 最低版本 | 推荐 |
+| --- | --- | --- |
+| Python | 3.8 | 3.10+ |
+| Node.js | 16 | 18+ |
+| npm | 8 | 最新稳定版 |
+| 操作系统 | Windows / macOS / Linux | — |
+
+### ⚙️ 安装步骤
 ```bash
+# 克隆仓库
+git clone <repository-url>
+cd LocalFS
+
+# 后端依赖
 python -m venv venv
-source venv/bin/activate        # Windows 请使用: venv\Scripts\activate
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r server/requirements.txt
 
+# 前端依赖
 cd electron
 npm install
 ```
 
-### 开发模式启动
+### ▶️ 启动项目
 ```bash
 # 终端 1：启动 FastAPI 后端
 python server/main.py
@@ -35,20 +57,18 @@ cd electron
 npm run dev
 ```
 
-### 打包发行
+### 📦 打包桌面应用
 ```bash
-# 生成桌面端安装包
-python package.py
-# 或使用脚本
-./build.sh        # macOS / Linux
-build.bat         # Windows
+python package.py        # 一键打包
+./build.sh               # macOS / Linux 快捷脚本
+build.bat                # Windows 快捷脚本
 ```
 
-## 技术栈
-- **前端**：Electron、原生 HTML/CSS/JavaScript
-- **后端**：FastAPI、Pydantic、Uvicorn
-- **搜索**：Faiss、BM25s、FlagEmbedding (BGE 系列)
-- **数据存储**：SQLite、局部文件系统
+## 🧱 技术栈概览
+- **前端**：Electron · 原生 HTML/CSS/JavaScript · Axios
+- **后端**：FastAPI · Pydantic · Uvicorn
+- **检索**：Faiss · BM25s · FlagEmbedding (BGE 系列) · CLIP
+- **存储**：SQLite · 本地文件系统
 
 ---
-想要一套「加载一次、搜索即达」的本地知识库？LoFS 就是为此而生。
+LoFS = Local File System + Load once Fast Search — 让本地文件的检索体验 “加载一次，搜索即达”。
