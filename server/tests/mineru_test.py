@@ -1,112 +1,104 @@
-"""Minimal MinerU demo: parse `data/test.pdf` and write outputs to `data/`."""
-from __future__ import annotations
-
+import copy
 import json
-import logging
+import os
+import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
-LOGGER = logging.getLogger(__name__)
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PDF_PATH = PROJECT_ROOT / "data" / "test.pdf"
-OUTPUT_DIR = PROJECT_ROOT / "data"
+import magic_pdf.libs.config_reader as config_reader
+from magic_pdf.config.enums import SupportedPdfParseMethod
+from magic_pdf.config.make_content_config import MakeMode
+from magic_pdf.data.data_reader_writer import FileBasedDataWriter, FileBasedDataReader
+from magic_pdf.data.dataset import PymuDocDataset
+from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from server.config.mineru_config import MINERU_CONFIG
 
 
-def _import_mineru():
-    """Return a MinerU-compatible class from the installed package."""
+def _write_runtime_config(repo_root: Path) -> Path:
+    """Materialise the MinerU config with repo-relative paths."""
 
-    candidates: tuple[tuple[str, tuple[str, ...]], ...] = (
-        ("mineru", ("MinerU", "MagicPDF", "MagicPdf", "Miner")),
-        ("magic_pdf", ("MinerU", "MagicPDF", "MagicPdf")),
+    meta_root = repo_root / "meta" / "pdf-extract-kit"
+    runtime_config = copy.deepcopy(MINERU_CONFIG)
+
+    def _resolve(value: object) -> str | None:
+        if not value:
+            return None
+        path_value = Path(str(value))
+        if path_value.is_absolute():
+            return str(path_value)
+        return str((meta_root / path_value).resolve())
+
+    for path_key in ("models-dir", "layoutreader-model-dir"):
+        if path_key in runtime_config:
+            runtime_config[path_key] = _resolve(runtime_config[path_key])
+
+    config_path = meta_root / "magic-pdf.offline.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(runtime_config, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
+    return config_path
 
-    last_exc: Exception | None = None
 
-    for module_name, attr_names in candidates:
-        try:
-            module = __import__(module_name, fromlist=["*"])  # type: ignore
-        except ImportError as exc:
-            last_exc = exc
-            continue
+# --------------------------
+# 主程序
+# --------------------------
+if __name__ == "__main__":
+    repo_root = REPO_ROOT
+    pdf_file_path = repo_root / "data" / "test.pdf"
+    models_root = repo_root / "meta" / "pdf-extract-kit"
+    models_dir = models_root / "models"
+    config_path = _write_runtime_config(repo_root)
 
-        for attr in attr_names:
-            if hasattr(module, attr):
-                LOGGER.debug("Using %s.%s", module_name, attr)
-                return getattr(module, attr)
+    if not pdf_file_path.exists():
+        raise FileNotFoundError(f"未找到测试PDF文件: {pdf_file_path}")
+    if not models_dir.exists():
+        raise FileNotFoundError(f"未找到本地pdf-extract-kit模型目录: {models_dir}")
 
-        last_exc = AttributeError(
-            f"Module '{module_name}' does not expose any of {attr_names}"
+    # 告知magic-pdf使用meta目录下提供的配置
+    os.environ["MINERU_TOOLS_CONFIG_JSON"] = str(config_path)
+    config_reader.CONFIG_FILE_NAME = str(config_path)
+
+    pdf_stem = pdf_file_path.stem
+    pdf_dir = pdf_file_path.parent
+
+    # 初始化数据读写器，仅保留最终 Markdown
+    writer_markdown = FileBasedDataWriter(str(pdf_dir))
+    reader_pdf = FileBasedDataReader("")
+
+    with TemporaryDirectory(prefix="mineru_images_") as temp_image_dir:
+        writer_image = FileBasedDataWriter(temp_image_dir)
+
+        # 读取PDF文件
+        bytes_pdf = reader_pdf.read(str(pdf_file_path))
+        dataset_pdf = PymuDocDataset(bytes_pdf)
+
+        # 处理数据（使用本地模型）
+        if dataset_pdf.classify() == SupportedPdfParseMethod.OCR:
+            infer_result = dataset_pdf.apply(doc_analyze, ocr=True)
+            pipe_result = infer_result.pipe_ocr_mode(writer_image)
+        else:
+            infer_result = dataset_pdf.apply(doc_analyze, ocr=False)
+            pipe_result = infer_result.pipe_txt_mode(writer_image)
+
+        # 获取模型处理后的结果
+        model_inference_result = infer_result.get_infer_res()
+        print("模型处理结果:", model_inference_result)
+
+        # 仅获取并保存Markdown内容
+        markdown_content = pipe_result.get_markdown(
+            temp_image_dir, md_make_mode=MakeMode.NLP_MD
         )
-
-    raise SystemExit(
-        "Could not locate a MinerU-compatible class. Ensure either the 'mineru'"
-        " or 'magic-pdf' package is installed and up to date."
-    ) from last_exc
-
-
-class MinerUExtractor:
-    """Lightweight wrapper around the MinerU PDF parser."""
-
-    def __init__(self, model_root: Path | None = None) -> None:
-        MinerU = _import_mineru()
-        kwargs = {"model_root": str(model_root)} if model_root else {}
-        LOGGER.info("Initialising MinerU with args: %s", kwargs or "default")
-        self._runtime = MinerU(**kwargs)
-
-    def parse_pdf(self, pdf_path: Path) -> dict | str | bytes:
-        LOGGER.info("Parsing PDF: %s", pdf_path)
-
-        if hasattr(self._runtime, "predict"):
-            return self._runtime.predict(pdf_path=str(pdf_path))
-        if callable(self._runtime):
-            return self._runtime(str(pdf_path))
-        raise RuntimeError("Unexpected MinerU interface; expected 'predict' or callable instance")
-
-    @staticmethod
-    def _write_payload(path: Path, payload: str | bytes) -> None:
-        if isinstance(payload, bytes):
-            path.write_bytes(payload)
-        else:
-            path.write_text(payload, encoding="utf-8")
-
-    def export_results(self, result: dict | str | bytes, pdf_path: Path, output_dir: Path) -> None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        stem = pdf_path.stem
-
-        if isinstance(result, dict):
-            json_path = output_dir / f"{stem}_mineru.json"
-            json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-            LOGGER.info("Full MinerU payload written to %s", json_path)
-
-            markdown = result.get("markdown") or result.get("md")
-            text = result.get("text")
-
-            if markdown:
-                md_path = output_dir / f"{stem}_mineru.md"
-                self._write_payload(md_path, markdown)
-                LOGGER.info("Markdown saved to %s", md_path)
-            if text:
-                txt_path = output_dir / f"{stem}_mineru.txt"
-                self._write_payload(txt_path, text)
-                LOGGER.info("Plain text saved to %s", txt_path)
-        else:
-            md_path = output_dir / f"{stem}_mineru.md"
-            self._write_payload(md_path, result)
-            LOGGER.info("Markdown saved to %s", md_path)
-
-
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
-
-    if not PDF_PATH.exists():
-        LOGGER.error("PDF file not found: %s", PDF_PATH)
-        return 1
-
-    extractor = MinerUExtractor()
-    result = extractor.parse_pdf(PDF_PATH)
-    extractor.export_results(result, PDF_PATH, OUTPUT_DIR)
-    LOGGER.info("MinerU demo finished")
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+        print("Markdown内容:", markdown_content)
+        pipe_result.dump_md(
+            writer_markdown,
+            f"{pdf_stem}.md",
+            temp_image_dir,
+            md_make_mode=MakeMode.NLP_MD,
+        )
