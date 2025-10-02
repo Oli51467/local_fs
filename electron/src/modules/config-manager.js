@@ -1,18 +1,56 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { EventEmitter } = require('events');
+const { app } = require('electron');
 
 class ConfigManager extends EventEmitter {
   constructor() {
     super();
-    this.settingsPath = path.join(__dirname, '..', '..', 'settings.json');
-    this.config = {};
-    this.watcher = null;
     this.isProduction = process.env.NODE_ENV === 'production';
     this.ignoreSettings = process.env.DEV_IGNORE_SETTINGS === 'true';
+
+    this.settingsDir = this.resolveSettingsDir();
+    this.settingsPath = path.join(this.settingsDir, 'settings.json');
+    this.legacySettingsPath = path.join(__dirname, '..', '..', 'settings.json');
+
+    this.ensureSettingsDirExists();
+    this.migrateLegacySettingsIfNeeded();
+
+    this.config = {};
+    this.watcher = null;
     
     this.loadConfig();
     this.setupWatcher();
+  }
+
+  resolveSettingsDir() {
+    try {
+      const userDataPath = app.getPath('userData');
+      return path.join(userDataPath, 'config');
+    } catch (error) {
+      console.error('无法获取用户配置目录，使用备用路径:', error);
+      return path.join(os.homedir(), '.lofs-config');
+    }
+  }
+
+  ensureSettingsDirExists() {
+    try {
+      fs.mkdirSync(this.settingsDir, { recursive: true });
+    } catch (error) {
+      console.error('创建配置目录失败:', error);
+    }
+  }
+
+  migrateLegacySettingsIfNeeded() {
+    try {
+      if (!fs.existsSync(this.settingsPath) && fs.existsSync(this.legacySettingsPath)) {
+        fs.copyFileSync(this.legacySettingsPath, this.settingsPath);
+        console.log('已从旧版设置文件迁移到用户配置目录');
+      }
+    } catch (error) {
+      console.error('迁移旧版设置文件失败:', error);
+    }
   }
 
   /**
