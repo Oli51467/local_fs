@@ -18,6 +18,86 @@ class DatabaseModule {
     this.init();
   }
 
+  buildImageVectorCard(record, index = 0) {
+    const rank = this.imageVectorState ? this.imageVectorState.offset + index + 1 : index + 1;
+    const documentName = record?.filename || '未命名文档';
+    const documentPath = record?.file_path || '';
+    const truncatedPath = documentPath ? this.truncateMiddleText(documentPath, 60) : '';
+    const formatLabel = record?.image_format ? String(record.image_format).toUpperCase() : 'IMG';
+    const hasResolution = Number.isFinite(record?.width) && Number.isFinite(record?.height);
+    const resolutionLabel = hasResolution
+      ? `${record.width} × ${record.height}`
+      : '未记录';
+    const hasSize = Number.isFinite(record?.image_size);
+    const sizeLabel = hasSize ? this.formatBytes(record.image_size) : '未知';
+    const uploadLabel = record?.image_upload_time ? this.formatDateTime(record.image_upload_time) : '-';
+    const vectorLabel = record?.vector_id != null ? String(record.vector_id) : '未绑定';
+    let locationLabel = '未知';
+    if (record?.line_number != null) {
+      locationLabel = `索引 ${record.line_number}`;
+    } else if (record?.source_path) {
+      locationLabel = this.truncateMiddleText(record.source_path, 48);
+    }
+    const previewSrc = this.buildImagePreviewSrc(record?.storage_path);
+
+    const preview = previewSrc
+      ? `
+        <button type="button" class="image-card-preview" data-src="${this.escapeHtml(previewSrc)}" data-title="${this.escapeHtml(documentName)}">
+          <img src="${this.escapeHtml(previewSrc)}" alt="${this.escapeHtml(documentName)}" loading="lazy" />
+          <span class="image-card-format">${this.escapeHtml(formatLabel)}</span>
+        </button>
+      `
+      : `
+        <div class="image-card-preview no-preview">
+          <div class="image-card-preview-fallback">${this.escapeHtml(formatLabel)}</div>
+          <span class="image-card-format">${this.escapeHtml(formatLabel)}</span>
+        </div>
+      `;
+
+    return `
+      <article class="image-card" data-vector-id="${this.escapeHtml(vectorLabel)}">
+        ${preview}
+        <div class="image-card-body">
+          <div class="image-card-header">
+            <div class="image-card-title" title="${this.escapeHtml(documentName)}">${this.escapeHtml(documentName)}</div>
+            ${documentPath ? `<div class="image-card-path" title="${this.escapeHtml(documentPath)}">${this.escapeHtml(truncatedPath)}</div>` : ''}
+          </div>
+          <div class="image-card-meta">
+            ${this.buildImageMetaItem('序号', `#${rank}`)}
+            ${this.buildImageMetaItem('向量ID', vectorLabel)}
+            ${this.buildImageMetaItem('分辨率', resolutionLabel)}
+            ${this.buildImageMetaItem('文件大小', sizeLabel)}
+            ${this.buildImageMetaItem('位置', locationLabel)}
+            ${this.buildImageMetaItem('上传时间', uploadLabel)}
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  buildImageMetaItem(label, value) {
+    return `
+      <div class="image-card-meta-item">
+        <span class="meta-label">${this.escapeHtml(label)}</span>
+        <span class="meta-value">${this.escapeHtml(value == null || value === '' ? '-' : String(value))}</span>
+      </div>
+    `;
+  }
+
+  attachImageCardEvents(container) {
+    const previewButtons = container.querySelectorAll('.image-card-preview[data-src]');
+    previewButtons.forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const src = button.getAttribute('data-src');
+        const title = button.getAttribute('data-title') || '';
+        if (src) {
+          this.openImagePreview(src, title);
+        }
+      });
+    });
+  }
+
   init() {
     this.bindEvents();
   }
@@ -524,6 +604,70 @@ class DatabaseModule {
     return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
   }
 
+  buildImagePreviewSrc(storagePath) {
+    const resolved = this.resolveProjectRelativeUrl(storagePath);
+    return resolved;
+  }
+
+  resolveProjectRelativeUrl(targetPath) {
+    if (!targetPath) {
+      return null;
+    }
+
+    let normalized = String(targetPath).trim();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.startsWith('file://')) {
+      return normalized;
+    }
+
+    normalized = normalized.replace(/\\/g, '/').replace(/^\.\//, '');
+
+    if (/^[a-zA-Z]:\//.test(normalized)) {
+      return `file:///${normalized}`;
+    }
+
+    if (normalized.startsWith('/')) {
+      return `file://${normalized}`;
+    }
+
+    try {
+      const url = new URL(`../${normalized}`, window.location.href);
+      return url.href;
+    } catch (error) {
+      console.warn('无法解析文件路径:', normalized, error);
+      return null;
+    }
+  }
+
+  truncateMiddleText(text, maxLength = 60) {
+    if (!text) {
+      return '';
+    }
+
+    const str = String(text);
+    if (str.length <= maxLength) {
+      return str;
+    }
+
+    const keep = Math.max(4, Math.floor((maxLength - 3) / 2));
+    return `${str.slice(0, keep)}...${str.slice(-keep)}`;
+  }
+
+  openImagePreview(src, title = '') {
+    if (!src) {
+      return;
+    }
+
+    try {
+      window.open(src, '_blank', 'noopener');
+    } catch (error) {
+      console.warn('无法打开图片预览:', title || src, error);
+    }
+  }
+
   // 工具方法：截断长文本
   truncateText(text, maxLength = 100) {
     if (typeof text !== 'string') {
@@ -711,58 +855,21 @@ class DatabaseModule {
   }
 
   renderImageVectorTable(records) {
-    const tableEl = document.getElementById('image-vector-table');
-    if (!tableEl) {
+    const container = document.getElementById('image-vector-table');
+    if (!container) {
       return;
     }
+
+    container.classList.add('image-card-grid');
 
     if (!records || records.length === 0) {
-      tableEl.innerHTML = '<div class="loading">暂无图片向量数据</div>';
+      container.innerHTML = '<div class="image-card-empty">暂无图片向量数据</div>';
       return;
     }
 
-    const header = [
-      '图片名称',
-      '所属文档',
-      '图片格式',
-      '尺寸',
-      '大小',
-      '向量ID',
-      '存储路径',
-      '上传时间'
-    ];
-
-    let html = '<table><thead><tr>';
-    header.forEach((title) => {
-      html += `<th>${this.escapeHtml(title)}</th>`;
-    });
-    html += '</tr></thead><tbody>';
-
-    records.forEach((record) => {
-      const imageName = record.image_name ? this.escapeHtml(record.image_name) : '-';
-      const documentName = record.filename ? this.escapeHtml(record.filename) : '-';
-      const documentPath = record.file_path ? this.escapeHtml(record.file_path) : '';
-      const format = record.image_format ? record.image_format.toUpperCase() : '-';
-      const dimensions = record.width && record.height ? `${this.escapeHtml(String(record.width))} × ${this.escapeHtml(String(record.height))}` : '-';
-      const sizeText = this.escapeHtml(this.formatBytes(record.image_size));
-      const vectorId = record.vector_id != null ? this.escapeHtml(String(record.vector_id)) : '-';
-      const storagePath = record.storage_path ? this.escapeHtml(record.storage_path) : '-';
-      const uploadTime = this.escapeHtml(this.formatDateTime(record.image_upload_time));
-
-      html += '<tr>';
-      html += `<td>${imageName}</td>`;
-      html += `<td><div>${documentName}</div>${documentPath ? `<div class="table-subtext">${documentPath}</div>` : ''}</td>`;
-      html += `<td>${this.escapeHtml(format)}</td>`;
-      html += `<td>${dimensions}</td>`;
-      html += `<td>${sizeText}</td>`;
-      html += `<td>${vectorId}</td>`;
-      html += `<td>${storagePath}</td>`;
-      html += `<td>${uploadTime}</td>`;
-      html += '</tr>';
-    });
-
-    html += '</tbody></table>';
-    tableEl.innerHTML = html;
+    const cardsHtml = records.map((record, index) => this.buildImageVectorCard(record, index)).join('');
+    container.innerHTML = cardsHtml;
+    this.attachImageCardEvents(container);
   }
 
   updateImagePagination() {

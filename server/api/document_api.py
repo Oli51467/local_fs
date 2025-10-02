@@ -26,6 +26,10 @@ from service.pdf_extraction_service import (
     generate_pdf_markdown,
     PdfExtractionError,
 )
+from service.pptx_extraction_service import (
+    extract_pptx_text_and_images,
+    PptxExtractionError,
+)
 from uuid import uuid4
 from config.config import ServerConfig, DatabaseConfig
 from model.document_request_model import (
@@ -125,11 +129,14 @@ text_splitter_service = None
 image_faiss_manager = None
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.tiff', '.bmp'}
+TEXT_TYPES = {'txt'}
 MARKDOWN_TYPES = {'md', 'markdown'}
 DOCX_TYPES = {'docx'}
 DOC_TYPES = {'doc'}
 WORD_TYPES = DOC_TYPES.union(DOCX_TYPES)
 PDF_TYPES = {'pdf'}
+PPTX_TYPES = {'pptx'}
+SUPPORTED_FILE_TYPES = TEXT_TYPES.union(MARKDOWN_TYPES, WORD_TYPES, PDF_TYPES, PPTX_TYPES)
 
 _pdf_parse_tasks: Dict[str, Dict[str, Any]] = {}
 _pdf_parse_lock = threading.Lock()
@@ -213,6 +220,17 @@ def extract_text_content(file_path: pathlib.Path, file_type: str) -> str:
             if 'result' in locals():
                 shutil.rmtree(result.temp_dir, ignore_errors=True)
         return result.plain_text
+
+    if lowered in PPTX_TYPES:
+        try:
+            pptx_result = extract_pptx_text_and_images(file_path)
+        except PptxExtractionError as exc:
+            logger.error("解析PPTX文本失败 %s: %s", file_path, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            if 'pptx_result' in locals() and pptx_result.temp_dir:
+                shutil.rmtree(pptx_result.temp_dir, ignore_errors=True)
+        return pptx_result.text
 
     raw_text = read_text_file_with_fallback(file_path)
     return raw_text
@@ -563,6 +581,15 @@ def extract_text_and_images(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         cleanup_dirs = [result.temp_dir]
         return result.plain_text, result.images, cleanup_dirs
+
+    if lowered in PPTX_TYPES:
+        try:
+            pptx_result = extract_pptx_text_and_images(file_path)
+        except PptxExtractionError as exc:
+            logger.error("解析PPTX失败 %s: %s", file_path, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        cleanup_dirs = [pptx_result.temp_dir] if pptx_result.temp_dir else []
+        return pptx_result.text, pptx_result.images, cleanup_dirs
 
     raw_text = read_text_file_with_fallback(file_path)
     return raw_text, [], []
@@ -1103,8 +1130,7 @@ async def upload_document(request: FileUploadRequest):
                         )
         
         # 4. 根据文档类型提取文本
-        supported_types = {"txt", "md", "markdown", "docx", "doc", "pdf"}
-        if file_type not in supported_types:
+        if file_type not in SUPPORTED_FILE_TYPES:
             raise HTTPException(status_code=400, detail=f"暂不支持的文件类型: {file_type}")
 
         cleanup_paths: List[pathlib.Path] = []
