@@ -10,6 +10,7 @@ from api.document_api import router as document_router, init_document_api
 from api.database_api import router as database_router, init_database_api
 from api.faiss_api import router as faiss_router, init_faiss_api
 from api.cleanup_api import router as cleanup_router
+from api.config_api import router as config_router
 from service.sqlite_service import SQLiteManager
 from service.faiss_service import FaissManager
 from service.image_faiss_service import ImageFaissManager
@@ -91,6 +92,7 @@ app.include_router(database_router)
 app.include_router(faiss_router)
 app.include_router(document_router)
 app.include_router(cleanup_router)
+app.include_router(config_router)
 
 @app.get("/")
 async def root():

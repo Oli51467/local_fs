@@ -126,7 +126,7 @@
           </svg>
         </div>
         <h1 class="splash-title">LoFS</h1>
-        <p class="splash-subtitle">智能文档管理平台</p>
+        <p class="splash-subtitle">Load Once Fast Search</p>
       </div>
       
       <div class="splash-loading">
@@ -193,6 +193,94 @@
           </label>
         </div>
       </div>
+
+      <section class="settings-section settings-card" id="retrieval-settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-titles">
+            <h2>检索设置</h2>
+            <p class="settings-card-subtitle">调节分块策略与混合检索权重，使检索结果更符合需求。</p>
+          </div>
+          <div class="settings-card-actions">
+            <span id="retrieval-settings-status" class="settings-status-text" aria-live="polite"></span>
+            <button type="button" id="retrieval-settings-reload" class="settings-btn ghost">恢复</button>
+            <button type="button" id="retrieval-settings-save" class="settings-btn primary" disabled>保存</button>
+          </div>
+        </div>
+
+        <div class="settings-card-body">
+          <div class="settings-slider" data-config-key="RECURSIVE_CHUNK_SIZE">
+            <div class="slider-header">
+              <div class="slider-title">
+                <span class="slider-label">递归分块大小</span>
+                <span class="slider-hint">RECURSIVE_CHUNK_SIZE · 上限 2000</span>
+              </div>
+              <span class="slider-value" id="retrieval-chunk-size-value">-</span>
+            </div>
+            <input type="range"
+                   id="retrieval-chunk-size"
+                   min="50"
+                   max="2000"
+                   step="10"
+                   value="300"
+                   data-config-key="RECURSIVE_CHUNK_SIZE">
+          </div>
+
+          <div class="settings-slider" data-config-key="RECURSIVE_CHUNK_OVERLAP">
+            <div class="slider-header">
+              <div class="slider-title">
+                <span class="slider-label">分块重叠</span>
+                <span class="slider-hint">RECURSIVE_CHUNK_OVERLAP · 上限 500</span>
+              </div>
+              <span class="slider-value" id="retrieval-chunk-overlap-value">-</span>
+            </div>
+            <input type="range"
+                   id="retrieval-chunk-overlap"
+                   min="0"
+                   max="500"
+                   step="5"
+                   value="80"
+                   data-config-key="RECURSIVE_CHUNK_OVERLAP">
+          </div>
+
+          <div class="settings-slider" data-config-key="BM25S_WEIGHT">
+            <div class="slider-header">
+              <div class="slider-title">
+                <span class="slider-label">BM25S 权重</span>
+                <span class="slider-hint">BM25S_WEIGHT · 上限 1.0</span>
+              </div>
+              <span class="slider-value" id="retrieval-bm25s-weight-value">-</span>
+            </div>
+            <input type="range"
+                   id="retrieval-bm25s-weight"
+                   min="0"
+                   max="1"
+                   step="0.01"
+                   value="0.70"
+                   data-config-key="BM25S_WEIGHT">
+          </div>
+
+          <div class="settings-slider" data-config-key="EMBEDDING_WEIGHT">
+            <div class="slider-header">
+              <div class="slider-title">
+                <span class="slider-label">向量检索权重</span>
+                <span class="slider-hint">EMBEDDING_WEIGHT · 上限 1.0</span>
+              </div>
+              <span class="slider-value" id="retrieval-embedding-weight-value">-</span>
+            </div>
+            <input type="range"
+                   id="retrieval-embedding-weight"
+                   min="0"
+                   max="1"
+                   step="0.01"
+                   value="0.30"
+                   data-config-key="EMBEDDING_WEIGHT">
+          </div>
+        </div>
+
+        <footer class="settings-card-footer">
+          <p>提示：BM25S 与向量权重总和无需等于 1，系统会自动重新归一化，并在下次检索时生效。</p>
+        </footer>
+      </section>
     </div>
     
     <!-- 测试页面 -->
