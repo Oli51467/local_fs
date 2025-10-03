@@ -110,6 +110,109 @@
     }
   }
 
+  function normalizeDocumentPath(pathValue) {
+    if (!pathValue) {
+      return '';
+    }
+
+    let normalized = String(pathValue).trim().replace(/\\/g, '/');
+    if (!normalized) {
+      return '';
+    }
+
+    const prefixes = ['data/', './data/', '/data/'];
+    for (const prefix of prefixes) {
+      if (normalized.startsWith(prefix)) {
+        normalized = normalized.slice(prefix.length);
+        break;
+      }
+    }
+
+    if (normalized.startsWith('/')) {
+      normalized = normalized.slice(1);
+    }
+
+    return normalized;
+  }
+
+  function getDisplayNameForImage(result, index = 0) {
+    if (!result) {
+      return `图片结果 ${index + 1}`;
+    }
+
+    const candidates = [
+      result.filename,
+      result.file_name,
+      result.display_name,
+      result.image_name
+    ];
+
+    for (const candidate of candidates) {
+      if (!candidate) {
+        continue;
+      }
+      const text = String(candidate).trim();
+      if (!text) {
+        continue;
+      }
+      if (/^(\d{3,})_slide\d{3}_shape\d{3,}(?:\.\w+)?$/i.test(text)) {
+        continue;
+      }
+      if (/^[a-f0-9]{16,}$/i.test(text)) {
+        continue;
+      }
+      return text;
+    }
+
+    const normalizedPath = normalizeDocumentPath(result.file_path || result.path || result.source_path || '');
+    if (normalizedPath) {
+      const segments = normalizedPath.split('/');
+      if (segments.length) {
+        return segments[segments.length - 1];
+      }
+    }
+
+    return `图片结果 ${index + 1}`;
+  }
+
+  function resolveToFileUrl(rawPath) {
+    if (!rawPath) {
+      return null;
+    }
+
+    let normalized = String(rawPath).trim();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.startsWith('file://')) {
+      return normalized;
+    }
+
+    normalized = normalized.replace(/\\/g, '/');
+
+    if (/^[a-zA-Z]:\//.test(normalized)) {
+      return `file:///${normalized}`;
+    }
+
+    if (normalized.startsWith('/')) {
+      return `file://${normalized}`;
+    }
+
+    if (normalized.startsWith('./')) {
+      normalized = normalized.slice(2);
+    }
+
+    try {
+      const base = window?.location?.href || 'file://';
+      const url = new URL(normalized, base);
+      return url.href;
+    } catch (error) {
+      console.warn('无法解析文件路径:', normalized, error);
+      return null;
+    }
+  }
+
   const SEARCH_MODES = {
     TEXT: 'text',
     IMAGE: 'image'
@@ -264,8 +367,8 @@
         #search-results-container {
           display: none;
           flex-direction: column;
-          gap: 16px;
-          padding: 20px;
+          gap: 18px;
+          padding: 24px;
           width: 100%;
           background: var(--bg-color);
           color: var(--text-color);
@@ -277,7 +380,7 @@
           color: var(--text-muted);
           display: flex;
           flex-wrap: wrap;
-          gap: 6px;
+          gap: 8px;
           align-items: center;
         }
 
@@ -291,16 +394,16 @@
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          padding: 40px 20px;
+          padding: 48px 20px;
           color: var(--text-muted);
           text-align: center;
-          gap: 12px;
+          gap: 14px;
         }
 
         .search-result-status .spinner {
-          width: 32px;
-          height: 32px;
-          border: 4px solid rgba(59, 130, 246, 0.15);
+          width: 34px;
+          height: 34px;
+          border: 4px solid rgba(59, 130, 246, 0.18);
           border-top-color: var(--accent-color);
           border-radius: 50%;
           animation: search-spin 0.8s linear infinite;
@@ -313,41 +416,49 @@
         }
 
         .search-result-card {
-          border: 1px solid rgba(148, 163, 184, 0.35);
-          border-radius: 12px;
-          padding: 18px;
+          position: relative;
+          border-radius: 18px;
+          padding: 22px;
           background: var(--bg-color);
-          box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
-          transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+          border: 1px solid rgba(148, 163, 184, 0.3);
+          box-shadow: 0 16px 36px rgba(15, 23, 42, 0.12);
+          transition: transform 0.18s ease, box-shadow 0.25s ease, border-color 0.25s ease;
           cursor: pointer;
           display: flex;
           flex-direction: column;
-          gap: 12px;
-        }
-
-        .dark-mode .search-result-card {
-          background: rgba(36, 36, 36, 0.92);
-          border-color: rgba(75, 85, 99, 0.4);
+          gap: 18px;
         }
 
         .search-result-card:hover {
-          transform: translateY(-2px);
-          border-color: rgba(59, 130, 246, 0.35);
-          box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12);
+          transform: translateY(-4px);
+          border-color: rgba(37, 99, 235, 0.45);
+          box-shadow: 0 22px 48px rgba(59, 130, 246, 0.22);
+        }
+
+        .dark-mode .search-result-card {
+          background: rgba(26, 32, 44, 0.95);
+          border-color: rgba(59, 130, 246, 0.28);
+          box-shadow: 0 18px 44px rgba(17, 24, 39, 0.55);
+        }
+
+        .dark-mode .search-result-card:hover {
+          border-color: rgba(96, 165, 250, 0.55);
+          box-shadow: 0 24px 52px rgba(59, 130, 246, 0.32);
         }
 
         .search-card-header {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 8px;
+          gap: 10px;
         }
 
         .search-card-title {
           margin: 0;
-          font-size: 15px;
-          font-weight: 600;
+          font-size: 16px;
+          font-weight: 700;
           color: var(--text-color);
+          letter-spacing: 0.01em;
         }
 
         .search-card-path {
@@ -372,36 +483,137 @@
           border-radius: 3px;
         }
 
-        .search-card-image-preview {
-          position: relative;
-          border-radius: 8px;
-          overflow: hidden;
-          background: rgba(148, 163, 184, 0.15);
-          border: 1px solid rgba(148, 163, 184, 0.25);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          width: 170px;
-          height: 120px;
-        }
-
-        .search-card-image-preview img {
-          max-width: 100%;
-          max-height: 100%;
-          object-fit: contain;
-        }
-
         .search-card-image-layout {
-          display: flex;
-          gap: 16px;
+          display: grid;
+          grid-template-columns: minmax(130px, 160px) 1fr;
+          gap: 14px;
           align-items: stretch;
         }
 
+        .search-card-image-preview {
+          position: relative;
+          border-radius: 14px;
+          overflow: hidden;
+          border: 1px solid rgba(59, 130, 246, 0.26);
+          background: linear-gradient(150deg, rgba(191, 219, 254, 0.42), rgba(226, 232, 240, 0.2));
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          aspect-ratio: 4 / 3;
+          align-self: stretch;
+          transition: transform 0.24s ease, border-color 0.24s ease;
+        }
+
+        .search-card-image-preview:hover {
+          transform: translateY(-3px);
+          border-color: rgba(37, 99, 235, 0.6);
+        }
+
+        .search-card-image-preview img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          background: rgba(248, 250, 252, 0.55);
+        }
+
+        .search-card-image-preview.no-preview {
+          cursor: default;
+          border-style: dashed;
+          border-color: rgba(148, 163, 184, 0.45);
+          color: var(--text-muted);
+          font-size: 13px;
+          font-weight: 500;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+        }
+
         .search-card-image-details {
-          flex: 1;
           display: flex;
           flex-direction: column;
-          gap: 10px;
+          gap: 0;
+          min-height: 100%;
+          height: 100%;
+          flex: 1 1 auto;
+          align-self: stretch;
+        }
+
+        .search-card-image-details.has-rank {
+          justify-content: space-between;
+        }
+
+        .search-card-info-tabs {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          flex: 0 0 auto;
+        }
+
+        .search-card-info-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+
+        .search-card-rank-container {
+          margin-top: auto;
+          flex: 0 0 auto;
+        }
+
+        .search-card-rank-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          justify-content: flex-start;
+        }
+
+        .search-card-info-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 3px 8px;
+          border-radius: 999px;
+          background: rgba(59, 130, 246, 0.12);
+          border: 1px solid rgba(59, 130, 246, 0.2);
+          font-size: 11px;
+          line-height: 1.2;
+          color: #1d4ed8;
+          white-space: nowrap;
+        }
+
+        .search-card-info-chip[data-variant="secondary"] {
+          background: rgba(148, 163, 184, 0.16);
+          border-color: rgba(148, 163, 184, 0.26);
+          color: #1d4ed8;
+        }
+
+        .search-card-info-chip .info-chip-label {
+          font-size: 10px;
+          font-weight: 500;
+          color: #2563eb;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+
+        .search-card-info-chip .info-chip-value {
+          font-size: 11px;
+          font-weight: 600;
+          color: inherit;
+        }
+
+        .dark-mode .search-card-info-chip {
+          background: rgba(59, 130, 246, 0.26);
+          border-color: rgba(147, 197, 253, 0.32);
+          color: #93c5fd;
+        }
+
+        .dark-mode .search-card-info-chip[data-variant="secondary"] {
+          background: rgba(148, 163, 184, 0.24);
+          border-color: rgba(148, 163, 184, 0.34);
+          color: #93c5fd;
+        }
+
+        .dark-mode .search-card-info-chip .info-chip-label {
+          color: #bfdbfe;
         }
 
         .search-card-chip {
@@ -430,9 +642,9 @@
         }
 
         .search-card-chip[data-variant="image"] {
-          background: rgba(148, 163, 184, 0.18);
-          border-color: rgba(148, 163, 184, 0.28);
-          color: var(--text-muted, #475569);
+          background: rgba(59, 130, 246, 0.18);
+          border-color: rgba(59, 130, 246, 0.32);
+          color: rgba(30, 64, 175, 0.95);
         }
 
         .search-card-chip[data-variant="source"] {
@@ -442,21 +654,25 @@
         }
 
         .dark-mode .search-card-chip {
-          background: rgba(63, 63, 70, 0.45);
-          border-color: rgba(99, 102, 241, 0.18);
-          color: rgba(226, 232, 240, 0.85);
+          background: rgba(37, 99, 235, 0.28);
+          border-color: rgba(59, 130, 246, 0.38);
+          color: rgba(226, 232, 240, 0.88);
+        }
+
+        .dark-mode .search-card-chip[data-variant="image"] {
+          background: rgba(59, 130, 246, 0.34);
+          border-color: rgba(165, 180, 252, 0.48);
+          color: rgba(219, 234, 254, 0.94);
         }
 
         .dark-mode .search-card-chip[data-variant="exact"] {
-          background: rgba(59, 130, 246, 0.25);
-          border-color: rgba(37, 99, 235, 0.45);
-          color: rgba(226, 232, 240, 0.92);
+          background: rgba(59, 130, 246, 0.32);
+          border-color: rgba(37, 99, 235, 0.48);
         }
 
         .dark-mode .search-card-chip[data-variant="semantic"] {
-          background: rgba(14, 165, 233, 0.22);
-          border-color: rgba(56, 189, 248, 0.38);
-          color: rgba(224, 242, 254, 0.92);
+          background: rgba(56, 189, 248, 0.26);
+          border-color: rgba(125, 211, 252, 0.38);
         }
 
         .search-card-metrics {
@@ -464,6 +680,17 @@
           flex-wrap: wrap;
           gap: 6px;
           margin-top: 4px;
+        }
+
+        @media (max-width: 860px) {
+          .search-card-image-layout {
+            grid-template-columns: 1fr;
+          }
+
+          .search-card-image-preview,
+          .search-card-image-preview.no-preview {
+            aspect-ratio: 3 / 2;
+          }
         }
       `;
       document.head.appendChild(style);
@@ -856,7 +1083,9 @@
     const title = document.createElement('h4');
     title.className = 'search-card-title';
     if (isImageResult) {
-      title.textContent = result.image_name || result.filename || `图片结果 ${index + 1}`;
+      const imageDisplayName = getDisplayNameForImage(result, index);
+      title.textContent = imageDisplayName;
+      title.title = imageDisplayName;
     } else {
       title.textContent = result.filename || result.file_name || `结果 ${index + 1}`;
     }
@@ -864,14 +1093,19 @@
 
     const sourceChip = document.createElement('span');
     sourceChip.className = 'search-card-chip';
-    sourceChip.dataset.variant = 'source';
-    const sourcesLabel = Array.isArray(result.sources) ? result.sources.join(' + ') : (result.source || variant);
-    sourceChip.textContent = sourcesLabel === 'exact' ? '字符匹配' : sourcesLabel === 'semantic' ? '语义检索' : sourcesLabel.replace('exact', '字符').replace('semantic', '语义');
+    if (isImageResult) {
+      sourceChip.dataset.variant = 'image';
+      sourceChip.textContent = '图片';
+    } else {
+      sourceChip.dataset.variant = 'source';
+      const sourcesLabel = Array.isArray(result.sources) ? result.sources.join(' + ') : (result.source || variant);
+      sourceChip.textContent = sourcesLabel === 'exact' ? '字符匹配' : sourcesLabel === 'semantic' ? '语义检索' : sourcesLabel.replace('exact', '字符').replace('semantic', '语义');
+    }
     header.appendChild(sourceChip);
 
     card.appendChild(header);
 
-    const metrics = buildMetricsChips(result);
+    const metrics = isImageResult ? null : buildMetricsChips(result);
 
     if (isImageResult) {
       card.classList.add('search-result-card-image');
@@ -879,39 +1113,42 @@
       const layout = document.createElement('div');
       layout.className = 'search-card-image-layout';
 
-      const preview = document.createElement('div');
-      preview.className = 'search-card-image-preview';
-      const img = document.createElement('img');
       const imgSrc = buildImagePreviewSrc(result);
+      const preview = document.createElement(imgSrc ? 'button' : 'div');
+      preview.className = 'search-card-image-preview';
       if (imgSrc) {
-        img.src = imgSrc;
+        preview.type = 'button';
         preview.title = '点击预览图片';
         preview.addEventListener('click', (event) => {
           event.stopPropagation();
           openImagePreview(result, imgSrc);
         });
+        const img = document.createElement('img');
+        img.src = imgSrc;
+        img.alt = getDisplayNameForImage(result, index);
+        img.loading = 'lazy';
+        preview.appendChild(img);
       } else {
-        img.alt = '预览不可用';
+        preview.classList.add('no-preview');
+        preview.textContent = '暂无预览';
       }
-      img.loading = 'lazy';
-      preview.appendChild(img);
       layout.appendChild(preview);
 
       const details = document.createElement('div');
       details.className = 'search-card-image-details';
 
-      const path = document.createElement('div');
-      path.className = 'search-card-path';
-      path.textContent = result.file_path || result.storage_path || result.path || '(未知路径)';
-      details.appendChild(path);
-
-      const imageMeta = buildImageMetadataSection(result);
-      if (imageMeta) {
-        details.appendChild(imageMeta);
+      const { infoContainer, rankContainer } = buildImageInfoTabs(result, index);
+      if (infoContainer) {
+        const infoWrapper = document.createElement('div');
+        infoWrapper.className = 'search-card-info-tabs';
+        infoWrapper.appendChild(infoContainer);
+        details.appendChild(infoWrapper);
       }
 
-      if (metrics) {
-        details.appendChild(metrics);
+      if (rankContainer) {
+        details.classList.add('has-rank');
+        rankContainer.classList.add('search-card-rank-container');
+        details.appendChild(rankContainer);
       }
 
       layout.appendChild(details);
@@ -945,19 +1182,22 @@
   }
 
   function buildImagePreviewSrc(result) {
-    const absolute = result?.absolute_storage_path || result?.absolute_path;
-    if (!absolute) {
-      return null;
+    const candidates = [
+      result?.preview_path,
+      result?.absolute_storage_path,
+      result?.absolute_path,
+      result?.storage_path,
+      result?.file_path
+    ];
+
+    for (const candidate of candidates) {
+      const url = resolveToFileUrl(candidate);
+      if (url) {
+        return url;
+      }
     }
-    const normalized = String(absolute).replace(/\\/g, '/');
-    const encoded = encodeURI(normalized);
-    if (encoded.startsWith('file://')) {
-      return encoded;
-    }
-    if (encoded.startsWith('/')) {
-      return `file://${encoded}`;
-    }
-    return `file:///${encoded}`;
+
+    return null;
   }
 
   function ensureGlobalImageViewer() {
@@ -1002,63 +1242,117 @@
     }
   }
 
-  function buildImageMetadataSection(result) {
-    const container = document.createElement('div');
-    container.className = 'search-card-image-meta';
+  function buildImageInfoTabs(result, index = 0) {
+    if (!result) {
+      return { infoContainer: null, rankContainer: null };
+    }
 
-    const stats = [];
-    const formatBytesValue = (value) => {
-      if (!value) {
-        return null;
+    const primaryItems = [];
+    const secondaryItems = [];
+
+    const addItem = (target, item) => {
+      if (!item || !item.value) {
+        return;
       }
-      return formatBytes(value);
+      target.push(item);
     };
 
-    if (result.image_size_bytes || result.image_size) {
-      const bytes = result.image_size_bytes || result.image_size;
-      const formatted = formatBytesValue(bytes);
-      if (formatted) {
-        stats.push(`大小 ${formatted}`);
+    const rawWidth = Number(result.width ?? result.image_width);
+    const rawHeight = Number(result.height ?? result.image_height);
+    let resolutionLabel = null;
+    if (Number.isFinite(rawWidth) && Number.isFinite(rawHeight) && rawWidth > 0 && rawHeight > 0) {
+      resolutionLabel = `${rawWidth} × ${rawHeight}`;
+    } else if (result.image_resolution) {
+      resolutionLabel = String(result.image_resolution);
+    }
+    if (resolutionLabel) {
+      addItem(primaryItems, {
+        key: 'resolution',
+        label: '分辨率',
+        value: resolutionLabel,
+        detail: `像素尺寸 ${resolutionLabel}`
+      });
+    }
+
+    const imageMetric = getMetricsForSource(result, 'image') || {};
+    const scoreSource = imageMetric.confidence ?? result.confidence ?? result.final_score ?? result.image_score;
+    if (scoreSource !== undefined && scoreSource !== null) {
+      const displayScore = formatPercentage(scoreSource) || formatScore(scoreSource, 3) || '--';
+      addItem(primaryItems, {
+        key: 'relevance',
+        label: '相关度',
+        value: displayScore,
+        detail: `检索相关度 ${displayScore}`
+      });
+    }
+
+    const sizeBytes = Number(result.image_size_bytes ?? result.image_size);
+    if (Number.isFinite(sizeBytes) && sizeBytes > 0) {
+      const formattedSize = formatBytes(sizeBytes);
+      addItem(primaryItems, {
+        key: 'size',
+        label: '文件大小',
+        value: formattedSize,
+        detail: `图像体积 ${formattedSize}`
+      });
+    }
+
+    const exactMetric = getMetricsForSource(result, 'exact');
+    const exactRank = exactMetric && Number(exactMetric.rank);
+    if (Number.isFinite(exactRank) && exactRank > 0) {
+      const rankLabel = `#${exactRank}`;
+      addItem(secondaryItems, {
+        key: 'exact-rank',
+        label: '字符Rank',
+        value: rankLabel,
+        detail: `字符匹配排名 ${rankLabel}`
+      });
+    }
+
+    const semanticMetric = getMetricsForSource(result, 'semantic');
+    const semanticRank = semanticMetric && Number(semanticMetric.rank);
+    if (Number.isFinite(semanticRank) && semanticRank > 0) {
+      const rankLabel = `#${semanticRank}`;
+      addItem(secondaryItems, {
+        key: 'semantic-rank',
+        label: '语义Rank',
+        value: rankLabel,
+        detail: `语义检索排名 ${rankLabel}`
+      });
+    }
+
+    if (!primaryItems.length && !secondaryItems.length) {
+      return { infoContainer: null, rankContainer: null };
+    }
+
+    const buildRow = (items, rowKey) => {
+      if (!items.length) {
+        return null;
       }
-    }
-
-    if (result.image_resolution || (result.width && result.height)) {
-      const resolution = result.image_resolution
-        || `${result.width || result.image_width || '?'} × ${result.height || result.image_height || '?'}`;
-      stats.push(`分辨率 ${resolution}`);
-    }
-
-    if (result.confidence !== undefined) {
-      const confidence = Number(result.confidence);
-      if (Number.isFinite(confidence)) {
-        const formatted = formatPercentage(confidence);
-        if (formatted) {
-          stats.push(`相关度 ${formatted}`);
+      const row = document.createElement('div');
+      row.className = rowKey === 'secondary' ? 'search-card-rank-row' : 'search-card-info-row';
+      row.dataset.row = rowKey;
+      items.forEach((item) => {
+        const chip = document.createElement('span');
+        chip.className = 'search-card-info-chip';
+        chip.dataset.key = item.key;
+        chip.dataset.variant = rowKey === 'secondary' ? 'secondary' : 'primary';
+        if (item.detail) {
+          chip.title = item.detail;
         }
-      }
-    }
+        chip.innerHTML = `
+          <span class="info-chip-label">${escapeHtml(item.label)}</span>
+          <span class="info-chip-value">${escapeHtml(item.value || '-')}</span>
+        `;
+        row.appendChild(chip);
+      });
+      return row;
+    };
 
-    if (result.timestamp || result.captured_at || result.modified_at) {
-      const dateStr = result.timestamp || result.captured_at || result.modified_at;
-      const date = new Date(dateStr);
-      if (!Number.isNaN(date.getTime())) {
-        stats.push(`时间 ${date.toLocaleString()}`);
-      }
-    }
+    const infoContainer = buildRow(primaryItems, 'primary');
+    const rankContainer = buildRow(secondaryItems, 'secondary');
 
-    if (!stats.length) {
-      return null;
-    }
-
-    const list = document.createElement('ul');
-    list.className = 'search-card-image-meta-list';
-    stats.forEach((stat) => {
-      const li = document.createElement('li');
-      li.textContent = stat;
-      list.appendChild(li);
-    });
-    container.appendChild(list);
-    return container;
+    return { infoContainer, rankContainer };
   }
 
   function buildMetricsChips(result) {
