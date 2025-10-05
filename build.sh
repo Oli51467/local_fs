@@ -39,6 +39,15 @@ cd electron
 npm install
 cd ..
 
+echo "准备模型及数据目录..."
+python3 - <<'PY'
+from config.config import DatabaseConfig
+from service.model_manager import get_model_manager
+
+DatabaseConfig.ensure_directories()
+get_model_manager().ensure_base_directories()
+PY
+
 echo "开始打包应用..."
 
 # 设置环境变量以使用国内镜像

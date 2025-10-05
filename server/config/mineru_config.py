@@ -13,7 +13,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 META_ROOT = PROJECT_ROOT / "meta" / "pdf-extract-kit"
 MODELS_DIR = META_ROOT / "models"
-LAYOUTREADER_DIR = MODELS_DIR / "LayoutReader"
+LAYOUTREADER_DIR = MODELS_DIR / "ReadingOrder" / "layout_reader"
 
 
 MINERU_CONFIG: dict[str, object] = {

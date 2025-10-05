@@ -64,6 +64,19 @@ python package.py        # 一键打包
 build.bat                # Windows 快捷脚本
 ```
 
+## 📦 模型资源管理
+- 应用启动时会自动在 `meta` 目录下创建模型占位目录：
+  - `embedding/bge-m3`
+  - `reranker/bge-reranker-v3-m3`
+  - `embedding/clip`
+  - `pdf-extract-kit`
+- 当首次使用对应功能（向量化、重排、图像检索、PDF 解析）时，会通过 `huggingface_hub` 自动拉取模型文件。
+- 如需提前下载，可执行：
+  ```bash
+  python -c "from service.model_manager import get_model_manager; get_model_manager().get_model_path('bge_m3'); get_model_manager().get_model_path('bge_reranker_v2_m3'); get_model_manager().get_model_path('clip_vit_b_32'); get_model_manager().get_model_path('pdf_extract_kit')"
+  ```
+- 即便清空 `meta` 目录，应用在启动时也会重新创建所需目录。
+
 ## 🧱 技术栈概览
 - **前端**：Electron · 原生 HTML/CSS/JavaScript · Axios
 - **后端**：FastAPI · Pydantic · Uvicorn

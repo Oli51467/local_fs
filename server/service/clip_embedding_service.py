@@ -6,7 +6,7 @@ from typing import List, Optional, Sequence
 import numpy as np
 from PIL import Image
 
-from config.config import ServerConfig
+from service.model_manager import ensure_model_downloaded
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -26,7 +26,6 @@ class CLIPEmbeddingService:
     def __init__(self) -> None:
         self._model: Optional[SentenceTransformer] = None  # type: ignore[assignment]
         self._model_lock = Lock()
-        self._model_path = ServerConfig.PROJECT_ROOT / "meta" / "embedding" / "clip"
 
     def _ensure_model_loaded(self) -> None:
         if self._model is not None:
@@ -39,8 +38,9 @@ class CLIPEmbeddingService:
         with self._model_lock:
             if self._model is not None:
                 return
-            logger.info("加载 CLIP 模型: %s", self._model_path)
-            self._model = SentenceTransformer(str(self._model_path))
+            model_path = ensure_model_downloaded("clip_vit_b_32")
+            logger.info("加载 CLIP 模型: %s", model_path)
+            self._model = SentenceTransformer(str(model_path))
             logger.info("CLIP 模型加载完成")
 
     def encode_image_path(self, image_path: Path) -> List[float]:

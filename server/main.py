@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from config.config import ServerConfig
+from config.config import ServerConfig, DatabaseConfig
 from api.document_api import router as document_router, init_document_api
 from api.chat_api import router as chat_router, init_chat_api
 from api.database_api import router as database_router, init_database_api
@@ -18,6 +18,7 @@ from service.image_faiss_service import ImageFaissManager
 from service.embedding_service import EmbeddingService
 from service.reranker_service import init_reranker_service
 from service.bm25s_service import init_bm25s_service
+from service.model_manager import get_model_manager
 
 # 配置日志
 logging.basicConfig(
@@ -36,7 +37,15 @@ async def lifespan(app: FastAPI):
     global sqlite_instance, faiss_instance, embedding_instance, app_ready, init_message
     
     logger.info("正在初始化系统...")
-    
+
+    # Ensure model directories exist even if the meta folder was removed
+    model_manager = get_model_manager()
+    model_manager.ensure_base_directories()
+    model_manager.download_eager_models()
+
+    # Ensure database-related directories exist before services start (idempotent)
+    DatabaseConfig.ensure_directories()
+
     # 初始化嵌入服务
     embedding_instance = EmbeddingService()
     

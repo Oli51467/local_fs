@@ -1016,17 +1016,24 @@
       } else {
         const exactResults = Array.isArray(data?.exact_match?.results) ? data.exact_match.results : [];
         const semanticResults = Array.isArray(data?.semantic_match?.results) ? data.semantic_match.results : [];
-        const combinedResults = Array.isArray(data?.combined?.results) ? data.combined.results : [...exactResults, ...semanticResults];
+        const rawCombinedResults = Array.isArray(data?.combined?.results) ? data.combined.results : [...exactResults, ...semanticResults];
         const imageResults = Array.isArray(data?.image_match?.results) ? data.image_match.results : [];
+
+        const textResults = rawCombinedResults.filter((item) => !isImageResult(item));
+        const removedImageCount = rawCombinedResults.length - textResults.length;
+        const combinedTotalRaw = Number(data?.combined?.total);
+        const combinedTotal = Number.isFinite(combinedTotalRaw)
+          ? Math.max(0, combinedTotalRaw - removedImageCount)
+          : textResults.length;
 
         searchState.exact = exactResults;
         searchState.semantic = semanticResults;
-        searchState.combined = combinedResults;
+        searchState.combined = textResults;
         searchState.images = imageResults;
         searchState.meta = {
           exactTotal: data?.exact_match?.total ?? exactResults.length,
           semanticTotal: data?.semantic_match?.total ?? semanticResults.length,
-          combinedTotal: data?.combined?.total ?? combinedResults.length,
+          combinedTotal,
           bm25sPerformed: Boolean(data?.bm25s_performed ?? data?.semantic_match?.bm25s_performed),
           rerankPerformed: Boolean(data?.rerank_performed ?? data?.semantic_match?.rerank_performed)
         };
@@ -1044,25 +1051,33 @@
     }
   }
 
+  function isImageResult(result) {
+    if (!result) {
+      return false;
+    }
+    if (String(result?.result_type || '').toLowerCase() === 'image') {
+      return true;
+    }
+    if (Array.isArray(result?.sources)) {
+      return result.sources.includes('image');
+    }
+    const source = result?.source;
+    return typeof source === 'string' && source.includes('image');
+  }
+
   function getPrimaryVariant(result) {
     if (!result) {
       return 'semantic';
     }
-    if (Array.isArray(result.sources)) {
-      if (result.sources.includes('exact')) {
-        return 'exact';
-      }
-      if (result.sources.includes('image')) {
-        return 'image';
-      }
-      return 'semantic';
+    if (isImageResult(result)) {
+      return 'image';
     }
-    const source = result.source || '';
-    if (source.includes('exact')) {
+    if (Array.isArray(result.sources) && result.sources.includes('exact')) {
       return 'exact';
     }
-    if (source.includes('image')) {
-      return 'image';
+    const source = result?.source || '';
+    if (typeof source === 'string' && source.includes('exact')) {
+      return 'exact';
     }
     return 'semantic';
   }
@@ -1075,14 +1090,14 @@
       card.dataset.resultType = result.result_type;
     }
 
-    const isImageResult = (result?.result_type === 'image') || (Array.isArray(result?.sources) && result.sources.includes('image'));
+    const imageResult = isImageResult(result);
 
     const header = document.createElement('div');
     header.className = 'search-card-header';
 
     const title = document.createElement('h4');
     title.className = 'search-card-title';
-    if (isImageResult) {
+    if (imageResult) {
       const imageDisplayName = getDisplayNameForImage(result, index);
       title.textContent = imageDisplayName;
       title.title = imageDisplayName;
@@ -1093,7 +1108,7 @@
 
     const sourceChip = document.createElement('span');
     sourceChip.className = 'search-card-chip';
-    if (isImageResult) {
+    if (imageResult) {
       sourceChip.dataset.variant = 'image';
       sourceChip.textContent = '图片';
     } else {
@@ -1105,9 +1120,9 @@
 
     card.appendChild(header);
 
-    const metrics = isImageResult ? null : buildMetricsChips(result);
+    const metrics = imageResult ? null : buildMetricsChips(result);
 
-    if (isImageResult) {
+    if (imageResult) {
       card.classList.add('search-result-card-image');
 
       const layout = document.createElement('div');
@@ -2012,7 +2027,7 @@
       return;
     }
 
-    const isImageResult = (result.result_type === 'image') || (Array.isArray(result.sources) && result.sources.includes('image'));
+    const imageResult = isImageResult(result);
 
     const wasSearchMode = dependencies.isSearchMode ? dependencies.isSearchMode() : false;
     if (wasSearchMode) {
@@ -2063,7 +2078,7 @@
     let targetPath;
     let openedDocumentForImage = false;
 
-    if (isImageResult) {
+    if (imageResult) {
       if (hasDistinctDocument) {
         targetPath = documentPath;
         openedDocumentForImage = true;
@@ -2120,7 +2135,7 @@
     try {
       await viewer.openFile(targetPath);
       await waitForElement(`[data-tab-id="${cssEscape(targetPath)}"]`, 5000);
-      const shouldHighlight = !isImageResult || openedDocumentForImage;
+      const shouldHighlight = !imageResult || openedDocumentForImage;
       if (shouldHighlight) {
         const highlighted = await highlightSearchMatchWithRetry(targetPath, result);
         if (!highlighted) {

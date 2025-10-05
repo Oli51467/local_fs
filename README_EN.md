@@ -64,6 +64,19 @@ python package.py        # all-in-one packaging
 build.bat                # Windows helper
 ```
 
+## 📦 Model Asset Management
+- On startup the app creates placeholder directories under `meta`:
+  - `embedding/bge-m3`
+  - `reranker/bge-reranker-v3-m3`
+  - `embedding/clip`
+  - `pdf-extract-kit`
+- The first time each feature is used (embeddings, reranking, CLIP, PDF parsing) the required weights are fetched via `huggingface_hub`.
+- Pre-download everything with:
+  ```bash
+  python -c "from service.model_manager import get_model_manager; manager = get_model_manager(); [manager.get_model_path(key) for key in ('bge_m3', 'bge_reranker_v2_m3', 'clip_vit_b_32', 'pdf_extract_kit')]"
+  ```
+- Removing the `meta` directory is safe; it will be recreated automatically on startup.
+
 ## 🧱 Tech Stack
 - **Frontend**: Electron · vanilla HTML/CSS/JavaScript · Axios
 - **Backend**: FastAPI · Pydantic · Uvicorn

@@ -679,10 +679,19 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 else:
                     semantic_candidates.sort(key=lambda x: x.get('mixed_score', 0.0), reverse=True)
 
+        MIN_TEXT_SCORE = 0.55
+
         semantic_results: List[Dict[str, Any]] = []
         if semantic_candidates:
             ranked_candidates = semantic_candidates[:top_k]
             for idx, item in enumerate(ranked_candidates, start=1):
+                mixed_score = item.get('mixed_score')
+                bm25s_score = item.get('bm25s_score')
+                if (
+                    (mixed_score is not None and float(mixed_score) < MIN_TEXT_SCORE)
+                    or (bm25s_score is not None and float(bm25s_score) < MIN_TEXT_SCORE)
+                ):
+                    continue
                 semantic_entry = build_result(
                     item,
                     'semantic',
@@ -767,6 +776,18 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
         filtered_combined = []
         rank_counter = 1
         for item in combined_results:
+            if 'exact' not in (item.get('sources') or []) and item.get('source') != 'exact':
+                item_mixed = item.get('mixed_score')
+                if item_mixed is None:
+                    item_mixed = item.get('metrics', {}).get('semantic', {}).get('mixed_score')
+                item_bm25 = item.get('bm25s_score')
+                if item_bm25 is None:
+                    item_bm25 = item.get('metrics', {}).get('semantic', {}).get('bm25s_score')
+                if (
+                    (item_mixed is not None and float(item_mixed) < MIN_TEXT_SCORE)
+                    or (item_bm25 is not None and float(item_bm25) < MIN_TEXT_SCORE)
+                ):
+                    continue
             confidence = compute_final_confidence(item)
             item['final_score'] = confidence
             if confidence >= 0.3 or 'exact' in (item.get('sources') or []) or item.get('source') == 'exact':

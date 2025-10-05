@@ -18,7 +18,7 @@ class M3EEmbeddings():
 
 class Reranker():
     def __init__(self):
-        RERANKING_MODEL_DIR = PROJECT_ROOT / "meta" / "reranker" / "bge-reranker-v2-m3"
+        RERANKING_MODEL_DIR = PROJECT_ROOT / "meta" / "reranker" / "bge-reranker-v3-m3"
         self.model = FlagReranker(RERANKING_MODEL_DIR, use_fp16=True)
 
     def compute_score(self, content: List[str]) -> List[float]:
@@ -37,4 +37,3 @@ if __name__ == '__main__':
     print(f.embedding.encode_query('你好'))
     list = [['what is panda?', 'hi'], ['what is panda?', 'The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China.']]
     print(f.reranker.compute_score_normalize(list))
-

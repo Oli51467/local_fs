@@ -14,7 +14,7 @@ class ServerConfig:
     PROJECT_ROOT = Path(__file__).parent.parent.parent
 
     BGE_M3_MODEL_PATH = PROJECT_ROOT / "meta" / "embedding" / "bge-m3"
-    BGE_RERANKER_MODEL_PATH = PROJECT_ROOT / "meta" / "reranker" / "bge-reranker-v2-m3"
+    BGE_RERANKER_MODEL_PATH = PROJECT_ROOT / "meta" / "reranker" / "bge-reranker-v3-m3"
 
     BM25S_WEIGHT = 0.7
     EMBEDDING_WEIGHT = 0.3

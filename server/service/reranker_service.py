@@ -1,36 +1,46 @@
 from FlagEmbedding import FlagReranker
 from pathlib import Path
+from threading import Lock
 import logging
 from typing import List, Optional
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from service.model_manager import ensure_model_downloaded
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+logger = logging.getLogger(__name__)
 
 class RerankerService:
     """
     Reranker服务类，用于对搜索结果进行重排序
     """
     
-    def __init__(self, model_path: Optional[Path] = None):
-        """
-        初始化Reranker模型
-        
-        Args:
-            model_path: 模型路径，如果为None则使用默认路径
-        """
-        if model_path is None:
-            model_path = PROJECT_ROOT / "meta" / "reranker" / "bge-reranker-v2-m3"
-        
-        try:
-            logger.info(f"正在加载Reranker模型: {model_path}")
-            self.model = FlagReranker(model_path, use_fp16=True)
-            logger.info("Reranker模型加载完成")
-        except Exception as e:
-            logger.error(f"Reranker模型加载失败: {e}")
-            self.model = None
-            raise e
+    def __init__(self, model_path: Optional[Path] = None) -> None:
+        """初始化Reranker模型。"""
+
+        self._model: Optional[FlagReranker] = None
+        self._model_lock = Lock()
+        self._model_override = Path(model_path) if model_path is not None else None
+
+    def _resolve_model_path(self) -> Path:
+        if self._model_override is not None:
+            return self._model_override
+        return ensure_model_downloaded("bge_reranker_v2_m3")
+
+    def _ensure_model_loaded(self) -> None:
+        if self._model is not None:
+            return
+        with self._model_lock:
+            if self._model is not None:
+                return
+            model_path = self._resolve_model_path()
+            try:
+                logger.info("正在加载Reranker模型: %s", model_path)
+                self._model = FlagReranker(str(model_path), use_fp16=True)
+                logger.info("Reranker模型加载完成")
+            except Exception as exc:  # pragma: no cover - runtime failure
+                logger.error("Reranker模型加载失败: %s", exc)
+                self._model = None
+                raise
     
     def compute_score(self, content: List[str]) -> List[float]:
         """
@@ -42,12 +52,17 @@ class RerankerService:
         Returns:
             相关性分数列表
         """
-        if self.model is None:
+        try:
+            self._ensure_model_loaded()
+        except Exception:
+            return []
+        model = self._model
+        if model is None:  # Safety guard; should not occur
             logger.error("Reranker模型未加载")
             return []
-        
+
         try:
-            scores = self.model.compute_score(content)
+            scores = model.compute_score(content)
             # 确保返回的是列表，处理numpy数组或单个值的情况
             if isinstance(scores, (int, float, np.number)):
                 # 单个值的情况
@@ -75,12 +90,17 @@ class RerankerService:
         Returns:
             归一化相关性分数列表 (0-1之间)
         """
-        if self.model is None:
+        try:
+            self._ensure_model_loaded()
+        except Exception:
+            return []
+        model = self._model
+        if model is None:
             logger.error("Reranker模型未加载")
             return []
-        
+
         try:
-            scores = self.model.compute_score(content, normalize=True)
+            scores = model.compute_score(content, normalize=True)
             # 确保返回的是列表，处理numpy数组或单个值的情况
             if isinstance(scores, (int, float, np.number)):
                 # 单个值的情况
@@ -110,7 +130,12 @@ class RerankerService:
         Returns:
             相关性分数列表，与passages一一对应
         """
-        if self.model is None:
+        try:
+            self._ensure_model_loaded()
+        except Exception:
+            return [0.0] * len(passages)
+        model = self._model
+        if model is None:
             logger.error("Reranker模型未加载")
             return [0.0] * len(passages)
         
@@ -144,7 +169,7 @@ class RerankerService:
         Returns:
             模型是否已加载成功
         """
-        return self.model is not None
+        return self._model is not None
 
 # 全局Reranker服务实例
 reranker_service: Optional[RerankerService] = None

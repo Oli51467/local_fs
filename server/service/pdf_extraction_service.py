@@ -20,6 +20,7 @@ from magic_pdf.data.dataset import PymuDocDataset
 from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
 
 from config.mineru_config import MINERU_CONFIG, META_ROOT
+from service.model_manager import ensure_model_downloaded
 
 
 ProgressCallback = Optional[Callable[[float, str], None]]
@@ -52,6 +53,25 @@ def _resolve_model_path(relative_path: object) -> Optional[str]:
 
 def _prepare_runtime_config() -> Path:
     runtime_config = copy.deepcopy(MINERU_CONFIG)
+
+    model_root = ensure_model_downloaded("pdf_extract_kit")
+    runtime_config["models-dir"] = str((model_root / "models").resolve())
+    layout_candidates = [
+        model_root / "models" / "Layout",
+        model_root / "models" / "LayoutReader",
+    ]
+    layout_dir = next((candidate for candidate in layout_candidates if candidate.exists()), layout_candidates[0])
+
+    layout_reader_candidates = [
+        model_root / "models" / "ReadingOrder" / "layout_reader",
+        model_root / "models" / "layout_reader",
+        model_root / "ReadingOrder" / "layout_reader",
+    ]
+    layout_reader_dir = next((candidate for candidate in layout_reader_candidates if candidate.exists()), layout_reader_candidates[0])
+    if "layoutreader-model-dir" in runtime_config:
+        runtime_config["layoutreader-model-dir"] = str(layout_reader_dir.resolve())
+    runtime_config["layout-config"] = dict(runtime_config.get("layout-config", {}))
+    runtime_config["layout-config"].setdefault("model", "doclayout_yolo")
 
     for key in ("models-dir", "layoutreader-model-dir"):
         if key in runtime_config:
