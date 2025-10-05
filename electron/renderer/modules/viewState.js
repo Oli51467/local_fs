@@ -3,7 +3,8 @@
 
   const state = {
     isSearchMode: false,
-    eventsBound: false
+    eventsBound: false,
+    activeMode: 'file'
   };
 
   const dependencies = {
@@ -21,6 +22,11 @@
     getSearchInput: () => document.getElementById('search-input'),
     getDatabaseButton: () => document.getElementById('database-btn'),
     getToggleTreeButton: () => document.getElementById('toggle-tree'),
+    getChatButton: () => document.getElementById('chat-btn'),
+    getChatHistoryContainer: () => document.getElementById('chat-history-container'),
+    getChatPageEl: () => document.getElementById('chat-page'),
+    getChatModule: () => global.chatModule,
+    getFileContentEl: () => document.getElementById('file-content'),
     getSearchState: () => global.searchState,
     initializeSearchUI: () => {},
     showSearchResultsPane: () => {},
@@ -55,8 +61,31 @@
     }
   }
 
+  function hideChatInterface() {
+    const chatModule = dependencies.getChatModule ? dependencies.getChatModule() : null;
+    if (chatModule && typeof chatModule.hideChatPage === 'function') {
+      chatModule.hideChatPage();
+    } else {
+      const chatHistory = dependencies.getChatHistoryContainer ? dependencies.getChatHistoryContainer() : null;
+      if (chatHistory) {
+        chatHistory.style.display = 'none';
+      }
+      const chatPage = dependencies.getChatPageEl ? dependencies.getChatPageEl() : null;
+      if (chatPage) {
+        chatPage.style.display = 'none';
+      }
+    }
+
+    if (chatModule && typeof chatModule.leaveChatMode === 'function') {
+      chatModule.leaveChatMode();
+    }
+  }
+
   function switchToSearchMode() {
     state.isSearchMode = true;
+    state.activeMode = 'search';
+
+    hideChatInterface();
 
     const settings = dependencies.getSettingsModule ? dependencies.getSettingsModule() : null;
     if (settings && typeof settings.showFilePage === 'function') {
@@ -110,6 +139,9 @@
 
   function switchToFileMode() {
     state.isSearchMode = false;
+    state.activeMode = 'file';
+
+    hideChatInterface();
 
     const test = dependencies.getTestModule ? dependencies.getTestModule() : null;
     if (test && typeof test.hideTestPage === 'function') {
@@ -121,6 +153,11 @@
     const fileTreeEl = dependencies.getFileTreeEl();
     if (fileTreeEl) {
       fileTreeEl.style.display = 'block';
+    }
+
+    const fileTreeContainer = dependencies.getFileTreeContainer ? dependencies.getFileTreeContainer() : null;
+    if (fileTreeContainer) {
+      fileTreeContainer.style.display = 'flex';
     }
 
     const searchArea = dependencies.getSearchAreaEl();
@@ -140,8 +177,78 @@
       searchInput.value = '';
     }
 
+    const fileContent = dependencies.getFileContentEl ? dependencies.getFileContentEl() : null;
+    if (fileContent) {
+      fileContent.style.display = 'block';
+    }
+
     dependencies.hideSearchResultsPane();
     dependencies.renderSearchResults();
+  }
+
+  function switchToChatMode() {
+    state.isSearchMode = false;
+    state.activeMode = 'chat';
+
+    const settings = dependencies.getSettingsModule ? dependencies.getSettingsModule() : null;
+    if (settings && typeof settings.showFilePage === 'function') {
+      settings.showFilePage();
+    }
+
+    const test = dependencies.getTestModule ? dependencies.getTestModule() : null;
+    if (test && typeof test.hideTestPage === 'function') {
+      test.hideTestPage();
+    }
+
+    hideDatabasePage();
+
+    const fileTreeEl = dependencies.getFileTreeEl();
+    if (fileTreeEl) {
+      fileTreeEl.style.display = 'none';
+    }
+
+    const fileTreeContainer = dependencies.getFileTreeContainer ? dependencies.getFileTreeContainer() : null;
+    if (fileTreeContainer) {
+      fileTreeContainer.style.display = 'none';
+    }
+
+    const searchArea = dependencies.getSearchAreaEl();
+    if (searchArea) {
+      searchArea.style.display = 'none';
+    }
+
+    const resourceTitle = dependencies.getResourceTitleEl();
+    if (resourceTitle) {
+      resourceTitle.textContent = '对话历史';
+    }
+
+    updateHeaderButtons('none');
+
+    const fileContent = dependencies.getFileContentEl ? dependencies.getFileContentEl() : null;
+    if (fileContent) {
+      fileContent.style.display = 'none';
+    }
+
+    const chatHistory = dependencies.getChatHistoryContainer ? dependencies.getChatHistoryContainer() : null;
+    if (chatHistory) {
+      chatHistory.style.display = 'flex';
+    }
+
+    const chatPage = dependencies.getChatPageEl ? dependencies.getChatPageEl() : null;
+    if (chatPage) {
+      chatPage.style.display = 'flex';
+    }
+
+    const chatModule = dependencies.getChatModule ? dependencies.getChatModule() : null;
+    if (chatModule && typeof chatModule.showChatPage === 'function') {
+      chatModule.showChatPage();
+    }
+
+    if (chatModule && typeof chatModule.enterChatMode === 'function') {
+      Promise.resolve(chatModule.enterChatMode()).catch((error) => {
+        console.error('进入对话模式失败:', error);
+      });
+    }
   }
 
   function initResizer() {
@@ -199,6 +306,13 @@
       });
     }
 
+    const chatBtn = dependencies.getChatButton ? dependencies.getChatButton() : null;
+    if (chatBtn) {
+      chatBtn.addEventListener('click', () => {
+        switchToChatMode();
+      });
+    }
+
     const searchInput = dependencies.getSearchInput();
     if (searchInput) {
       searchInput.addEventListener('keydown', (event) => {
@@ -238,7 +352,7 @@
     const toggleTreeBtn = dependencies.getToggleTreeButton();
     if (toggleTreeBtn) {
       toggleTreeBtn.addEventListener('click', () => {
-        if (state.isSearchMode) {
+        if (state.isSearchMode || state.activeMode === 'chat') {
           switchToFileMode();
         }
       });
@@ -263,11 +377,13 @@
     initResizer,
     switchToSearchMode,
     switchToFileMode,
+    switchToChatMode,
     isSearchMode: getIsSearchMode
   };
 
   global.switchToSearchMode = switchToSearchMode;
   global.switchToFileMode = switchToFileMode;
+  global.switchToChatMode = switchToChatMode;
   Object.defineProperty(global, 'isSearchMode', {
     configurable: true,
     get: () => state.isSearchMode

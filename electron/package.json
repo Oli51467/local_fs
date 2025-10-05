@@ -30,17 +30,52 @@
     ],
     "extraResources": [
       {
-        "from": "python_backend",
-        "to": "python_backend",
+        "from": "../meta/sqlite",
+        "to": "meta/sqlite",
         "filter": [
-          "**/*"
+          "!**/*"
         ]
       },
       {
-        "from": "static",
-        "to": "static",
+        "from": "../meta/images",
+        "to": "meta/images",
         "filter": [
-          "**/*"
+          "!**/*"
+        ]
+      },
+      {
+        "from": "../meta/vector",
+        "to": "meta/vector",
+        "filter": [
+          "!**/*"
+        ]
+      },
+      {
+        "from": "../meta/reranker/bge-reranker-v2-m",
+        "to": "meta/reranker/bge-reranker-v2-m",
+        "filter": [
+          "!**/*"
+        ]
+      },
+      {
+        "from": "../meta/pdf-extract-kit",
+        "to": "meta/pdf-extract-kit",
+        "filter": [
+          "!**/*"
+        ]
+      },
+      {
+        "from": "../meta/embedding/bge-m3",
+        "to": "meta/embedding/bge-m3",
+        "filter": [
+          "!**/*"
+        ]
+      },
+      {
+        "from": "../meta/embedding/clip",
+        "to": "meta/embedding/clip",
+        "filter": [
+          "!**/*"
         ]
       }
     ],

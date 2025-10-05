@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config.config import ServerConfig
 from api.document_api import router as document_router, init_document_api
+from api.chat_api import router as chat_router, init_chat_api
 from api.database_api import router as database_router, init_database_api
 from api.faiss_api import router as faiss_router, init_faiss_api
 from api.cleanup_api import router as cleanup_router
@@ -57,6 +58,9 @@ async def lifespan(app: FastAPI):
     # 初始化文档API
     init_document_api(faiss_instance, sqlite_instance, image_faiss_instance)
     
+    # 初始化对话API
+    init_chat_api(faiss_instance, sqlite_instance, embedding_instance)
+    
     # 初始化清理API
     from api.cleanup_api import init_cleanup_api
     init_cleanup_api(faiss_instance, sqlite_instance, bm25s_service_instance)
@@ -93,6 +97,7 @@ app.include_router(faiss_router)
 app.include_router(document_router)
 app.include_router(cleanup_router)
 app.include_router(config_router)
+app.include_router(chat_router)
 
 @app.get("/")
 async def root():

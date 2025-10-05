@@ -145,6 +145,7 @@
     <div id="sidebar">
       <button id="toggle-tree"><div id="file-icon"></div></button>
       <button id="search-btn"><div id="search-icon"></div></button>
+      <button id="chat-btn"><div id="chat-icon"></div></button>
       <button id="settings-btn"><div id="settings-icon"></div></button>
       <button id="test-btn"><div id="test-icon"></div></button>
       <button id="database-btn"><div id="database-icon"></div></button>
@@ -178,8 +179,40 @@
       </div>
     </div>
 
+    <!-- 对话历史栏 -->
+    <div id="chat-history-container" style="display: none;">
+      <div id="chat-history-header">
+        <span id="chat-history-title">对话历史</span>
+        <button id="start-new-chat-btn" class="chat-history-action">新建</button>
+      </div>
+      <div id="chat-history-list"></div>
+    </div>
+
     <!-- 文件内容展示 -->
     <div id="file-content"></div>
+
+    <!-- 对话页面 -->
+    <div id="chat-page" style="display: none;">
+      <div id="chat-page-header">
+        <div class="chat-page-header-info">
+          <h2 id="chat-conversation-title">新对话</h2>
+          <span id="chat-conversation-updated" class="chat-timestamp"></span>
+        </div>
+        <div class="chat-page-header-actions">
+          <button id="chat-history-toggle" class="chat-history-toggle" title="显示/隐藏对话历史">历史</button>
+        </div>
+      </div>
+      <div id="chat-messages-container">
+        <div id="chat-messages"></div>
+      </div>
+      <div id="chat-input-area">
+        <div id="chat-status-text"></div>
+        <div class="chat-input-wrapper">
+          <textarea id="chat-input" placeholder="输入你的问题，按 Enter 发送，Shift+Enter 换行"></textarea>
+          <button id="chat-send-btn">发送</button>
+        </div>
+      </div>
+    </div>
     
     <!-- 设置页面 -->
     <div id="settings-page">
@@ -459,6 +492,7 @@
   <link rel="stylesheet" href="./src/styles/splash.css">
   <link rel="stylesheet" href="./src/styles/settings.css">
   <link rel="stylesheet" href="./src/styles/explorer.css">
+  <link rel="stylesheet" href="./src/styles/chat.css">
   <link rel="stylesheet" href="./src/styles/test.css">
   <link rel="stylesheet" href="./src/styles/database.css">
   
@@ -475,6 +509,7 @@
   <script src="./src/modules/explorer.js"></script>
   <script src="./src/modules/test.js"></script>
   <script src="./src/modules/database.js"></script>
+  <script src="./src/modules/chat.js"></script>
   <script src="./icons.js"></script>
   <script src="./static/libs/jszip.min.js"></script>
   <script src="./node_modules/xml2js/lib/xml2js.js"></script>

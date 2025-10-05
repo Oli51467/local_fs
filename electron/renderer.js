@@ -122,6 +122,7 @@ function renderIcons() {
   const elements = [
     { id: 'file-icon', icon: icons.file },
     { id: 'search-icon', icon: icons.search },
+    { id: 'chat-icon', icon: icons.chat },
     { id: 'settings-icon', icon: icons.settings },
     { id: 'test-icon', icon: icons.test },
     { id: 'database-icon', icon: icons.database }
@@ -158,6 +159,7 @@ let settingsModule;
 let explorerModule;
 let testModule;
 let databaseModule;
+let chatModule;
 let splashScreen;
 
 configureViewStateModule({
@@ -175,6 +177,11 @@ configureViewStateModule({
   getSearchInput: () => document.getElementById('search-input'),
   getDatabaseButton: () => document.getElementById('database-btn'),
   getToggleTreeButton: () => document.getElementById('toggle-tree'),
+  getChatButton: () => document.getElementById('chat-btn'),
+  getChatHistoryContainer: () => document.getElementById('chat-history-container'),
+  getChatPageEl: () => document.getElementById('chat-page'),
+  getChatModule: () => chatModule,
+  getFileContentEl: () => fileContentEl,
   getSearchState: () => searchState,
   initializeSearchUI,
   showSearchResultsPane,
@@ -266,6 +273,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     settingsModule.showFilePage();
     
     explorerModule = new ExplorerModule();
+    
+    chatModule = new ChatModule();
+    await chatModule.init();
+    window.chatModule = chatModule;
     
     // 初始化测试模块
     testModule = new TestModule();

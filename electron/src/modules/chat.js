@@ -1,0 +1,423 @@
+class ChatModule {
+  constructor() {
+    this.baseApiUrl = 'http://localhost:8000/api/chat';
+
+    this.historyContainer = document.getElementById('chat-history-container');
+    this.historyListEl = document.getElementById('chat-history-list');
+    this.historyTitleEl = document.getElementById('chat-history-title');
+    this.startNewChatBtn = document.getElementById('start-new-chat-btn');
+
+    this.chatPageEl = document.getElementById('chat-page');
+    this.chatMessagesContainer = document.getElementById('chat-messages-container');
+    this.chatMessagesEl = document.getElementById('chat-messages');
+    this.chatInputArea = document.getElementById('chat-input-area');
+    this.chatInputEl = document.getElementById('chat-input');
+    this.chatSendBtn = document.getElementById('chat-send-btn');
+    this.chatStatusTextEl = document.getElementById('chat-status-text');
+    this.chatTitleEl = document.getElementById('chat-conversation-title');
+    this.chatTimestampEl = document.getElementById('chat-conversation-updated');
+    this.chatHistoryToggleBtn = document.getElementById('chat-history-toggle');
+
+    this.currentConversationId = null;
+    this.conversations = [];
+    this.messages = [];
+    this.initialized = false;
+    this.historyVisible = true;
+    this.pendingRequest = null;
+  }
+
+  async init() {
+    if (this.initialized) {
+      return;
+    }
+
+    this.bindEvents();
+    this.initialized = true;
+  }
+
+  bindEvents() {
+    if (this.chatSendBtn) {
+      this.chatSendBtn.addEventListener('click', () => this.handleSend());
+    }
+
+    if (this.chatInputEl) {
+      this.chatInputEl.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          this.handleSend();
+        }
+      });
+
+      this.chatInputEl.addEventListener('input', () => {
+        this.autoResizeTextarea();
+      });
+    }
+
+    if (this.startNewChatBtn) {
+      this.startNewChatBtn.addEventListener('click', () => {
+        this.startNewConversation();
+      });
+    }
+
+    if (this.chatHistoryToggleBtn) {
+      this.chatHistoryToggleBtn.addEventListener('click', () => {
+        this.toggleHistoryVisibility();
+      });
+    }
+  }
+
+  toggleHistoryVisibility() {
+    if (!this.historyContainer) {
+      return;
+    }
+    this.historyVisible = !this.historyVisible;
+    this.historyContainer.style.display = this.historyVisible ? 'flex' : 'none';
+    this.updateHistoryToggleLabel();
+  }
+
+  async enterChatMode() {
+    await this.init();
+    await this.refreshConversations();
+    if (this.conversations.length && this.currentConversationId === null) {
+      this.openConversation(this.conversations[0].id);
+    } else if (this.currentConversationId === null) {
+      this.startNewConversation();
+    }
+    this.autoResizeTextarea();
+  }
+
+  leaveChatMode() {
+    if (this.chatInputEl) {
+      this.chatInputEl.value = '';
+      this.autoResizeTextarea();
+    }
+    if (this.chatStatusTextEl) {
+      this.chatStatusTextEl.textContent = '';
+    }
+  }
+
+  showChatPage() {
+    if (this.chatPageEl) {
+      this.chatPageEl.style.display = 'flex';
+    }
+    if (this.historyContainer) {
+      this.historyContainer.style.display = 'flex';
+      this.historyVisible = true;
+    }
+    this.updateHistoryToggleLabel();
+    if (this.chatInputEl) {
+      setTimeout(() => this.chatInputEl.focus(), 50);
+    }
+  }
+
+  hideChatPage() {
+    if (this.chatPageEl) {
+      this.chatPageEl.style.display = 'none';
+    }
+    if (this.historyContainer) {
+      this.historyContainer.style.display = 'none';
+      this.historyVisible = false;
+    }
+    this.updateHistoryToggleLabel();
+  }
+
+  startNewConversation() {
+    this.currentConversationId = null;
+    this.messages = [];
+    this.renderMessages();
+    if (this.chatTitleEl) {
+      this.chatTitleEl.textContent = '新对话';
+    }
+    if (this.chatTimestampEl) {
+      this.chatTimestampEl.textContent = '';
+    }
+    if (this.chatInputEl) {
+      this.chatInputEl.value = '';
+      this.autoResizeTextarea();
+      this.chatInputEl.focus();
+    }
+    this.highlightActiveConversation();
+  }
+
+  setStatus(message, type = 'info') {
+    if (!this.chatStatusTextEl) {
+      return;
+    }
+    this.chatStatusTextEl.textContent = message || '';
+    this.chatStatusTextEl.dataset.statusType = type;
+  }
+
+  async refreshConversations() {
+    if (!this.initialized) {
+      await this.init();
+    }
+
+    try {
+      const response = await fetch(`${this.baseApiUrl}/conversations`);
+      if (!response.ok) {
+        throw new Error(`获取对话历史失败 (${response.status})`);
+      }
+      this.conversations = await response.json();
+      this.renderConversationHistory();
+    } catch (error) {
+      console.error('加载对话历史失败:', error);
+      this.setStatus('加载对话历史失败，请稍后重试。', 'error');
+    }
+  }
+
+  renderConversationHistory() {
+    if (!this.historyListEl) {
+      return;
+    }
+
+    this.historyListEl.innerHTML = '';
+
+    if (!this.conversations.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-history-empty';
+      empty.textContent = '暂无对话，点击“新建”开始交流。';
+      this.historyListEl.appendChild(empty);
+      return;
+    }
+
+    this.conversations.forEach((conversation) => {
+      const item = document.createElement('div');
+      item.className = 'chat-history-item';
+      item.dataset.conversationId = conversation.id;
+
+      if (conversation.id === this.currentConversationId) {
+        item.classList.add('active');
+      }
+
+      const titleEl = document.createElement('div');
+      titleEl.className = 'chat-history-title';
+      titleEl.textContent = conversation.title || '未命名对话';
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'chat-history-meta';
+      const updated = conversation.updated_time ? this.formatTimestamp(conversation.updated_time) : '';
+      const count = typeof conversation.message_count === 'number' ? conversation.message_count : 0;
+      metaEl.innerHTML = `<span>${updated}</span><span>${count} 条</span>`;
+
+      item.appendChild(titleEl);
+      item.appendChild(metaEl);
+      item.addEventListener('click', () => {
+        this.openConversation(conversation.id);
+      });
+
+      this.historyListEl.appendChild(item);
+    });
+  }
+
+  highlightActiveConversation() {
+    if (!this.historyListEl) {
+      return;
+    }
+
+    const items = this.historyListEl.querySelectorAll('.chat-history-item');
+    items.forEach((item) => {
+      const id = Number.parseInt(item.dataset.conversationId, 10);
+      if (!Number.isNaN(id) && id === this.currentConversationId) {
+        item.classList.add('active');
+      } else {
+        item.classList.remove('active');
+      }
+    });
+  }
+
+  async openConversation(conversationId) {
+    if (typeof conversationId !== 'number') {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${this.baseApiUrl}/conversations/${conversationId}`);
+      if (!response.ok) {
+        throw new Error(`获取对话详情失败 (${response.status})`);
+      }
+      const data = await response.json();
+      this.currentConversationId = data.conversation.id;
+      this.messages = data.messages || [];
+      this.renderMessages();
+      this.updateConversationHeader(data.conversation);
+      this.highlightActiveConversation();
+      if (this.chatMessagesContainer) {
+        this.chatMessagesContainer.scrollTop = this.chatMessagesContainer.scrollHeight;
+      }
+    } catch (error) {
+      console.error('打开对话失败:', error);
+      this.setStatus('加载对话失败，请稍后重试。', 'error');
+    }
+  }
+
+  updateConversationHeader(conversation) {
+    if (!conversation) {
+      return;
+    }
+    if (this.chatTitleEl) {
+      this.chatTitleEl.textContent = conversation.title || '未命名对话';
+    }
+    if (this.chatTimestampEl) {
+      this.chatTimestampEl.textContent = conversation.updated_time
+        ? `最近更新：${this.formatTimestamp(conversation.updated_time)}`
+        : '';
+    }
+  }
+
+  renderMessages() {
+    if (!this.chatMessagesEl) {
+      return;
+    }
+
+    this.chatMessagesEl.innerHTML = '';
+
+    if (!this.messages.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-empty-placeholder';
+      empty.textContent = '和 AI 开始一场新的对话吧。';
+      this.chatMessagesEl.appendChild(empty);
+      return;
+    }
+
+    this.messages.forEach((message) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = `chat-message ${message.role}`;
+
+      const label = document.createElement('span');
+      label.className = 'chat-label';
+      label.textContent = message.role === 'user' ? '用户' : 'AI';
+      wrapper.appendChild(label);
+
+      const bubble = document.createElement('div');
+      bubble.className = 'chat-bubble';
+
+      if (message.role === 'assistant' && message.metadata && Array.isArray(message.metadata.chunks)) {
+        const chunkList = document.createElement('div');
+        chunkList.className = 'chat-chunk-list';
+
+        message.metadata.chunks.forEach((chunk, index) => {
+          const item = document.createElement('div');
+          item.className = 'chat-chunk-item';
+
+          const meta = document.createElement('div');
+          meta.className = 'chat-chunk-meta';
+          const title = chunk.filename || chunk.file_path || `片段 ${index + 1}`;
+          const scoreText = typeof chunk.score === 'number' ? `相关度 ${chunk.score.toFixed(2)}` : '';
+          meta.textContent = `${title}${scoreText ? ` · ${scoreText}` : ''}`;
+
+          const content = document.createElement('div');
+          content.className = 'chat-chunk-content';
+          content.textContent = chunk.content || '';
+
+          item.appendChild(meta);
+          item.appendChild(content);
+          chunkList.appendChild(item);
+        });
+
+        bubble.appendChild(chunkList);
+      } else {
+        bubble.textContent = message.content || '';
+      }
+
+      wrapper.appendChild(bubble);
+      this.chatMessagesEl.appendChild(wrapper);
+    });
+  }
+
+  async handleSend() {
+    if (!this.chatInputEl || !this.chatSendBtn) {
+      return;
+    }
+
+    const text = this.chatInputEl.value.trim();
+    if (!text) {
+      this.setStatus('请输入问题', 'warning');
+      return;
+    }
+
+    if (this.pendingRequest) {
+      return;
+    }
+
+    this.setStatus('正在发送...', 'info');
+    this.chatSendBtn.disabled = true;
+
+    const payload = {
+      question: text,
+      conversation_id: this.currentConversationId,
+      top_k: 5
+    };
+
+    try {
+      this.pendingRequest = fetch(this.baseApiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const response = await this.pendingRequest;
+      if (!response.ok) {
+        throw new Error(`发送失败 (${response.status})`);
+      }
+
+      const data = await response.json();
+      this.currentConversationId = data.conversation_id;
+      this.messages = data.messages || [];
+      this.renderMessages();
+      this.setStatus('消息已发送', 'success');
+      await this.refreshConversations();
+      this.highlightActiveConversation();
+      if (this.chatInputEl) {
+        this.chatInputEl.value = '';
+        this.autoResizeTextarea();
+      }
+      if (this.chatMessagesContainer) {
+        this.chatMessagesContainer.scrollTop = this.chatMessagesContainer.scrollHeight;
+      }
+      const summary = this.conversations.find((item) => item.id === this.currentConversationId);
+      if (summary) {
+        this.updateConversationHeader(summary);
+      }
+    } catch (error) {
+      console.error('发送消息失败:', error);
+      this.setStatus('发送失败，请稍后重试。', 'error');
+    } finally {
+      this.chatSendBtn.disabled = false;
+      this.pendingRequest = null;
+    }
+  }
+
+  autoResizeTextarea() {
+    if (!this.chatInputEl) {
+      return;
+    }
+    this.chatInputEl.style.height = 'auto';
+    this.chatInputEl.style.height = `${this.chatInputEl.scrollHeight}px`;
+  }
+
+  formatTimestamp(value) {
+    if (!value) {
+      return '';
+    }
+    try {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return value;
+      }
+      return `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, '0')}-${`${date.getDate()}`.padStart(2, '0')} ${`${date.getHours()}`.padStart(2, '0')}:${`${date.getMinutes()}`.padStart(2, '0')}`;
+    } catch (error) {
+      return value;
+    }
+  }
+
+  updateHistoryToggleLabel() {
+    if (!this.chatHistoryToggleBtn) {
+      return;
+    }
+    this.chatHistoryToggleBtn.textContent = this.historyVisible ? '隐藏历史' : '显示历史';
+  }
+}
+
+window.ChatModule = ChatModule;

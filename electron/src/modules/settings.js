@@ -469,6 +469,16 @@ class SettingsModule {
     if (databasePage) {
       databasePage.style.display = 'none';
     }
+
+    const chatPage = document.getElementById('chat-page');
+    if (chatPage) {
+      chatPage.style.display = 'none';
+    }
+
+    const chatHistory = document.getElementById('chat-history-container');
+    if (chatHistory) {
+      chatHistory.style.display = 'none';
+    }
     
     // 显示文件树容器
     const fileTreeContainer = document.getElementById('file-tree-container');
@@ -494,6 +504,16 @@ class SettingsModule {
     const databasePage = document.getElementById('database-page');
     if (databasePage) {
       databasePage.style.display = 'none';
+    }
+
+    const chatPage = document.getElementById('chat-page');
+    if (chatPage) {
+      chatPage.style.display = 'none';
+    }
+
+    const chatHistory = document.getElementById('chat-history-container');
+    if (chatHistory) {
+      chatHistory.style.display = 'none';
     }
     
     // 折叠操作栏，隐藏左侧的文件树容器

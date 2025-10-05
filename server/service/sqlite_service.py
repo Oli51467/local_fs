@@ -82,6 +82,31 @@ class SQLiteManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_document ON document_images(document_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_vector ON document_images(vector_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_folder ON document_images(storage_folder)")
+
+            # 创建对话会话与消息表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata TEXT,
+                    created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_time)")
             
             conn.commit()
     
@@ -840,7 +865,219 @@ class SQLiteManager:
         except Exception as e:
             logger.error(f"获取文件夹图片存储文件夹失败: {str(e)}")
             return []
-    
+
+    # 会话与消息管理
+
+    def create_conversation(self, title: str) -> int:
+        """创建新的对话会话"""
+        normalized_title = (title or '').strip()
+        if not normalized_title:
+            normalized_title = '新对话'
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO conversations (title)
+                VALUES (?)
+                """,
+                (normalized_title,)
+            )
+            return cursor.lastrowid
+
+    def update_conversation_title(self, conversation_id: int, title: str) -> bool:
+        """更新对话会话标题"""
+        normalized_title = (title or '').strip()
+        if not normalized_title:
+            return False
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE conversations
+                SET title = ?, updated_time = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (normalized_title, conversation_id)
+            )
+            return cursor.rowcount > 0
+
+    def touch_conversation(self, conversation_id: int) -> None:
+        """更新会话的更新时间戳"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE conversations SET updated_time = CURRENT_TIMESTAMP WHERE id = ?",
+                (conversation_id,)
+            )
+
+    def get_conversation_by_id(self, conversation_id: int) -> Optional[Dict[str, Any]]:
+        """根据ID获取会话信息"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, title, created_time, updated_time
+                FROM conversations
+                WHERE id = ?
+                """,
+                (conversation_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                'id': row['id'],
+                'title': row['title'],
+                'created_time': row['created_time'],
+                'updated_time': row['updated_time']
+            }
+
+    def list_conversations(self) -> List[Dict[str, Any]]:
+        """获取所有会话列表，按更新时间倒序排列"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    c.id,
+                    c.title,
+                    c.created_time,
+                    c.updated_time,
+                    (
+                        SELECT content
+                        FROM chat_messages m
+                        WHERE m.conversation_id = c.id
+                        ORDER BY m.created_time DESC, m.id DESC
+                        LIMIT 1
+                    ) AS last_message,
+                    (
+                        SELECT role
+                        FROM chat_messages m
+                        WHERE m.conversation_id = c.id
+                        ORDER BY m.created_time DESC, m.id DESC
+                        LIMIT 1
+                    ) AS last_role,
+                    (
+                        SELECT COUNT(*)
+                        FROM chat_messages m
+                        WHERE m.conversation_id = c.id
+                    ) AS message_count
+                FROM conversations c
+                ORDER BY c.updated_time DESC, c.id DESC
+                """
+            )
+
+            conversations = []
+            for row in cursor.fetchall():
+                conversations.append({
+                    'id': row['id'],
+                    'title': row['title'],
+                    'created_time': row['created_time'],
+                    'updated_time': row['updated_time'],
+                    'last_message': row['last_message'],
+                    'last_role': row['last_role'],
+                    'message_count': row['message_count'] or 0
+                })
+
+            return conversations
+
+    def insert_chat_message(
+        self,
+        conversation_id: int,
+        role: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """插入一条聊天消息，并更新会话更新时间"""
+        metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO chat_messages (conversation_id, role, content, metadata)
+                VALUES (?, ?, ?, ?)
+                """,
+                (conversation_id, role, content, metadata_json)
+            )
+            message_id = cursor.lastrowid
+            cursor.execute(
+                "UPDATE conversations SET updated_time = CURRENT_TIMESTAMP WHERE id = ?",
+                (conversation_id,)
+            )
+            return message_id
+
+    def get_conversation_messages(self, conversation_id: int) -> List[Dict[str, Any]]:
+        """获取指定会话的全部消息，按时间顺序排序"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, conversation_id, role, content, metadata, created_time
+                FROM chat_messages
+                WHERE conversation_id = ?
+                ORDER BY created_time ASC, id ASC
+                """,
+                (conversation_id,)
+            )
+
+            messages = []
+            for row in cursor.fetchall():
+                metadata = None
+                if row['metadata']:
+                    try:
+                        metadata = json.loads(row['metadata'])
+                    except json.JSONDecodeError:
+                        metadata = None
+                messages.append({
+                    'id': row['id'],
+                    'conversation_id': row['conversation_id'],
+                    'role': row['role'],
+                    'content': row['content'],
+                    'metadata': metadata,
+                    'created_time': row['created_time']
+                })
+
+            return messages
+
+    def get_chat_message(self, message_id: int) -> Optional[Dict[str, Any]]:
+        """根据消息ID获取聊天消息"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, conversation_id, role, content, metadata, created_time
+                FROM chat_messages
+                WHERE id = ?
+                """,
+                (message_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            metadata = None
+            if row['metadata']:
+                try:
+                    metadata = json.loads(row['metadata'])
+                except json.JSONDecodeError:
+                    metadata = None
+
+            return {
+                'id': row['id'],
+                'conversation_id': row['conversation_id'],
+                'role': row['role'],
+                'content': row['content'],
+                'metadata': metadata,
+                'created_time': row['created_time']
+            }
+
     def cleanup_all(self):
         """清理所有数据"""
         try:
@@ -848,13 +1085,15 @@ class SQLiteManager:
                 cursor = conn.cursor()
                 
                 # 删除所有数据（保留表结构）
+                cursor.execute("DELETE FROM chat_messages")
+                cursor.execute("DELETE FROM conversations")
                 cursor.execute("DELETE FROM document_chunks")
                 cursor.execute("DELETE FROM document_images")
                 cursor.execute("DELETE FROM documents")
                 
                 # 重置自增ID
                 cursor.execute(
-                    "DELETE FROM sqlite_sequence WHERE name IN ('documents', 'document_chunks', 'document_images')"
+                    "DELETE FROM sqlite_sequence WHERE name IN ('documents', 'document_chunks', 'document_images', 'conversations', 'chat_messages')"
                 )
                 
                 conn.commit()
