@@ -87,7 +87,7 @@ def init_text_splitter_service(splitter_type: str = "recursive", **kwargs) -> No
 def get_text_splitter_service() -> TextSplitterService:
     global _text_splitter_service
     if _text_splitter_service is None:
-        init_text_splitter_service()
+        raise RuntimeError("Text splitter service has not been initialised")
     return _text_splitter_service
 
 

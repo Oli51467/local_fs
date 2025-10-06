@@ -3,14 +3,12 @@
 """
 from fastapi import APIRouter, HTTPException
 import logging
-import os
 import shutil
-from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-from service.faiss_service import FaissManager, get_faiss_manager
-from service.sqlite_service import SQLiteManager, get_sqlite_manager
-from service.bm25s_service import BM25SService, get_bm25s_service
+from service.faiss_service import FaissManager
+from service.sqlite_service import SQLiteManager
+from service.bm25s_service import BM25SService
 from config.config import DatabaseConfig
 
 logger = logging.getLogger(__name__)
@@ -22,7 +20,11 @@ faiss_manager = None
 sqlite_manager = None
 bm25s_service = None
 
-def init_cleanup_api(faiss_mgr: FaissManager, sqlite_mgr: SQLiteManager, bm25s_srv: BM25SService):
+def init_cleanup_api(
+    faiss_mgr: FaissManager,
+    sqlite_mgr: SQLiteManager,
+    bm25s_srv: Optional[BM25SService],
+) -> None:
     """初始化清理API"""
     global faiss_manager, sqlite_manager, bm25s_service
     faiss_manager = faiss_mgr
@@ -42,10 +44,8 @@ async def cleanup_all() -> Dict[str, Any]:
         logger.warning("开始清理所有数据...")
         results = {}
         
-        # 获取服务管理器
-        sqlite_manager = get_sqlite_manager()
-        faiss_manager = get_faiss_manager()
-        bm25s_service = get_bm25s_service()
+        if sqlite_manager is None or faiss_manager is None:
+            raise HTTPException(status_code=500, detail="核心服务未初始化")
         
         # 1. 清理SQLite数据库
         try:
@@ -58,12 +58,9 @@ async def cleanup_all() -> Dict[str, Any]:
         
         # 2. 清理Faiss向量索引
         try:
-            if faiss_manager:
-                faiss_manager.cleanup_all()
-                logger.info("Faiss向量索引清理完成")
-                results['faiss'] = {'status': 'success', 'message': 'Faiss向量索引清理完成'}
-            else:
-                results['faiss'] = {'status': 'warning', 'message': 'Faiss管理器未初始化'}
+            faiss_manager.cleanup_all()
+            logger.info("Faiss向量索引清理完成")
+            results['faiss'] = {'status': 'success', 'message': 'Faiss向量索引清理完成'}
         except Exception as e:
             logger.error(f"Faiss向量索引清理失败: {str(e)}")
             results['faiss'] = {'status': 'error', 'message': str(e)}
@@ -137,13 +134,8 @@ async def cleanup_faiss_vectors() -> Dict[str, Any]:
         logger.warning("开始清空Faiss向量数据库...")
         
         # 获取Faiss管理器
-        faiss_manager = get_faiss_manager()
-        if not faiss_manager:
-            # 尝试重新初始化
-            from service.faiss_service import init_faiss_manager
-            faiss_manager = init_faiss_manager()
-            if not faiss_manager:
-                raise HTTPException(status_code=500, detail="Faiss管理器未初始化")
+        if faiss_manager is None:
+            raise HTTPException(status_code=500, detail="Faiss管理器未初始化")
         
         # 清空向量数据但保留索引结构
         try:
@@ -191,13 +183,8 @@ async def cleanup_sqlite_data() -> Dict[str, Any]:
         logger.warning("开始清空SQLite表数据...")
         
         # 获取SQLite管理器
-        sqlite_manager = get_sqlite_manager()
-        if not sqlite_manager:
-            # 尝试重新初始化
-            from service.sqlite_service import init_sqlite_manager
-            sqlite_manager = init_sqlite_manager()
-            if not sqlite_manager:
-                raise HTTPException(status_code=500, detail="SQLite管理器未初始化")
+        if sqlite_manager is None:
+            raise HTTPException(status_code=500, detail="SQLite管理器未初始化")
         
         try:
             # 获取删除前的文档数量

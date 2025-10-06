@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from config.config import ServerConfig
-from service.bm25s_service import get_bm25s_service
+from service.bm25s_service import BM25SService
 from service.embedding_service import EmbeddingService
 from service.faiss_service import FaissManager
 from service.sqlite_service import SQLiteManager
@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 faiss_manager: Optional[FaissManager] = None
 sqlite_manager: Optional[SQLiteManager] = None
 embedding_service: Optional[EmbeddingService] = None
+bm25s_service: Optional[BM25SService] = None
 
 
 class RetrievedChunk(BaseModel):
@@ -73,11 +74,13 @@ def init_chat_api(
     faiss_mgr: FaissManager,
     sqlite_mgr: SQLiteManager,
     embedding_srv: EmbeddingService,
+    bm25s_srv: Optional[BM25SService] = None,
 ) -> None:
-    global faiss_manager, sqlite_manager, embedding_service
+    global faiss_manager, sqlite_manager, embedding_service, bm25s_service
     faiss_manager = faiss_mgr
     sqlite_manager = sqlite_mgr
     embedding_service = embedding_srv
+    bm25s_service = bm25s_srv
 
 
 def _ensure_dependencies() -> None:
@@ -153,7 +156,7 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
         return []
 
     bm25_scores: List[float] = [0.0] * len(candidate_records)
-    bm25_service = get_bm25s_service()
+    bm25_service = bm25s_service
     if bm25_service is not None:
         try:
             corpus = [candidate['content'] for candidate in candidate_records]

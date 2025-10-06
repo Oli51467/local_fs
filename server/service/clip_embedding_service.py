@@ -57,30 +57,6 @@ class CLIPEmbeddingService:
             )[0]  # type: ignore[union-attr]
         return self._to_list(vector)
 
-    def encode_raw(self, image: Image.Image) -> List[float]:
-        """Encode a PIL image instance."""
-        self._ensure_model_loaded()
-        image = image.convert("RGB")
-        vector = self._model.encode(
-            [image],
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            batch_size=1,
-            show_progress_bar=False
-        )[0]  # type: ignore[union-attr]
-        return self._to_list(vector)
-
-    def encode_text(self, text: str) -> List[float]:
-        """Encode a text string into the shared CLIP embedding space."""
-        self._ensure_model_loaded()
-        vector = self._model.encode(
-            [text],
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            show_progress_bar=False
-        )[0]  # type: ignore[union-attr]
-        return self._to_list(vector)
-
     def encode_texts(self, texts: Sequence[str]) -> List[List[float]]:
         """Batch encode multiple texts into CLIP embeddings."""
         cleaned = [str(text) for text in texts if str(text).strip()]

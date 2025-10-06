@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
     embedding_instance = EmbeddingService()
     
     # 初始化Reranker服务
-    init_reranker_service()
+    reranker_service_instance = init_reranker_service()
     
     # 初始化BM25S服务
     bm25s_service_instance = init_bm25s_service()
@@ -62,13 +62,29 @@ async def lifespan(app: FastAPI):
     # 初始化Faiss向量数据库管理器
     faiss_instance = FaissManager()
     image_faiss_instance = ImageFaissManager()
-    init_faiss_api(faiss_instance, embedding_instance, image_faiss_instance)
+    init_faiss_api(
+        faiss_instance,
+        embedding_instance,
+        image_faiss_instance,
+        bm25s_service_instance,
+        reranker_service_instance,
+    )
     
     # 初始化文档API
-    init_document_api(faiss_instance, sqlite_instance, image_faiss_instance)
+    init_document_api(
+        faiss_instance,
+        sqlite_instance,
+        image_faiss_instance,
+        embedding_instance,
+    )
     
     # 初始化对话API
-    init_chat_api(faiss_instance, sqlite_instance, embedding_instance)
+    init_chat_api(
+        faiss_instance,
+        sqlite_instance,
+        embedding_instance,
+        bm25s_service_instance,
+    )
     
     # 初始化清理API
     from api.cleanup_api import init_cleanup_api

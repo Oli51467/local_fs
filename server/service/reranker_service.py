@@ -174,23 +174,13 @@ class RerankerService:
 # 全局Reranker服务实例
 reranker_service: Optional[RerankerService] = None
 
-def init_reranker_service() -> bool:
-    """
-    初始化全局Reranker服务
-    
-    Returns:
-        初始化是否成功
-    """
+def init_reranker_service(model_path: Optional[Path] = None) -> RerankerService:
+    """初始化全局Reranker服务并返回实例。"""
+
     global reranker_service
-    
-    try:
-        reranker_service = RerankerService()
-        logger.info("Reranker服务初始化成功")
-        return True
-    except Exception as e:
-        logger.error(f"Reranker服务初始化失败: {e}")
-        reranker_service = None
-        return False
+    reranker_service = RerankerService(model_path=model_path)
+    logger.info("Reranker服务初始化成功")
+    return reranker_service
 
 def get_reranker_service() -> Optional[RerankerService]:
     """

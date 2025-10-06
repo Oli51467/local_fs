@@ -195,15 +195,3 @@ class ImageFaissManager:
                 updated,
             )
         return updated
-
-
-_image_faiss_manager: Optional[ImageFaissManager] = None
-
-
-def init_image_faiss_manager() -> ImageFaissManager:
-    global _image_faiss_manager
-    _image_faiss_manager = ImageFaissManager()
-    return _image_faiss_manager
-
-def get_image_faiss_manager() -> ImageFaissManager:
-    return _image_faiss_manager

@@ -4,13 +4,13 @@ from pathlib import Path
 import numpy as np
 import statistics
 from service.faiss_service import FaissManager
-from service.image_faiss_service import ImageFaissManager, get_image_faiss_manager
+from service.image_faiss_service import ImageFaissManager
 from service.embedding_service import EmbeddingService
 from service.clip_embedding_service import get_clip_embedding_service
 from model.faiss_request_model import SearchRequest
 import logging
-from service.reranker_service import RerankerService, init_reranker_service, get_reranker_service
-from service.bm25s_service import BM25SService, init_bm25s_service, get_bm25s_service
+from service.reranker_service import RerankerService
+from service.bm25s_service import BM25SService
 from config.config import ServerConfig
 
 logger = logging.getLogger(__name__)
@@ -291,82 +291,56 @@ def search_image_vectors(
 
 def init_faiss_api(
     faiss_mgr: FaissManager,
-    embedding_svc: EmbeddingService = None,
-    image_faiss_mgr: ImageFaissManager = None
-):
+    embedding_svc: EmbeddingService,
+    image_faiss_mgr: ImageFaissManager,
+    bm25s_svc: Optional[BM25SService] = None,
+    reranker_svc: Optional[RerankerService] = None,
+) -> None:
     """初始化Faiss API"""
+
+    if image_faiss_mgr is None:
+        raise ValueError("image_faiss_mgr must be provided")
+
     global faiss_manager, image_faiss_manager, embedding_service, reranker_service, bm25s_service
     faiss_manager = faiss_mgr
-    image_faiss_manager = image_faiss_mgr or get_image_faiss_manager()
+    image_faiss_manager = image_faiss_mgr
     embedding_service = embedding_svc
-    
-    # 初始化Reranker服务
-    try:
-        reranker_service = get_reranker_service()
-        if reranker_service is None:
-            # 如果服务未初始化，尝试初始化
-            if init_reranker_service():
-                reranker_service = get_reranker_service()
-                logger.info("Reranker服务初始化成功")
-            else:
-                logger.warning("Reranker服务初始化失败，将继续使用基础搜索")
-        else:
-            logger.info("Reranker服务已初始化")
-    except Exception as e:
-        logger.warning(f"Reranker服务初始化失败: {str(e)}，将继续使用基础搜索")
-        reranker_service = None
-    
-    # 初始化BM25S服务
-    try:
-        bm25s_service = get_bm25s_service()
-        if bm25s_service is None:
-            # 如果服务未初始化，尝试初始化
-            if init_bm25s_service():
-                bm25s_service = get_bm25s_service()
-                logger.info("BM25S服务初始化成功")
-            else:
-                logger.warning("BM25S服务初始化失败，将继续使用基础向量搜索")
-        else:
-            logger.info("BM25S服务已初始化")
-        
-        # 尝试构建BM25S索引
-        if bm25s_service and faiss_manager and len(faiss_manager.metadata) > 0:
-            logger.info(f"开始构建BM25S索引，文档数量: {len(faiss_manager.metadata)}")
+    reranker_service = reranker_svc
+    bm25s_service = bm25s_svc
+
+    if reranker_service:
+        logger.info("Reranker服务已初始化")
+    else:
+        logger.info("未提供Reranker服务，将继续使用基础搜索")
+
+    if not faiss_manager:
+        logger.warning("Faiss管理器未提供，部分功能不可用")
+
+    if bm25s_service:
+        logger.info("BM25S服务已初始化，准备构建索引")
+        if faiss_manager and faiss_manager.metadata:
+            logger.info("开始构建BM25S索引，文档数量: %s", len(faiss_manager.metadata))
             try:
-                # 准备文档数据
-                documents = []
-                for i, meta in enumerate(faiss_manager.metadata):
-                    # 获取文档内容，优先使用chunk_text，其次使用text
+                documents: List[Dict[str, Any]] = []
+                for index, meta in enumerate(faiss_manager.metadata):
                     content = meta.get('chunk_text', '') or meta.get('text', '')
                     if content:
-                        doc_id = str(i)  # 使用索引作为文档ID
-                        documents.append({
-                            'id': doc_id,
-                            'content': content
-                        })
-                
-                logger.info(f"准备构建BM25S索引的文档数量: {len(documents)}")
-                
+                        documents.append({'id': str(index), 'content': content})
+
+                logger.info("准备构建BM25S索引的文档数量: %s", len(documents))
+
                 if documents:
-                    # 构建BM25S索引
-                    success = bm25s_service.build_index(documents)
-                    if success:
-                        logger.info(f"BM25S索引构建完成，文档数量: {len(documents)}")
-                        # 重新检查BM25S服务是否可用
-                        logger.info(f"BM25S服务状态: available={bm25s_service.is_available()}")
-                    else:
-                        logger.warning("BM25S索引构建失败")
+                    bm25s_service.build_index(documents)
+                    logger.info("BM25S索引构建完成，服务状态: available=%s", bm25s_service.is_available())
                 else:
                     logger.warning("没有可用的文档内容用于构建BM25S索引")
-            except Exception as e:
-                logger.error(f"构建BM25S索引时出错: {e}")
+            except Exception as exc:
+                logger.error("构建BM25S索引时出错: %s", exc)
         else:
             logger.info("BM25S索引构建条件不满足，跳过构建")
-        
-    except Exception as e:
-        logger.warning(f"BM25S服务初始化失败: {str(e)}，将继续使用基础向量搜索")
-        bm25s_service = None
-    
+    else:
+        logger.info("未提供BM25S服务，将跳过BM25S索引构建")
+
     logger.info("Faiss API initialized")
 
 @router.get("/test-connection")

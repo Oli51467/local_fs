@@ -224,16 +224,3 @@ class FaissManager:
         except Exception as e:
             logger.error(f"删除Faiss向量失败: {str(e)}")
             return 0
-
-# 全局Faiss管理器实例
-faiss_manager_instance = None
-
-def init_faiss_manager():
-    """初始化全局Faiss管理器"""
-    global faiss_manager_instance
-    faiss_manager_instance = FaissManager()
-    return faiss_manager_instance
-
-def get_faiss_manager():
-    """获取全局Faiss管理器实例"""
-    return faiss_manager_instance

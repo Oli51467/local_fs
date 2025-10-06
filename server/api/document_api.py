@@ -16,7 +16,7 @@ import pypandoc
 from docx import Document
 from docx.opc.constants import RELATIONSHIP_TYPE as DOCX_RELATIONSHIP_TYPE
 from service.clip_embedding_service import get_clip_embedding_service
-from service.embedding_service import get_embedding_service
+from service.embedding_service import EmbeddingService
 from service.faiss_service import FaissManager
 from service.image_faiss_service import ImageFaissManager
 from service.sqlite_service import SQLiteManager
@@ -127,6 +127,7 @@ faiss_manager = None
 sqlite_manager = None
 text_splitter_service = None
 image_faiss_manager = None
+embedding_service: Optional[EmbeddingService] = None
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.tiff', '.bmp'}
 TEXT_TYPES = {'txt'}
@@ -484,13 +485,15 @@ def extract_doc_text_and_images(file_path: pathlib.Path, collect_images: bool = 
 
 
 def build_pdf_markdown_output_path(pdf_path: pathlib.Path) -> pathlib.Path:
-    base_candidate = pdf_path.with_name(f"{pdf_path.stem}.mineru.md")
+    """Resolve a markdown output path without exposing MinerU-specific suffixes."""
+
+    base_candidate = pdf_path.with_name(f"{pdf_path.stem}.md")
     if not base_candidate.exists():
         return base_candidate
 
     counter = 1
     while True:
-        candidate = pdf_path.with_name(f"{pdf_path.stem}.mineru({counter}).md")
+        candidate = pdf_path.with_name(f"{pdf_path.stem}({counter}).md")
         if not candidate.exists():
             return candidate
         counter += 1
@@ -520,14 +523,15 @@ def _run_pdf_parse_task(task_id: str, pdf_path: pathlib.Path) -> None:
             relative_output = str(output_path.relative_to(project_root))
         except ValueError:
             relative_output = str(output_path)
+        logger.info("PDF解析完成，Markdown路径: %s", relative_output)
 
         _update_pdf_task(
             task_id,
             status='success',
-            message='PDF解析成功，已生成Markdown文件',
+            message='PDF解析成功',
             stage='解析完成',
             progress=1.0,
-            markdown_path=relative_output,
+            markdown_path=None,
             filename=output_path.name
         )
     except PdfExtractionError as exc:
@@ -930,12 +934,18 @@ async def run_folder_tasks(
     results = await asyncio.gather(*tasks)
     return results
 
-def init_document_api(faiss_mgr: FaissManager, sqlite_mgr: SQLiteManager, image_faiss_mgr: ImageFaissManager):
+def init_document_api(
+    faiss_mgr: FaissManager,
+    sqlite_mgr: SQLiteManager,
+    image_faiss_mgr: ImageFaissManager,
+    embedding_svc: EmbeddingService,
+) -> None:
     """初始化文档API"""
-    global faiss_manager, sqlite_manager, image_faiss_manager, text_splitter_service
+    global faiss_manager, sqlite_manager, image_faiss_manager, text_splitter_service, embedding_service
     faiss_manager = faiss_mgr
     sqlite_manager = sqlite_mgr
     image_faiss_manager = image_faiss_mgr
+    embedding_service = embedding_svc
     
     # 初始化文本分割服务（仅支持递归分割器，保留旧配置参数兼容性）
     init_text_splitter_service(
@@ -1212,14 +1222,14 @@ async def upload_document(request: FileUploadRequest):
                 logger.info(f"文档已存储到SQLite，文档ID: {document_id}")
 
             # 7. 生成文本嵌入向量
-            embedding_service = get_embedding_service()
-            if not embedding_service:
+            embedding_svc = embedding_service
+            if embedding_svc is None:
                 raise HTTPException(status_code=500, detail="嵌入服务未初始化")
 
             embeddings = []
             for i, chunk in enumerate(chunks):
                 try:
-                    embedding = embedding_service.encode_text(chunk)
+                    embedding = embedding_svc.encode_text(chunk)
                     embeddings.append(embedding)
                     logger.debug(f"已生成第 {i+1} 个文本块的嵌入向量")
                 except Exception as e:

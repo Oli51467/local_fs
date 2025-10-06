@@ -48,13 +48,3 @@ class EmbeddingService:
                               return_sparse=False,
                               return_colbert_vecs=False)
         return [vec.tolist() for vec in result['dense_vecs']]
-
-# 全局实例
-embedding_service = None
-
-def get_embedding_service() -> EmbeddingService:
-    """获取embedding服务实例"""
-    global embedding_service
-    if embedding_service is None:
-        embedding_service = EmbeddingService()
-    return embedding_service

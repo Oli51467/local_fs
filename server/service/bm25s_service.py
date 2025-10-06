@@ -141,47 +141,17 @@ class BM25SService:
 # 全局BM25S服务实例
 bm25s_service: Optional[BM25SService] = None
 
-def init_bm25s_service() -> bool:
-    """
-    初始化全局BM25S服务
-    
-    Returns:
-        初始化是否成功
-    """
-    global bm25s_service
-    
-    try:
-        bm25s_service = BM25SService()
-        logger.info("BM25S服务初始化成功")
-        return True
-    except Exception as e:
-        logger.error(f"BM25S服务初始化失败: {e}")
-        bm25s_service = None
-        return False
 
-def get_bm25s_service() -> Optional[BM25SService]:
-    """
-    获取全局BM25S服务实例
-    
-    Returns:
-        BM25S服务实例，如果未初始化则返回None
-    """
+def init_bm25s_service(index_path: Optional[Path] = None) -> BM25SService:
+    """初始化全局BM25S服务并返回实例。"""
+
+    global bm25s_service
+    bm25s_service = BM25SService(index_path=index_path)
+    logger.info("BM25S服务初始化成功")
     return bm25s_service
 
-def init_bm25s_service() -> bool:
-    """
-    初始化全局BM25S服务
-    
-    Returns:
-        初始化是否成功
-    """
-    global bm25s_service
-    
-    try:
-        bm25s_service = BM25SService()
-        logger.info("BM25S服务初始化成功")
-        return True
-    except Exception as e:
-        logger.error(f"BM25S服务初始化失败: {e}")
-        bm25s_service = None
-        return False
+
+def get_bm25s_service() -> Optional[BM25SService]:
+    """获取全局BM25S服务实例。"""
+
+    return bm25s_service

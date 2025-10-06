@@ -1102,16 +1102,3 @@ class SQLiteManager:
         except Exception as e:
             logger.error(f"SQLite数据库清理失败: {str(e)}")
             raise e
-
-# 全局SQLite管理器实例
-sqlite_manager_instance = None
-
-def init_sqlite_manager():
-    """初始化全局SQLite管理器"""
-    global sqlite_manager_instance
-    sqlite_manager_instance = SQLiteManager()
-    return sqlite_manager_instance
-
-def get_sqlite_manager():
-    """获取全局SQLite管理器实例"""
-    return sqlite_manager_instance

@@ -116,17 +116,18 @@ class FakeBM25Service:
         return list(self._scores[: len(documents)])
 
 
-def create_test_client(fake_faiss, fake_sqlite, fake_embedding):
+def create_test_client(fake_faiss, fake_sqlite, fake_embedding, fake_bm25=None):
     app = FastAPI()
-    init_chat_api(fake_faiss, fake_sqlite, fake_embedding)
+    init_chat_api(fake_faiss, fake_sqlite, fake_embedding, fake_bm25)
     app.include_router(chat_router)
     client = TestClient(app)
     return client
 
 
 @pytest.fixture(autouse=True)
-def reset_bm25(monkeypatch):
-    monkeypatch.setattr('server.api.chat_api.get_bm25s_service', lambda: None)
+def reset_bm25():
+    from server.api import chat_api
+    chat_api.bm25s_service = None
 
 
 def test_chat_creates_new_conversation_without_results():
@@ -155,7 +156,7 @@ def test_chat_creates_new_conversation_without_results():
     assert conversations[0]['message_count'] == 2
 
 
-def test_chat_returns_retrieved_chunks(monkeypatch):
+def test_chat_returns_retrieved_chunks():
     fake_sqlite = FakeSQLiteManager()
     fake_sqlite.chunks_by_vector[42] = {
         'document_id': 7,
@@ -175,9 +176,7 @@ def test_chat_returns_retrieved_chunks(monkeypatch):
         }
     ]])
     fake_embedding = FakeEmbeddingService()
-    monkeypatch.setattr('server.api.chat_api.get_bm25s_service', lambda: FakeBM25Service([1.5]))
-
-    client = create_test_client(fake_faiss, fake_sqlite, fake_embedding)
+    client = create_test_client(fake_faiss, fake_sqlite, fake_embedding, FakeBM25Service([1.5]))
 
     response = client.post('/api/chat', json={'question': '演示问题', 'top_k': 3})
     assert response.status_code == 200
