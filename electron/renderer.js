@@ -124,7 +124,6 @@ function renderIcons() {
     { id: 'search-icon', icon: icons.search },
     { id: 'chat-icon', icon: icons.chat },
     { id: 'settings-icon', icon: icons.settings },
-    { id: 'test-icon', icon: icons.test },
     { id: 'database-icon', icon: icons.database }
   ];
 
@@ -157,14 +156,12 @@ function ensureGlobalImageViewer() {
 
 let settingsModule;
 let explorerModule;
-let testModule;
 let databaseModule;
 let chatModule;
 let splashScreen;
 
 configureViewStateModule({
   getSettingsModule: () => settingsModule,
-  getTestModule: () => testModule,
   getDatabaseModule: () => databaseModule,
   getFileTreeEl: () => fileTreeEl,
   getFileTreeContainer: () => fileTreeContainer,
@@ -277,10 +274,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     chatModule = new ChatModule();
     await chatModule.init();
     window.chatModule = chatModule;
-    
-    // 初始化测试模块
-    testModule = new TestModule();
-    await testModule.init();
     
     // 获取ExplorerModule中的fileViewer实例
     fileViewer = explorerModule.getFileViewer();

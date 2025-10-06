@@ -147,7 +147,6 @@
       <button id="search-btn"><div id="search-icon"></div></button>
       <button id="chat-btn"><div id="chat-icon"></div></button>
       <button id="settings-btn"><div id="settings-icon"></div></button>
-      <button id="test-btn"><div id="test-icon"></div></button>
       <button id="database-btn"><div id="database-icon"></div></button>
     </div>
 
@@ -315,59 +314,6 @@
         </footer>
       </section>
     </div>
-    
-    <!-- 测试页面 -->
-    <div id="test-page">
-      <div class="test-section">
-        <h2>API 测试</h2>
-        
-        <div class="test-form">
-          <div class="form-group">
-            <label>接口地址:</label>
-            <input type="text" id="api-endpoint" placeholder="请输入接口地址，如: /health" value="/health">
-          </div>
-          
-          <div class="form-group">
-            <label>请求方法:</label>
-            <select id="request-method">
-              <option value="GET">GET</option>
-              <option value="POST">POST</option>
-            </select>
-          </div>
-          
-          <div class="form-group">
-            <label>Headers:</label>
-            <textarea id="request-headers" placeholder='{
-  "Content-Type": "application/json"
-}'></textarea>
-          </div>
-          
-          <div class="form-group">
-            <label>Body (仅POST):</label>
-            <textarea id="request-body" placeholder='{
-  "key": "value"
-}'></textarea>
-          </div>
-          
-          <div class="form-group">
-            <label>Query 参数:</label>
-            <textarea id="query-params" placeholder='{
-  "param1": "value1",
-  "param2": "value2"
-}'></textarea>
-          </div>
-          
-          <button id="send-request" class="send-btn">发送请求</button>
-        </div>
-        
-        <div class="response-section">
-          <h3>响应结果</h3>
-          <div id="response-status" class="response-status"></div>
-          <pre id="response-content" class="response-content"></pre>
-        </div>
-      </div>
-    </div>
-    
     <!-- 数据库页面 -->
     <div id="database-page">
       <div class="database-section">
@@ -493,7 +439,6 @@
   <link rel="stylesheet" href="./src/styles/settings.css">
   <link rel="stylesheet" href="./src/styles/explorer.css">
   <link rel="stylesheet" href="./src/styles/chat.css">
-  <link rel="stylesheet" href="./src/styles/test.css">
   <link rel="stylesheet" href="./src/styles/database.css">
   
   <script src="./src/modules/splash.js"></script>
@@ -507,7 +452,6 @@
   <script src="./src/components/fileViewer.js"></script>
   <script src="./src/modules/settings.js"></script>
   <script src="./src/modules/explorer.js"></script>
-  <script src="./src/modules/test.js"></script>
   <script src="./src/modules/database.js"></script>
   <script src="./src/modules/chat.js"></script>
   <script src="./icons.js"></script>

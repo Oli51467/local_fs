@@ -13,7 +13,7 @@
   },
   "build": {
     "appId": "com.electron.python.app",
-    "productName": "Electron Python App",
+    "productName": "LoFS",
     "files": [
       "**/*",
       "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",

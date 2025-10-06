@@ -457,13 +457,6 @@ class SettingsModule {
   showFilePage() {
     this.fileContentEl.style.display = 'block';
     this.settingsPageEl.style.display = 'none';
-    
-    // 隐藏测试页面
-    const testPage = document.getElementById('test-page');
-    if (testPage) {
-      testPage.style.display = 'none';
-    }
-    
     // 隐藏数据库页面
     const databasePage = document.getElementById('database-page');
     if (databasePage) {
@@ -493,13 +486,6 @@ class SettingsModule {
   showSettingsPage() {
     this.fileContentEl.style.display = 'none';
     this.settingsPageEl.style.display = 'block';
-    
-    // 隐藏测试页面
-    const testPage = document.getElementById('test-page');
-    if (testPage) {
-      testPage.style.display = 'none';
-    }
-    
     // 隐藏数据库页面
     const databasePage = document.getElementById('database-page');
     if (databasePage) {

@@ -235,7 +235,6 @@ class DatabaseModule {
     // 隐藏其他页面
     document.getElementById('file-content').style.display = 'none';
     document.getElementById('settings-page').style.display = 'none';
-    document.getElementById('test-page').style.display = 'none';
     document.getElementById('file-tree-container').style.display = 'none';
     
     // 显示数据库页面

@@ -9,7 +9,6 @@
 
   const dependencies = {
     getSettingsModule: () => global.settingsModule,
-    getTestModule: () => global.testModule,
     getDatabaseModule: () => global.databaseModule,
     getFileTreeEl: () => document.getElementById('file-tree'),
     getFileTreeContainer: () => document.getElementById('file-tree-container'),
@@ -92,11 +91,6 @@
       settings.showFilePage();
     }
 
-    const test = dependencies.getTestModule ? dependencies.getTestModule() : null;
-    if (test && typeof test.hideTestPage === 'function') {
-      test.hideTestPage();
-    }
-
     hideDatabasePage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
@@ -143,11 +137,6 @@
 
     hideChatInterface();
 
-    const test = dependencies.getTestModule ? dependencies.getTestModule() : null;
-    if (test && typeof test.hideTestPage === 'function') {
-      test.hideTestPage();
-    }
-
     hideDatabasePage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
@@ -193,11 +182,6 @@
     const settings = dependencies.getSettingsModule ? dependencies.getSettingsModule() : null;
     if (settings && typeof settings.showFilePage === 'function') {
       settings.showFilePage();
-    }
-
-    const test = dependencies.getTestModule ? dependencies.getTestModule() : null;
-    if (test && typeof test.hideTestPage === 'function') {
-      test.hideTestPage();
     }
 
     hideDatabasePage();
