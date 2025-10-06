@@ -22,7 +22,25 @@ contextBridge.exposeInMainWorld('fsAPI', {
   isAudioFile: (filePath) => ipcRenderer.invoke('is-audio-file', filePath),
   
   // PDF相关
+  getPdfLibPath: () => ipcRenderer.invoke('get-pdf-lib-path'),
   getPdfWorkerPath: () => ipcRenderer.invoke('get-pdf-worker-path'),
+
+  // Word / PPT 相关依赖
+  getDocxLibPath: () => ipcRenderer.invoke('get-docx-lib-path'),
+  getJsZipLibPath: () => ipcRenderer.invoke('get-jszip-lib-path'),
+  getPptxLibPath: () => ipcRenderer.invoke('get-pptx-lib-path'),
+
+  // 应用资源路径解析
+  getAssetPath: (relativePath) => ipcRenderer.invoke('get-dist-asset-path', relativePath),
+  getAssetPathSync: (relativePath) => ipcRenderer.sendSync('get-dist-asset-path-sync', relativePath),
+  
+  // 项目路径与运行时信息
+  getRuntimePaths: () => ipcRenderer.invoke('fs-app:get-runtime-paths'),
+  getRuntimePathsSync: () => ipcRenderer.sendSync('fs-app:get-runtime-paths-sync'),
+  resolveProjectPath: (targetPath) => ipcRenderer.invoke('fs-app:resolve-project-path', targetPath),
+  resolveProjectPathSync: (targetPath) => ipcRenderer.sendSync('fs-app:resolve-project-path-sync', targetPath),
+  toProjectRelativePath: (targetPath) => ipcRenderer.invoke('fs-app:project-relative-path', targetPath),
+  toProjectRelativePathSync: (targetPath) => ipcRenderer.sendSync('fs-app:project-relative-path-sync', targetPath),
   
   // PPTX相关
   readPptxFile: (filePath) => ipcRenderer.invoke('read-pptx-file', filePath),

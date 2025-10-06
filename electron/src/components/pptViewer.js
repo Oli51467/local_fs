@@ -1,3 +1,38 @@
+const pptDynamicScriptCache = new Map();
+
+const loadPptExternalScript = (url) => {
+  if (!url) {
+    return Promise.reject(new Error('无法加载空白脚本路径'));
+  }
+
+  if (pptDynamicScriptCache.get(url) === 'loaded') {
+    return Promise.resolve();
+  }
+
+  const cached = pptDynamicScriptCache.get(url);
+  if (cached) {
+    return cached;
+  }
+
+  const promise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = url;
+    script.async = false;
+    script.onload = () => {
+      pptDynamicScriptCache.set(url, 'loaded');
+      resolve();
+    };
+    script.onerror = () => {
+      pptDynamicScriptCache.delete(url);
+      reject(new Error(`无法加载脚本: ${url}`));
+    };
+    document.head.appendChild(script);
+  });
+
+  pptDynamicScriptCache.set(url, promise);
+  return promise;
+};
+
 /**
  * PPT文件查看器模块
  * 专门处理 .pptx 和 .ppt 文件的查看功能
@@ -214,6 +249,21 @@ class PptViewer {
   // 使用pptx-preview库渲染PPTX内容
   async renderPptxWithPreview(tabId, buffer, fileName) {
     try {
+      if (!window.pptxPreview) {
+        let pptxUrl = './static/libs/pptx-preview.umd.js';
+        if (window.fsAPI && typeof window.fsAPI.getPptxLibPath === 'function') {
+          try {
+            const resolved = await window.fsAPI.getPptxLibPath();
+            if (resolved) {
+              pptxUrl = resolved;
+            }
+          } catch (error) {
+            console.warn('获取pptx-preview路径失败，使用默认路径:', error);
+          }
+        }
+        await loadPptExternalScript(pptxUrl);
+      }
+
       // 检查pptx-preview全局变量
       if (!window.pptxPreview) {
         throw new Error('pptx-preview库未正确加载');

@@ -609,6 +609,32 @@ class DatabaseModule {
     return resolved;
   }
 
+  toFileUrl(absolutePath) {
+    if (!absolutePath) {
+      return null;
+    }
+
+    const raw = String(absolutePath).trim();
+    if (!raw) {
+      return null;
+    }
+
+    if (raw.startsWith('file://')) {
+      return raw;
+    }
+
+    const normalized = raw.replace(/\\/g, '/');
+    if (/^[a-zA-Z]:[\\/]/.test(raw) || /^[a-zA-Z]:[\\/]/.test(normalized)) {
+      return `file:///${normalized}`;
+    }
+
+    if (normalized.startsWith('/')) {
+      return `file://${normalized}`;
+    }
+
+    return null;
+  }
+
   resolveProjectRelativeUrl(targetPath) {
     if (!targetPath) {
       return null;
@@ -623,14 +649,36 @@ class DatabaseModule {
       return normalized;
     }
 
-    normalized = normalized.replace(/\\/g, '/').replace(/^\.\//, '');
-
-    if (/^[a-zA-Z]:\//.test(normalized)) {
-      return `file:///${normalized}`;
+    if (typeof window.fsAPI?.resolveProjectPathSync === 'function') {
+      try {
+        const absolute = window.fsAPI.resolveProjectPathSync(normalized);
+        const asFileUrl = this.toFileUrl(absolute);
+        if (asFileUrl) {
+          return asFileUrl;
+        }
+      } catch (error) {
+        console.warn('解析项目路径失败:', normalized, error);
+      }
     }
 
-    if (normalized.startsWith('/')) {
-      return `file://${normalized}`;
+    const absoluteFallback = this.toFileUrl(normalized);
+    if (absoluteFallback) {
+      return absoluteFallback;
+    }
+
+    try {
+      const runtimePaths = typeof window.fsAPI?.getRuntimePathsSync === 'function'
+        ? window.fsAPI.getRuntimePathsSync()
+        : null;
+      if (runtimePaths?.externalRoot) {
+        const joined = `${runtimePaths.externalRoot.replace(/\\/g, '/')}/${normalized.replace(/^\/+/, '')}`;
+        const fallbackUrl = this.toFileUrl(joined);
+        if (fallbackUrl) {
+          return fallbackUrl;
+        }
+      }
+    } catch (error) {
+      console.warn('无法解析运行时路径:', error);
     }
 
     try {

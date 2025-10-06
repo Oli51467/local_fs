@@ -155,16 +155,27 @@ class PdfViewer {
 
   // 动态加载PDF.js库
   async loadPdfJsLibrary() {
-    return new Promise((resolve, reject) => {
-      if (typeof window.pdfjsLib !== 'undefined') {
-        resolve();
-        return;
-      }
+    if (typeof window.pdfjsLib !== 'undefined') {
+      return;
+    }
 
+    let pdfJsUrl = './static/libs/pdf.js';
+
+    if (window.fsAPI && typeof window.fsAPI.getPdfLibPath === 'function') {
+      try {
+        const resolvedUrl = await window.fsAPI.getPdfLibPath();
+        if (typeof resolvedUrl === 'string' && resolvedUrl.length > 0) {
+          pdfJsUrl = resolvedUrl;
+        }
+      } catch (error) {
+        console.warn('获取PDF.js路径失败，使用默认相对路径:', error);
+      }
+    }
+
+    await new Promise((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = './static/libs/pdf.js';
+      script.src = pdfJsUrl;
       script.onload = () => {
-        // PDF.js加载完成后，pdfjsLib会被添加到window对象
         if (typeof window.pdfjsLib !== 'undefined') {
           resolve();
         } else {

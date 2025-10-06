@@ -1,5 +1,13 @@
 const { app, BrowserWindow } = require('electron');
+const fs = require('fs');
 const path = require('path');
+
+// Ensure runtime checks see the correct environment for packaged builds
+if (app.isPackaged) {
+  process.env.NODE_ENV = 'production';
+} else {
+  process.env.NODE_ENV = process.env.NODE_ENV || 'development';
+}
 
 // 禁用硬件加速以避免GPU相关的Mach端口问题
 app.disableHardwareAcceleration();
@@ -24,9 +32,56 @@ const FileViewerModule = require('./src/modules/file-viewer');
 const SettingsBackendModule = require('./src/modules/settings-backend');
 const FileImportModule = require('./src/modules/file-import');
 const PythonBackendModule = require('./src/modules/python-backend');
+const RuntimePathsModule = require('./src/modules/runtime-paths');
 
-// 根目录为项目根 data 文件夹
-const dataRoot = path.join(__dirname, '..', 'data');
+function resolveAppPaths() {
+  const appRoot = path.join(__dirname, '..');
+  const userDataBase = path.join(app.getPath('userData'), 'fs-app');
+  const externalRoot = app.isPackaged ? userDataBase : appRoot;
+  const dataRoot = path.join(externalRoot, 'data');
+  const metaRoot = path.join(externalRoot, 'meta');
+
+  const ensureDir = (target) => {
+    try {
+      fs.mkdirSync(target, { recursive: true });
+    } catch (error) {
+      console.error('Failed to ensure directory:', target, error);
+    }
+  };
+
+  ensureDir(externalRoot);
+  ensureDir(dataRoot);
+  ensureDir(metaRoot);
+
+  if (app.isPackaged) {
+    const seedDirectory = (source, destination) => {
+      if (!fs.existsSync(source)) {
+        return;
+      }
+      try {
+        const destinationExists = fs.existsSync(destination);
+        const destinationEmpty = !destinationExists || fs.readdirSync(destination).length === 0;
+        if (destinationEmpty) {
+          fs.mkdirSync(destination, { recursive: true });
+          fs.cpSync(source, destination, { recursive: true, force: false, errorOnExist: false });
+        }
+      } catch (error) {
+        console.warn('Failed to seed directory from resources:', source, '->', destination, error);
+      }
+    };
+
+    const resourcesBase = process.resourcesPath;
+    seedDirectory(path.join(resourcesBase, 'data'), dataRoot);
+    seedDirectory(path.join(resourcesBase, 'meta'), metaRoot);
+  }
+
+  return {
+    appRoot,
+    externalRoot,
+    dataRoot,
+    metaRoot,
+  };
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -48,14 +103,16 @@ function createWindow() {
 }
 
 // 初始化各个功能模块
-function initializeModules() {
-  const fileTreeModule = new FileTreeModule(dataRoot);
+function initializeModules(appPaths) {
+  const runtimePathsModule = new RuntimePathsModule(appPaths);
+  const fileTreeModule = new FileTreeModule(appPaths.dataRoot);
   const fileViewerModule = new FileViewerModule();
   const settingsBackendModule = new SettingsBackendModule();
-  const fileImportModule = new FileImportModule(dataRoot);
-  const pythonBackendModule = new PythonBackendModule();
-  
+  const fileImportModule = new FileImportModule(appPaths.dataRoot);
+  const pythonBackendModule = new PythonBackendModule(appPaths);
+
   return {
+    runtimePathsModule,
     fileTreeModule,
     fileViewerModule,
     settingsBackendModule,
@@ -68,16 +125,27 @@ function initializeModules() {
 
 // 应用启动和模块初始化
 let modules = null;
+let appPaths = null;
 
 app.whenReady().then(() => {
+  appPaths = resolveAppPaths();
+  process.env.FS_APP_EXTERNAL_ROOT = appPaths.externalRoot;
+  process.env.FS_APP_DATA_DIR = appPaths.dataRoot;
+  process.env.FS_APP_META_DIR = appPaths.metaRoot;
+  process.env.FS_APP_API_HOST = process.env.FS_APP_API_HOST || '127.0.0.1';
+
   // 创建主窗口
   createWindow();
   
   // 初始化所有功能模块
-  modules = initializeModules();
+  modules = initializeModules(appPaths);
   
   // 启动Python后端
-  modules.pythonBackendModule.startPythonBackend();
+  modules.pythonBackendModule
+    .startPythonBackend()
+    .catch((error) => {
+      console.error('Failed to start Python backend:', error);
+    });
 });
 
 // 应用退出时的清理工作 

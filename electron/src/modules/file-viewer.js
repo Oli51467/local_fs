@@ -1,7 +1,51 @@
 // 文件展示模块 - 主进程逻辑
-const { ipcMain } = require('electron');
+const { ipcMain, app } = require('electron');
 const fs = require('fs');
 const path = require('path');
+
+const ELECTRON_ROOT = path.join(__dirname, '..', '..');
+const STATIC_DEV_ROOT = path.join(ELECTRON_ROOT, 'static');
+
+const toFileUrl = (absolutePath) => 'file://' + absolutePath.replace(/\\/g, '/');
+
+const isWindows = process.platform === 'win32';
+
+const ensureWithinBase = (targetPath, basePath) => {
+  const resolvedTarget = path.resolve(targetPath);
+  const resolvedBase = path.resolve(basePath);
+  const lhs = isWindows ? resolvedTarget.toLowerCase() : resolvedTarget;
+  const rhs = isWindows ? resolvedBase.toLowerCase() : resolvedBase;
+  if (!lhs.startsWith(rhs)) {
+    throw new Error(`Invalid resource path requested: ${targetPath}`);
+  }
+};
+
+const sanitizeRelativePath = (relativePath) => {
+  if (typeof relativePath !== 'string') {
+    throw new TypeError('relativePath must be a string');
+  }
+  const normalized = path.normalize(relativePath).replace(/^([/\\])+/g, '');
+  if (!normalized) {
+    throw new Error('relativePath cannot be empty');
+  }
+  return normalized;
+};
+
+const resolveStaticAsset = (...segments) => {
+  const relativePath = sanitizeRelativePath(path.join(...segments));
+  const baseDir = app.isPackaged ? path.join(process.resourcesPath, 'static') : STATIC_DEV_ROOT;
+  const absolutePath = path.resolve(baseDir, relativePath);
+  ensureWithinBase(absolutePath, baseDir);
+  return absolutePath;
+};
+
+const resolveDistAsset = (relativePath) => {
+  const sanitized = sanitizeRelativePath(relativePath);
+  const baseDir = app.isPackaged ? process.resourcesPath : ELECTRON_ROOT;
+  const absolutePath = path.resolve(baseDir, sanitized);
+  ensureWithinBase(absolutePath, baseDir);
+  return absolutePath;
+};
 
 class FileViewerModule {
   constructor() {
@@ -136,10 +180,45 @@ class FileViewerModule {
       return mimeType.startsWith('audio/');
     });
 
+    // PDF.js 资源路径
+    ipcMain.handle('get-pdf-lib-path', () => {
+      const libPath = resolveStaticAsset('libs', 'pdf.js');
+      return toFileUrl(libPath);
+    });
+
     // PDF Worker路径
     ipcMain.handle('get-pdf-worker-path', () => {
-      const workerPath = path.join(__dirname, '..', '..', 'static', 'libs', 'pdf.worker.min.js');
-      return 'file://' + workerPath.replace(/\\/g, '/');
+      const workerPath = resolveStaticAsset('libs', 'pdf.worker.min.js');
+      return toFileUrl(workerPath);
+    });
+
+    ipcMain.handle('get-docx-lib-path', () => {
+      const libPath = resolveStaticAsset('libs', 'docx-preview.js');
+      return toFileUrl(libPath);
+    });
+
+    ipcMain.handle('get-jszip-lib-path', () => {
+      const libPath = resolveStaticAsset('libs', 'jszip.min.js');
+      return toFileUrl(libPath);
+    });
+
+    ipcMain.handle('get-pptx-lib-path', () => {
+      const libPath = resolveStaticAsset('libs', 'pptx-preview.umd.js');
+      return toFileUrl(libPath);
+    });
+
+    ipcMain.handle('get-dist-asset-path', (event, relativePath) => {
+      const assetPath = resolveDistAsset(relativePath);
+      return toFileUrl(assetPath);
+    });
+
+    ipcMain.on('get-dist-asset-path-sync', (event, relativePath) => {
+      try {
+        const assetPath = resolveDistAsset(relativePath);
+        event.returnValue = toFileUrl(assetPath);
+      } catch (error) {
+        event.returnValue = '';
+      }
     });
 
     // PPTX文件读取

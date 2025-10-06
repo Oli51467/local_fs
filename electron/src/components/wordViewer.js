@@ -1,3 +1,38 @@
+const externalScriptCache = new Map();
+
+const loadExternalScript = (url) => {
+  if (!url) {
+    return Promise.reject(new Error('无法加载空白脚本路径'));
+  }
+
+  if (externalScriptCache.get(url) === 'loaded') {
+    return Promise.resolve();
+  }
+
+  const cachedPromise = externalScriptCache.get(url);
+  if (cachedPromise) {
+    return cachedPromise;
+  }
+
+  const promise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = url;
+    script.async = false;
+    script.onload = () => {
+      externalScriptCache.set(url, 'loaded');
+      resolve();
+    };
+    script.onerror = () => {
+      externalScriptCache.delete(url);
+      reject(new Error(`无法加载脚本: ${url}`));
+    };
+    document.head.appendChild(script);
+  });
+
+  externalScriptCache.set(url, promise);
+  return promise;
+};
+
 /**
  * WordViewer - 独立的Word文件查看器模块
  * 从FileViewer中解耦出来，专门处理Word文件的查看和编辑功能
@@ -7,6 +42,44 @@ class WordViewer {
     this.tabStates = new Map();
     this.autoSaveTimers = new Map();
     this.addStyles();
+  }
+
+  async ensureDocxDependencies() {
+    const tasks = [];
+
+    if (!window.JSZip || typeof window.JSZip.loadAsync !== 'function') {
+      let jszipUrl = './static/libs/jszip.min.js';
+      if (window.fsAPI && typeof window.fsAPI.getJsZipLibPath === 'function') {
+        try {
+          const resolved = await window.fsAPI.getJsZipLibPath();
+          if (resolved) {
+            jszipUrl = resolved;
+          }
+        } catch (error) {
+          console.warn('获取JSZip路径失败，使用默认路径:', error);
+        }
+      }
+      tasks.push(loadExternalScript(jszipUrl));
+    }
+
+    if (!window.docx || typeof window.docx.renderAsync !== 'function') {
+      let docxUrl = './static/libs/docx-preview.js';
+      if (window.fsAPI && typeof window.fsAPI.getDocxLibPath === 'function') {
+        try {
+          const resolved = await window.fsAPI.getDocxLibPath();
+          if (resolved) {
+            docxUrl = resolved;
+          }
+        } catch (error) {
+          console.warn('获取docx-preview路径失败，使用默认路径:', error);
+        }
+      }
+      tasks.push(loadExternalScript(docxUrl));
+    }
+
+    if (tasks.length > 0) {
+      await Promise.all(tasks);
+    }
   }
 
   /**
@@ -179,7 +252,10 @@ class WordViewer {
     try {
       // 读取文件为ArrayBuffer
       const fileBuffer = await window.fsAPI.readFileBuffer(filePath);
-      
+
+      // 确保依赖库已加载
+      await this.ensureDocxDependencies();
+
       // 检查文件是否为空或无效
       if (!fileBuffer || fileBuffer.byteLength === 0) {
         return {

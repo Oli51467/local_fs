@@ -21,6 +21,21 @@ class FileTreeModule {
     return `data/${normalized}`;
   }
 
+  // 将绝对路径转换为数据库使用的 data/... 相对路径
+  getDatabaseRelativePath(targetPath) {
+    const relative = path.relative(this.dataRoot, targetPath);
+    if (!relative) {
+      return 'data';
+    }
+
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      return null;
+    }
+
+    const normalized = relative.split(path.sep).join('/');
+    return normalized ? `data/${normalized}` : 'data';
+  }
+
   // 获取文件类型的排序优先级
   getFileTypePriority(fileName) {
     const ext = path.extname(fileName).toLowerCase();
@@ -147,39 +162,38 @@ class FileTreeModule {
     ipcMain.handle('delete-item', async (event, itemPath) => {
       try {
         // 获取项目根目录路径
-        const projectRoot = path.join(__dirname, '../..');
-        const relativePath = path.relative(projectRoot, itemPath).replace(/\\/g, '/');
-        
-        // 确保路径格式正确（移除开头的../）
-        const cleanRelativePath = relativePath.startsWith('../') ? relativePath.substring(3) : relativePath;
+        const cleanRelativePath = this.getDatabaseRelativePath(itemPath);
         
         // 检查是否为文件夹
         const stats = fs.statSync(itemPath);
         const isFolder = stats.isDirectory();
         
         // 1. 首先调用后端API删除数据库中的数据
-        try {
-          const axios = require('axios');
-          const response = await axios.delete('http://127.0.0.1:8000/api/document/delete', {
-            data: {
-              file_path: cleanRelativePath,
-              is_folder: isFolder
-            },
-            timeout: 5000, // 5秒超时
-            headers: {
-              'Content-Type': 'application/json'
+        if (cleanRelativePath) {
+          try {
+            const response = await axios.delete('http://127.0.0.1:8000/api/document/delete', {
+              data: {
+                file_path: cleanRelativePath,
+                is_folder: isFolder
+              },
+              timeout: 5000, // 5秒超时
+              headers: {
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            if (response.data.status === 'success') {
+              console.log('数据库删除成功:', response.data);
+            } else {
+              console.warn('数据库删除警告:', response.data.message);
             }
-          });
-          
-          if (response.data.status === 'success') {
-            console.log('数据库删除成功:', response.data);
-          } else {
-            console.warn('数据库删除警告:', response.data.message);
+          } catch (dbError) {
+            console.error('数据库删除失败:', dbError.message);
+            // 数据库删除失败，可以选择是否继续文件删除操作
+            // 这里选择继续文件删除，但记录错误日志
           }
-        } catch (dbError) {
-          console.error('数据库删除失败:', dbError.message);
-          // 数据库删除失败，可以选择是否继续文件删除操作
-          // 这里选择继续文件删除，但记录错误日志
+        } else {
+          console.warn('删除操作未同步数据库：目标路径不在数据目录内', itemPath);
         }
         
         // 2. 删除文件系统上的文件或文件夹
@@ -220,13 +234,8 @@ class FileTreeModule {
         fs.renameSync(itemPath, newPath);
         
         // 获取项目根目录路径
-        const projectRoot = path.join(__dirname, '../..');
-        const relativeOldPath = path.relative(projectRoot, itemPath).replace(/\\/g, '/');
-        const relativeNewPath = path.relative(projectRoot, newPath).replace(/\\/g, '/');
-        
-        // 确保路径格式正确（移除开头的../）
-        const cleanRelativeOldPath = relativeOldPath.startsWith('../') ? relativeOldPath.substring(3) : relativeOldPath;
-        const cleanRelativeNewPath = relativeNewPath.startsWith('../') ? relativeNewPath.substring(3) : relativeNewPath;
+        const cleanRelativeOldPath = this.getDatabaseRelativePath(itemPath);
+        const cleanRelativeNewPath = this.getDatabaseRelativePath(newPath);
         
         // 检查是否为文件夹
         const isFolder = fs.statSync(newPath).isDirectory();
@@ -235,30 +244,35 @@ class FileTreeModule {
         let dbUpdateSuccess = true;
         let dbUpdateMessage = '';
         
-        try {
-          const response = await axios.post('http://127.0.0.1:8000/api/document/update-path', {
-            old_path: cleanRelativeOldPath,
-            new_path: cleanRelativeNewPath,
-            is_folder: isFolder
-          }, {
-            timeout: 5000, // 5秒超时
-            headers: {
-              'Content-Type': 'application/json'
+        if (cleanRelativeOldPath && cleanRelativeNewPath) {
+          try {
+            const response = await axios.post('http://127.0.0.1:8000/api/document/update-path', {
+              old_path: cleanRelativeOldPath,
+              new_path: cleanRelativeNewPath,
+              is_folder: isFolder
+            }, {
+              timeout: 5000, // 5秒超时
+              headers: {
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            console.log('数据库路径更新成功:', response.data);
+            
+            // 检查后端响应状态
+            if (response.data && response.data.status === 'error') {
+              dbUpdateSuccess = false;
+              dbUpdateMessage = response.data.message || '数据库路径更新失败';
             }
-          });
-          
-          console.log('数据库路径更新成功:', response.data);
-          
-          // 检查后端响应状态
-          if (response.data && response.data.status === 'error') {
+            
+          } catch (dbError) {
+            console.error('更新数据库路径失败:', dbError.message);
             dbUpdateSuccess = false;
-            dbUpdateMessage = response.data.message || '数据库路径更新失败';
+            dbUpdateMessage = dbError.message;
           }
-          
-        } catch (dbError) {
-          console.error('更新数据库路径失败:', dbError.message);
+        } else {
           dbUpdateSuccess = false;
-          dbUpdateMessage = dbError.message;
+          dbUpdateMessage = '无法计算数据库相对路径';
         }
         
         return { 
@@ -314,13 +328,8 @@ class FileTreeModule {
         fs.renameSync(sourcePath, newPath);
         
         // 获取项目根目录路径
-        const projectRoot = path.join(__dirname, '../..');
-        const relativeOldPath = path.relative(projectRoot, sourcePath).replace(/\\/g, '/');
-        const relativeNewPath = path.relative(projectRoot, newPath).replace(/\\/g, '/');
-        
-        // 确保路径格式正确（移除开头的../）
-        const cleanRelativeOldPath = relativeOldPath.startsWith('../') ? relativeOldPath.substring(3) : relativeOldPath;
-        const cleanRelativeNewPath = relativeNewPath.startsWith('../') ? relativeNewPath.substring(3) : relativeNewPath;
+        const cleanRelativeOldPath = this.getDatabaseRelativePath(sourcePath);
+        const cleanRelativeNewPath = this.getDatabaseRelativePath(newPath);
         
         // 检查是否为文件夹
         const isFolder = fs.statSync(newPath).isDirectory();
@@ -329,31 +338,35 @@ class FileTreeModule {
         let dbUpdateSuccess = true;
         let dbUpdateMessage = '';
         
-        try {
-          const axios = require('axios');
-          const response = await axios.post('http://127.0.0.1:8000/api/document/update-path', {
-            old_path: cleanRelativeOldPath,
-            new_path: cleanRelativeNewPath,
-            is_folder: isFolder
-          }, {
-            timeout: 5000, // 5秒超时
-            headers: {
-              'Content-Type': 'application/json'
+        if (cleanRelativeOldPath && cleanRelativeNewPath) {
+          try {
+            const response = await axios.post('http://127.0.0.1:8000/api/document/update-path', {
+              old_path: cleanRelativeOldPath,
+              new_path: cleanRelativeNewPath,
+              is_folder: isFolder
+            }, {
+              timeout: 5000, // 5秒超时
+              headers: {
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            console.log('数据库路径更新成功:', response.data);
+            
+            // 检查后端响应状态
+            if (response.data && response.data.status === 'error') {
+              dbUpdateSuccess = false;
+              dbUpdateMessage = response.data.message || '数据库路径更新失败';
             }
-          });
-          
-          console.log('数据库路径更新成功:', response.data);
-          
-          // 检查后端响应状态
-          if (response.data && response.data.status === 'error') {
+            
+          } catch (dbError) {
+            console.error('更新数据库路径失败:', dbError.message);
             dbUpdateSuccess = false;
-            dbUpdateMessage = response.data.message || '数据库路径更新失败';
+            dbUpdateMessage = dbError.message;
           }
-          
-        } catch (dbError) {
-          console.error('更新数据库路径失败:', dbError.message);
+        } else {
           dbUpdateSuccess = false;
-          dbUpdateMessage = dbError.message;
+          dbUpdateMessage = '无法计算数据库相对路径';
         }
         
         return { 

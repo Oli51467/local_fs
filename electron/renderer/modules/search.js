@@ -175,23 +175,22 @@
     return `图片结果 ${index + 1}`;
   }
 
-  function resolveToFileUrl(rawPath) {
-    if (!rawPath) {
+  function toFileUrl(candidate) {
+    if (!candidate) {
       return null;
     }
 
-    let normalized = String(rawPath).trim();
-    if (!normalized) {
+    const raw = String(candidate).trim();
+    if (!raw) {
       return null;
     }
 
-    if (normalized.startsWith('file://')) {
-      return normalized;
+    if (raw.startsWith('file://')) {
+      return raw;
     }
 
-    normalized = normalized.replace(/\\/g, '/');
-
-    if (/^[a-zA-Z]:\//.test(normalized)) {
+    const normalized = raw.replace(/\\/g, '/');
+    if (/^[a-zA-Z]:[\\/]/.test(raw) || /^[a-zA-Z]:[\\/]/.test(normalized)) {
       return `file:///${normalized}`;
     }
 
@@ -199,16 +198,61 @@
       return `file://${normalized}`;
     }
 
-    if (normalized.startsWith('./')) {
-      normalized = normalized.slice(2);
+    return null;
+  }
+
+  function resolveToFileUrl(rawPath) {
+    if (!rawPath) {
+      return null;
+    }
+
+    const trimmed = String(rawPath).trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    if (trimmed.startsWith('file://')) {
+      return trimmed;
+    }
+
+    if (typeof window.fsAPI?.resolveProjectPathSync === 'function') {
+      try {
+        const absolute = window.fsAPI.resolveProjectPathSync(trimmed);
+        const asFileUrl = toFileUrl(absolute);
+        if (asFileUrl) {
+          return asFileUrl;
+        }
+      } catch (error) {
+        console.warn('解析项目路径失败:', trimmed, error);
+      }
+    }
+
+    const directUrl = toFileUrl(trimmed);
+    if (directUrl) {
+      return directUrl;
+    }
+
+    try {
+      const runtimePaths = typeof window.fsAPI?.getRuntimePathsSync === 'function'
+        ? window.fsAPI.getRuntimePathsSync()
+        : null;
+      if (runtimePaths?.externalRoot) {
+        const joined = `${runtimePaths.externalRoot.replace(/\\/g, '/')}/${trimmed.replace(/^\/+/, '')}`;
+        const fallbackUrl = toFileUrl(joined);
+        if (fallbackUrl) {
+          return fallbackUrl;
+        }
+      }
+    } catch (error) {
+      console.warn('无法解析运行时路径:', error);
     }
 
     try {
       const base = window?.location?.href || 'file://';
-      const url = new URL(normalized, base);
+      const url = new URL(trimmed.replace(/^\.\//, ''), base);
       return url.href;
     } catch (error) {
-      console.warn('无法解析文件路径:', normalized, error);
+      console.warn('无法解析文件路径:', trimmed, error);
       return null;
     }
   }

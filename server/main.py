@@ -124,4 +124,7 @@ async def health_ready():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    port = int(os.environ.get("FS_APP_API_PORT", ServerConfig.PORT))
+    host = os.environ.get("FS_APP_API_HOST", ServerConfig.HOST)
+    uvicorn.run(app, host=host, port=port)

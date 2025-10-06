@@ -1,47 +1,265 @@
-# package.py
+#!/usr/bin/env python3
+"""Build helper for packaging the Electron + Python desktop application."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+ROOT = Path(__file__).resolve().parent
+SERVER_DIR = ROOT / "server"
+ELECTRON_DIR = ROOT / "electron"
+BUILD_DIR = ROOT / "build"
+PYINSTALLER_BUILD_DIR = BUILD_DIR / "pyinstaller-build"
+PYINSTALLER_DIST_DIR = BUILD_DIR / "pyinstaller-dist"
+HOOKS_DIR = BUILD_DIR / "pyinstaller-hooks"
+
+# Directories that must be copied alongside the Electron bundle so that runtime
+# path lookups continue to work after packaging.
+EXTRA_RESOURCE_MAPPINGS: List[Tuple[str, str]] = [
+    ("python_backend", "python_backend"),
+    (str((ROOT / "meta").resolve()), "meta"),
+    (str((ROOT / "data").resolve()), "data"),
+    ("static", "static"),
+    ("dist/assets", "dist/assets"),
+]
+
+# Python packages that require bundled data files or hidden imports when the
+# backend is frozen via PyInstaller.
+PYINSTALLER_PACKAGE_TARGETS: List[str] = [
+    "doclayout_yolo",
+    "magic_pdf",
+    "FlagEmbedding",
+    "sentence_transformers",
+    "bm25s",
+    "huggingface_hub",
+    "fast_langdetect",
+    "transformers.models.metaclip",
+    "transformers.models.metaclip_2",
+]
+
+
+class PackagingError(RuntimeError):
+    """Raised when a required build step fails."""
+
+
+def run_command(command: Sequence[str], *, cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> None:
+    """Execute a command and surface failures immediately."""
+
+    working_dir = str(cwd) if cwd else os.getcwd()
+    command_display = " ".join(command)
+    print(f"\n>> {command_display}\n   cwd: {working_dir}")
+
+    environment = os.environ.copy()
+    if env:
+        environment.update(env)
+
+    try:
+        subprocess.run(command, cwd=cwd, env=environment, check=True)
+    except subprocess.CalledProcessError as exc:  # pragma: no cover - interactive script
+        raise PackagingError(f"command failed with exit code {exc.returncode}: {command_display}") from exc
+
+
+def validate_project_structure() -> None:
+    """Ensure that the expected project directories are present."""
+
+    missing: List[str] = []
+    for path in (SERVER_DIR, ELECTRON_DIR):
+        if not path.exists():
+            missing.append(str(path))
+
+    if missing:
+        joined = ", ".join(missing)
+        raise PackagingError(f"missing required project directories: {joined}")
+
+
+def install_python_dependencies(skip: bool) -> None:
+    """Install backend dependencies so PyInstaller can import everything."""
+
+    if skip:
+        print("Skipping python dependency installation at user request.")
+        return
+
+    requirements_path = SERVER_DIR / "requirements.txt"
+    if not requirements_path.exists():
+        raise PackagingError(f"Python requirements file not found: {requirements_path}")
+
+    run_command([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+    run_command([sys.executable, "-m", "pip", "install", "-r", str(requirements_path)])
+
+    # Ensure the build tooling and specialised dependencies are available.
+    build_extras = ["pyinstaller", "pyinstaller-hooks-contrib", "timm"]
+    run_command([sys.executable, "-m", "pip", "install", *build_extras])
+
+    # doclayout-yolo is distributed with a hyphen in the package name.
+    try:
+        run_command([sys.executable, "-m", "pip", "install", "doclayout-yolo"])
+    except PackagingError:
+        print("warning: failed to install doclayout-yolo automatically; ensure it is available in the current environment.")
+
+
+def create_runtime_hook() -> Path:
+    """Generate a PyInstaller runtime hook to align resource paths at runtime."""
+
+    HOOKS_DIR.mkdir(parents=True, exist_ok=True)
+    hook_path = HOOKS_DIR / "set_project_root.py"
+
+    hook_contents = f"""from __future__ import annotations
+
 import os
 import sys
-import platform
-import subprocess
-import shutil
+from pathlib import Path
 
-def run_command(command):
-    print(f"执行命令: {command}")
-    process = subprocess.Popen(command, shell=True)
-    process.wait()
-    if process.returncode != 0:
-        print(f"命令执行失败: {command}")
-        sys.exit(1)
 
-def run_command_with_env(command, env_vars):
-    print(f"执行命令: {command}")
-    process = subprocess.Popen(command, shell=True, env=env_vars)
-    process.wait()
-    if process.returncode != 0:
-        print(f"命令执行失败: {command}")
-        sys.exit(1)
+def _configure() -> None:
+    # Resolve the app's resource directory inside the frozen bundle.
+    executable_path = Path(sys.executable).resolve()
+    bundle_root = executable_path.parent
+    # The Electron bundle expects shared resources at the directory that holds
+    # python_backend, meta, and data.
+    resources_root = bundle_root.parent
+    os.environ.setdefault("FS_APP_RESOURCES_ROOT", str(resources_root))
 
-def package_python_backend():
-    print("\n=== 打包Python后端 ===\n")
-    
-    # 确保PyInstaller已安装
-    run_command("pip install pyinstaller")
-    
-    # 创建spec文件
-    spec_content = '''
-# -*- mode: python ; coding: utf-8 -*-
+    def _path_from_env(name: str, fallback: Path) -> Path:
+        value = os.environ.get(name)
+        if not value:
+            return fallback
+        candidate = Path(value).expanduser()
+        try:
+            return candidate.resolve()
+        except Exception:
+            return fallback
+
+    external_root = _path_from_env("FS_APP_EXTERNAL_ROOT", resources_root)
+    data_root = _path_from_env("FS_APP_DATA_DIR", external_root / "data")
+    meta_root = _path_from_env("FS_APP_META_DIR", external_root / "meta")
+
+    os.environ.setdefault("FS_APP_EXTERNAL_ROOT", str(external_root))
+    os.environ.setdefault("FS_APP_DATA_DIR", str(data_root))
+    os.environ.setdefault("FS_APP_META_DIR", str(meta_root))
+
+    for target in (external_root, data_root, meta_root):
+        target.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from config import config as config_module
+    except Exception:  # pragma: no cover - defensive during packaging
+        return
+
+    # Rebase server configuration paths so they reference the shared resources
+    # directory rather than the PyInstaller temporary extraction directory.
+    config_module.ServerConfig.PROJECT_ROOT = external_root
+    config_module.ServerConfig.BGE_M3_MODEL_PATH = meta_root / "embedding" / "bge-m3"
+    config_module.ServerConfig.BGE_RERANKER_MODEL_PATH = meta_root / "reranker" / "bge-reranker-v3-m3"
+
+    config_module.DatabaseConfig.PROJECT_ROOT = external_root
+    config_module.DatabaseConfig.DATABASE_DIR = data_root
+    config_module.DatabaseConfig.SQLITE_DIR = meta_root / "sqlite"
+    config_module.DatabaseConfig.VECTOR_DIR = meta_root / "vector"
+    config_module.DatabaseConfig.IMAGES_DIR = meta_root / "images"
+    config_module.DatabaseConfig.SQLITE_DB_PATH = config_module.DatabaseConfig.SQLITE_DIR / "documents.db"
+    config_module.DatabaseConfig.VECTOR_INDEX_PATH = config_module.DatabaseConfig.VECTOR_DIR / "vector_index.faiss"
+    config_module.DatabaseConfig.VECTOR_METADATA_PATH = config_module.DatabaseConfig.VECTOR_DIR / "vector_metadata.json"
+    config_module.DatabaseConfig.IMAGE_VECTOR_INDEX_PATH = config_module.DatabaseConfig.VECTOR_DIR / "image_vector_index.faiss"
+    config_module.DatabaseConfig.IMAGE_VECTOR_METADATA_PATH = config_module.DatabaseConfig.VECTOR_DIR / "image_vector_metadata.json"
+    config_module.DatabaseConfig.ensure_directories()
+
+    try:
+        from config import mineru_config as mineru_module
+    except Exception:
+        return
+
+    mineru_module.PROJECT_ROOT = external_root
+    mineru_module.META_ROOT = meta_root / "pdf-extract-kit"
+    mineru_module.META_ROOT.mkdir(parents=True, exist_ok=True)
+    mineru_module.MODELS_DIR = mineru_module.META_ROOT / "models"
+    mineru_module.LAYOUTREADER_DIR = mineru_module.MODELS_DIR / "ReadingOrder" / "layout_reader"
+    if hasattr(mineru_module, "MINERU_CONFIG"):
+        mineru_module.MINERU_CONFIG["models-dir"] = str(mineru_module.MODELS_DIR)
+        mineru_module.MINERU_CONFIG["layoutreader-model-dir"] = str(mineru_module.LAYOUTREADER_DIR)
+
+
+_configure()
+"""
+
+    hook_path.write_text(hook_contents, encoding="utf-8")
+    return hook_path
+
+
+def create_spec_file(runtime_hook: Path) -> Path:
+    """Create a PyInstaller spec tailored to the backend requirements."""
+
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    spec_path = BUILD_DIR / "python_backend.spec"
+
+    packages_literal = ", ".join(f"'{pkg}'" for pkg in PYINSTALLER_PACKAGE_TARGETS)
+    hiddenimports_literal = "\n    ".join([
+        "'uvicorn.logging',",
+        "'uvicorn.protocols.http',",
+        "'uvicorn.protocols.http.auto',",
+        "'uvicorn.protocols.websockets',",
+        "'uvicorn.protocols.websockets.auto',",
+        "'uvicorn.lifespan',",
+        "'uvicorn.lifespan.on',",
+        "'uvicorn.lifespan.off',",
+        "'transformers.models.metaclip',",
+        "'transformers.models.metaclip_2',",
+    ])
+
+    spec_contents = f"""# -*- mode: python ; coding: utf-8 -*-
+
+import sys
+from pathlib import Path
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
+project_root = Path(r"{ROOT}")
+server_dir = project_root / "server"
+
+hiddenimports = [
+    {hiddenimports_literal}
+]
+
+datas = []
+
+
+def _extend_hiddenimports(package: str) -> None:
+    try:
+        hiddenimports.extend(collect_submodules(package))
+    except Exception as error:  # pragma: no cover - packaging-time guard
+        print(f"[package.py] warning: failed to collect submodules for {{package}}: {{error}}", file=sys.stderr)
+
+
+def _extend_datas(package: str) -> None:
+    try:
+        datas.extend(collect_data_files(package))
+    except Exception as error:  # pragma: no cover - packaging-time guard
+        print(f"[package.py] warning: failed to collect data files for {{package}}: {{error}}", file=sys.stderr)
+
+
+for package_name in ({packages_literal}):
+    _extend_hiddenimports(package_name)
+    _extend_datas(package_name)
+
+hiddenimports = sorted(set(hiddenimports))
+
+
 a = Analysis(
-    ['server/main.py'],
-    pathex=[],
+    [str(server_dir / 'main.py')],
+    pathex=[str(server_dir)],
     binaries=[],
-    datas=[],
-    hiddenimports=['uvicorn.logging', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on', 'uvicorn.lifespan.off'],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
+    hooksconfig={{}},
+    runtime_hooks=[r"{runtime_hook.resolve()}"],
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -60,7 +278,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -75,298 +293,181 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='python_backend',
 )
-'''
-    
-    with open('python_backend.spec', 'w') as f:
-        f.write(spec_content)
-    
-    # 运行PyInstaller
-    run_command("pyinstaller python_backend.spec")
-    
-    # 移动打包后的Python后端到electron目录
-    if os.path.exists('electron/python_backend'):
-        shutil.rmtree('electron/python_backend')
-    shutil.move('dist/python_backend', 'electron/python_backend')
-    
-    # 清理临时文件
-    if os.path.exists('build'):
-        shutil.rmtree('build')
-    if os.path.exists('dist'):
-        shutil.rmtree('dist')
-    os.remove('python_backend.spec')
+"""
 
-def update_electron_files():
-    print("\n=== 更新Electron文件以支持打包 ===\n")
-    
-    # 更新main.js以启动打包后的Python后端
-    main_js_path = 'electron/main.js'
-    with open(main_js_path, 'r') as f:
-        main_js_content = f.read()
-    
-    # 添加启动Python后端的代码
-    python_start_code = '''
-// 启动Python后端
-let pythonProcess = null;
+    spec_path.write_text(spec_contents, encoding="utf-8")
+    return spec_path
 
-function startPythonBackend() {
-  const isProduction = process.env.NODE_ENV === 'production';
-  let pythonExecutablePath;
-  
-  if (isProduction) {
-    // 在打包后的应用中，Python后端已经被打包
-    if (process.platform === 'win32') {
-      pythonExecutablePath = path.join(process.resourcesPath, 'python_backend', 'python_backend.exe');
-    } else if (process.platform === 'darwin') {
-      pythonExecutablePath = path.join(process.resourcesPath, 'python_backend', 'python_backend');
-    } else {
-      pythonExecutablePath = path.join(process.resourcesPath, 'python_backend', 'python_backend');
+
+def build_python_backend(spec_path: Path, *, keep_artifacts: bool) -> None:
+    """Freeze the FastAPI backend with PyInstaller."""
+
+    if not spec_path.exists():
+        raise PackagingError(f"PyInstaller spec file not found: {spec_path}")
+
+    shutil.rmtree(PYINSTALLER_BUILD_DIR, ignore_errors=True)
+    shutil.rmtree(PYINSTALLER_DIST_DIR, ignore_errors=True)
+
+    command = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--workpath",
+        str(PYINSTALLER_BUILD_DIR),
+        "--distpath",
+        str(PYINSTALLER_DIST_DIR),
+        str(spec_path),
+    ]
+    run_command(command)
+
+    dist_backend = PYINSTALLER_DIST_DIR / "python_backend"
+    if not dist_backend.exists():
+        raise PackagingError("PyInstaller build did not create the expected python_backend directory")
+
+    target_backend = ELECTRON_DIR / "python_backend"
+    shutil.rmtree(target_backend, ignore_errors=True)
+    shutil.copytree(dist_backend, target_backend)
+
+    if not keep_artifacts:
+        shutil.rmtree(PYINSTALLER_BUILD_DIR, ignore_errors=True)
+        shutil.rmtree(PYINSTALLER_DIST_DIR, ignore_errors=True)
+
+
+def ensure_runtime_directories() -> None:
+    """Guarantee that required resource directories exist before packaging."""
+
+    for relative in ("meta", "data"):
+        destination = ROOT / relative
+        if not destination.exists():
+            destination.mkdir(parents=True, exist_ok=True)
+
+    static_dir = ELECTRON_DIR / "static"
+    if not static_dir.exists():
+        raise PackagingError(f"Electron static directory is missing: {static_dir}")
+
+    assets_dir = ELECTRON_DIR / "dist" / "assets"
+    if not assets_dir.exists():
+        raise PackagingError(f"Electron assets directory is missing: {assets_dir}")
+
+
+def update_electron_builder_config() -> None:
+    """Patch electron/package.json so extra resources are bundled correctly."""
+
+    package_json_path = ELECTRON_DIR / "package.json"
+    if not package_json_path.exists():
+        raise PackagingError(f"Electron package.json not found: {package_json_path}")
+
+    package_data = json.loads(package_json_path.read_text(encoding="utf-8"))
+    build_config = package_data.setdefault("build", {})
+
+    extra_resources = build_config.get("extraResources", [])
+    if not isinstance(extra_resources, list):
+        extra_resources = []
+
+    def _ensure_mapping(src: str, dest: str) -> None:
+        for item in extra_resources:
+            if isinstance(item, dict) and item.get("to") == dest:
+                item["from"] = src
+                item.setdefault("filter", ["**/*"])
+                return
+        extra_resources.append({"from": src, "to": dest, "filter": ["**/*"]})
+
+    for mapping in EXTRA_RESOURCE_MAPPINGS:
+        _ensure_mapping(*mapping)
+
+    build_config["extraResources"] = extra_resources
+
+    asar_unpack = build_config.get("asarUnpack", [])
+    if isinstance(asar_unpack, str):
+        asar_unpack = [asar_unpack]
+    elif not isinstance(asar_unpack, list):
+        asar_unpack = []
+
+    required_patterns = {
+        "python_backend/**",
+        "meta/**",
+        "data/**",
+        "static/**",
+        "dist/assets/**",
     }
-  } else {
-    // 在开发环境中，直接运行Python脚本
-    const pythonPath = process.platform === 'win32' ? 'python' : 'python3';
-    pythonExecutablePath = pythonPath;
-    
-    // 使用子进程运行Python脚本
-    pythonProcess = require('child_process').spawn(pythonExecutablePath, [path.join(__dirname, '..', 'server', 'main.py')]);
-    
-    pythonProcess.stdout.on('data', (data) => {
-      console.log(`Python stdout: ${data}`);
-    });
-    
-    pythonProcess.stderr.on('data', (data) => {
-      console.error(`Python stderr: ${data}`);
-    });
-    
-    pythonProcess.on('close', (code) => {
-      console.log(`Python process exited with code ${code}`);
-    });
-    
-    return;
-  }
-  
-  // 在生产环境中运行打包后的Python可执行文件
-  pythonProcess = require('child_process').execFile(pythonExecutablePath);
-  
-  pythonProcess.stdout.on('data', (data) => {
-    console.log(`Python stdout: ${data}`);
-  });
-  
-  pythonProcess.stderr.on('data', (data) => {
-    console.error(`Python stderr: ${data}`);
-  });
-  
-  pythonProcess.on('close', (code) => {
-    console.log(`Python process exited with code ${code}`);
-  });
-}
+    asar_unpack_set = set(asar_unpack)
+    asar_unpack_set.update(required_patterns)
+    build_config["asarUnpack"] = sorted(asar_unpack_set)
 
-// 在应用启动时启动Python后端
-app.whenReady().then(() => {
-  createWindow();
-  startPythonBackend();
-});
+    package_json_path.write_text(json.dumps(package_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-// 在应用退出时关闭Python后端
-app.on('will-quit', () => {
-  if (pythonProcess) {
-    process.platform === 'win32' ? require('child_process').exec(`taskkill /pid ${pythonProcess.pid} /f /t`) : pythonProcess.kill();
-  }
-});
-'''
-    
-    # 替换原来的app.whenReady()部分
-    updated_main_js = main_js_content.replace(
-        "app.whenReady().then(createWindow);",
-        python_start_code
-    )
-    
-    with open(main_js_path, 'w') as f:
-        f.write(updated_main_js)
-    
-    # 更新renderer.js以连接Python后端API
-    renderer_js_path = 'electron/renderer.js'
-    with open(renderer_js_path, 'r') as f:
-        renderer_js_content = f.read()
-    
-    # 添加连接Python后端的代码
-    python_api_code = '''
-// 连接Python后端API
-async function testPythonBackend() {
-  try {
-    const response = await fetch('http://127.0.0.1:8000/health');
-    const data = await response.json();
-    console.log('Python后端健康检查:', data);
-    return data;
-  } catch (error) {
-    console.error('无法连接到Python后端:', error);
-    return null;
-  }
-}
 
-// 在初始化时测试Python后端连接
-(async () => {
-  // 等待Python后端启动
-  setTimeout(async () => {
-    await testPythonBackend();
-  }, 2000);
-  
-  // 渲染图标
-  renderIcons();
-  
-  // 初始化拖拽调整功能
-  initResizer();
-  
-  // 获取文件树
-  const tree = await window.fsAPI.getFileTree();
-  fileTreeEl.innerHTML = '';
-  renderTree(tree, fileTreeEl);
-  
-  // 默认显示文件页面
-  showFilePage();
-})();
-'''
-    
-    # 替换原来的初始化部分
-    updated_renderer_js = renderer_js_content.replace(
-        "// 初始化\n(async () => {\n  // 渲染图标\n  renderIcons();\n  \n  // 初始化拖拽调整功能\n  initResizer();\n  \n  // 获取文件树\n  const tree = await window.fsAPI.getFileTree();\n  fileTreeEl.innerHTML = '';\n  renderTree(tree, fileTreeEl);\n  \n  // 默认显示文件页面\n  showFilePage();\n})();",
-        python_api_code
-    )
-    
-    with open(renderer_js_path, 'w') as f:
-        f.write(updated_renderer_js)
+def ensure_node_dependencies(skip: bool) -> None:
+    """Install npm dependencies if needed."""
 
-def create_electron_builder_config():
-    print("\n=== 创建Electron Builder配置 ===\n")
-    
-    # 创建package.json文件
-    package_json_path = 'electron/package.json'
-    with open(package_json_path, 'r') as f:
-        package_json = f.read()
-    
-    # 更新package.json以支持electron-builder
-    updated_package_json = '''
-{
-  "name": "electron-python-app",
-  "version": "0.1.0",
-  "description": "Electron + Python (FastAPI) desktop app demo",
-  "main": "main.js",
-  "scripts": {
-    "start": "electronmon .",
-    "dev": "npm run start",
-    "build": "electron-builder build",
-    "build:mac": "electron-builder build --mac",
-    "build:win": "electron-builder build --win",
-    "build:linux": "electron-builder build --linux"
-  },
-  "build": {
-    "appId": "com.electron.python.app",
-    "productName": "Electron Python App",
-    "files": [
-      "**/*",
-      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
-      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
-      "!**/node_modules/*.d.ts",
-      "!**/node_modules/.bin",
-      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
-      "!.editorconfig",
-      "!**/._*",
-      "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
-      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
-      "!**/{appveyor.yml,.travis.yml,circle.yml}",
-      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
-    ],
-    "extraResources": [
-      {
-        "from": "python_backend",
-        "to": "python_backend",
-        "filter": ["**/*"]
-      },
-      {
-        "from": "static",
-        "to": "static",
-        "filter": ["**/*"]
-      }
-    ],
-    "mac": {
-      "category": "public.app-category.utilities",
-      "target": ["dmg"]
-    },
-    "win": {
-      "target": ["nsis"]
-    },
-    "linux": {
-      "target": ["AppImage", "deb"],
-      "category": "Utility"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+    if skip:
+        print("Skipping npm install at user request.")
+        return
+
+    if (ELECTRON_DIR / "node_modules").exists():
+        print("node_modules already present; skipping npm install.")
+        return
+
+    run_command(["npm", "install"], cwd=ELECTRON_DIR)
+
+
+def build_electron_bundle(target: str, skip: bool) -> None:
+    """Invoke electron-builder to create the platform bundle."""
+
+    if skip:
+        print("Skipping electron-builder step at user request.")
+        return
+
+    target_script = f"build:{target}"
+    env_overrides = {
+        "NODE_ENV": "production",
+        "ELECTRON_MIRROR": "https://npmmirror.com/mirrors/electron/",
+        "ELECTRON_BUILDER_BINARIES_MIRROR": "https://npmmirror.com/mirrors/electron-builder-binaries/",
     }
-  },
-  "devDependencies": {
-    "electron": "^26.0.0",
-    "electron-builder": "^24.6.4",
-    "electronmon": "^2.0.2"
-  },
-  "dependencies": {
-    "axios": "^1.6.0"
-  }
-}
-'''
-    
-    with open(package_json_path, 'w') as f:
-        f.write(updated_package_json)
+    run_command(["npm", "run", target_script], cwd=ELECTRON_DIR, env=env_overrides)
 
-def package_electron_app():
-    print("\n=== 打包Electron应用 ===\n")
-    
-    # 安装electron-builder
-    os.chdir('electron')
-    run_command("npm install --save-dev electron-builder")
-    
-    # 设置环境变量以使用国内镜像
-    env_vars = os.environ.copy()
-    env_vars['ELECTRON_MIRROR'] = 'https://npmmirror.com/mirrors/electron/'
-    env_vars['ELECTRON_BUILDER_BINARIES_MIRROR'] = 'https://npmmirror.com/mirrors/electron-builder-binaries/'
-    
-    # 根据平台打包
-    system = platform.system().lower()
-    if system == 'darwin':
-        run_command_with_env("npm run build:mac", env_vars)
-    elif system == 'windows':
-        run_command_with_env("npm run build:win", env_vars)
-    elif system == 'linux':
-        run_command_with_env("npm run build:linux", env_vars)
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    """Configure command-line arguments for the packager."""
+
+    parser = argparse.ArgumentParser(description="Package the Electron + Python application into a distributable bundle.")
+    parser.add_argument("--target", choices=("mac", "win", "linux"), default="mac", help="electron-builder target to execute")
+    parser.add_argument("--skip-pip", action="store_true", help="skip installing Python dependencies")
+    parser.add_argument("--skip-python-build", action="store_true", help="skip rebuilding the PyInstaller backend")
+    parser.add_argument("--keep-pyinstaller-artifacts", action="store_true", help="do not delete PyInstaller build directories after completion")
+    parser.add_argument("--skip-npm", action="store_true", help="skip npm install")
+    parser.add_argument("--skip-electron-build", action="store_true", help="skip running electron-builder")
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    """Entry point for the packaging workflow."""
+
+    args = parse_args(argv)
+    validate_project_structure()
+
+    install_python_dependencies(skip=args.skip_pip)
+    runtime_hook = create_runtime_hook()
+    spec_path = create_spec_file(runtime_hook)
+
+    if args.skip_python_build:
+        print("Skipping PyInstaller build step at user request.")
     else:
-        print(f"不支持的平台: {system}")
-        sys.exit(1)
-    
-    print("\n=== 打包完成 ===\n")
-    print("打包后的应用位于: electron/dist/")
+        build_python_backend(spec_path, keep_artifacts=args.keep_pyinstaller_artifacts)
 
-def main():
-    print("\n=== 开始打包Electron+Python应用 ===\n")
-    
-    # 确保当前目录是项目根目录
-    if not os.path.exists('server') or not os.path.exists('electron'):
-        print("错误: 请在项目根目录运行此脚本")
-        sys.exit(1)
-    
-    # 打包Python后端
-    package_python_backend()
-    
-    # 更新Electron文件
-    update_electron_files()
-    
-    # 创建electron-builder配置
-    create_electron_builder_config()
-    
-    # 打包Electron应用
-    package_electron_app()
+    ensure_runtime_directories()
+    update_electron_builder_config()
+    ensure_node_dependencies(skip=args.skip_npm)
+    build_electron_bundle(args.target, skip=args.skip_electron_build)
+
+    print("\nPackaging workflow completed.")
+
 
 if __name__ == "__main__":
     main()

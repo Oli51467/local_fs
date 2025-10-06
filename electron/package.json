@@ -30,32 +30,39 @@
     ],
     "extraResources": [
       {
-        "from": "../meta/sqlite",
-        "to": "meta/sqlite"
+        "from": "python_backend",
+        "to": "python_backend",
+        "filter": [
+          "**/*"
+        ]
       },
       {
-        "from": "../meta/images",
-        "to": "meta/images"
+        "from": "static",
+        "to": "static",
+        "filter": [
+          "**/*"
+        ]
       },
       {
-        "from": "../meta/vector",
-        "to": "meta/vector"
+        "from": "meta",
+        "to": "meta",
+        "filter": [
+          "**/*"
+        ]
       },
       {
-        "from": "../meta/embedding/bge-m3",
-        "to": "meta/embedding/bge-m3"
+        "from": "data",
+        "to": "data",
+        "filter": [
+          "**/*"
+        ]
       },
       {
-        "from": "../meta/reranker/bge-reranker-v3-m3",
-        "to": "meta/reranker/bge-reranker-v3-m3"
-      },
-      {
-        "from": "../meta/embedding/clip",
-        "to": "meta/embedding/clip"
-      },
-      {
-        "from": "../meta/pdf-extract-kit",
-        "to": "meta/pdf-extract-kit"
+        "from": "dist/assets",
+        "to": "dist/assets",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
@@ -79,7 +86,14 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "asarUnpack": [
+      "data/**",
+      "dist/assets/**",
+      "meta/**",
+      "python_backend/**",
+      "static/**"
+    ]
   },
   "devDependencies": {
     "electron": "^26.0.0",

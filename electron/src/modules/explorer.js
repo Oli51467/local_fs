@@ -1,3 +1,40 @@
+const escapeForSelector = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  if (window.CSS && typeof window.CSS.escape === 'function') {
+    return window.CSS.escape(value);
+  }
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/\"/g, '\\"')
+    .replace(/\n/g, '\\n');
+};
+
+const findElementByPath = (path) => {
+  if (!path) {
+    return null;
+  }
+  const escaped = escapeForSelector(path);
+  return document.querySelector(`[data-path="${escaped}"]`);
+};
+
+const getFileTreeIcon = (name = '', isFolder = false, isExpanded = false) => {
+  const fileTreeModule = window.RendererModules?.fileTree;
+  if (fileTreeModule && typeof fileTreeModule.getFileIcon === 'function') {
+    return fileTreeModule.getFileIcon(name, isFolder, isExpanded);
+  }
+  const fallback = window.getFileIcon;
+  if (typeof fallback === 'function') {
+    try {
+      return fallback(name, isFolder, isExpanded);
+    } catch (error) {
+      console.warn('调用全局getFileIcon失败:', error);
+    }
+  }
+  return '';
+};
+
 /**
  * 资源管理器模块
  * 负责管理文件树上方的banner区域和五个按钮的功能
@@ -151,120 +188,93 @@ class ExplorerModule {
   }
 
   // 新建文件夹功能
-  createFolder() {
-    let targetPath = this.selectedItemPath;
-    let targetContainer;
-    
-    if (this.selectedItemPath) {
-      // 在选中的文件夹下创建
-      const selectedElement = document.querySelector(`[data-path="${this.selectedItemPath}"]`);
-      if (selectedElement && selectedElement.classList.contains('folder-item')) {
-        // 确保文件夹的子容器存在
-        let childContainer = selectedElement.nextElementSibling;
-        if (!childContainer || !childContainer.dataset.parent) {
-          childContainer = document.createElement('div');
-          childContainer.dataset.parent = this.selectedItemPath;
-          childContainer.style.display = 'block';
-          selectedElement.parentElement.insertBefore(childContainer, selectedElement.nextSibling);
-        } else {
-          // 如果子容器存在但被收起，则展开它
-          this.expandedFolders.add(this.selectedItemPath);
-          childContainer.style.display = 'block';
-          const arrow = selectedElement.querySelector('.folder-arrow');
-          if (arrow) {
-            arrow.style.transform = 'rotate(90deg)';
-          }
-          const folderIcon = selectedElement.querySelector('.folder-icon');
-          if (folderIcon) {
-            const folderName = selectedElement.textContent.trim();
-            folderIcon.innerHTML = getFileIcon(folderName, true, true);
-          }
-        }
-        targetContainer = childContainer;
-      } else {
-        // 如果选中的是文件，在其父目录创建
-        const parentContainer = selectedElement.parentElement;
-        targetContainer = parentContainer;
-        // 获取文件的父目录路径
-        const filePath = this.selectedItemPath;
-        const lastSlashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
-        targetPath = lastSlashIndex > 0 ? filePath.substring(0, lastSlashIndex) : parentContainer.dataset.parent;
+  async createFolder() {
+    try {
+      const { container, parentPath } = await this.resolveCreationTarget();
+      if (!container || !parentPath) {
+        showAlert('无法确定目标目录，请重试', 'error');
+        return;
       }
-    } else {
-      // 在data目录下创建（资源管理器最下方）
-      targetContainer = this.fileTreeEl;
-      // 获取data目录路径
-      window.fsAPI.getFileTree().then(tree => {
-        targetPath = tree.path;
-        // 确保容器存在且可见
-        if (!targetContainer.parentElement) {
-          document.body.appendChild(targetContainer);
-        }
-        this.createInlineInput(targetContainer, targetPath, true);
-      });
-      return;
+      this.createInlineInput(container, parentPath, true);
+    } catch (error) {
+      console.error('准备创建文件夹失败:', error);
+      showAlert(error.message || '无法创建文件夹', 'error');
     }
-    
-    this.createInlineInput(targetContainer, targetPath, true);
   }
 
-  // 新建文件功能
-  createFile() {
-    let targetPath = this.selectedItemPath;
-    let targetContainer;
-    
-    if (this.selectedItemPath) {
-      // 在选中的文件夹下创建
-      const selectedElement = document.querySelector(`[data-path="${this.selectedItemPath}"]`);
-      if (selectedElement && selectedElement.classList.contains('folder-item')) {
-        // 确保文件夹的子容器存在
+  async createFile() {
+    try {
+      const { container, parentPath } = await this.resolveCreationTarget();
+      if (!container || !parentPath) {
+        showAlert('无法确定目标目录，请重试', 'error');
+        return;
+      }
+      this.createInlineInput(container, parentPath, false);
+    } catch (error) {
+      console.error('准备创建文件失败:', error);
+      showAlert(error.message || '无法创建文件', 'error');
+    }
+  }
+
+  async resolveCreationTarget() {
+    const ensureVisibleContainer = (el) => {
+      if (el && !el.parentElement) {
+        document.body.appendChild(el);
+      }
+    };
+
+    const selectedPath = this.selectedItemPath;
+    if (selectedPath) {
+      const selectedElement = findElementByPath(selectedPath);
+      if (!selectedElement) {
+        await this.loadFileTree();
+        const refreshedElement = findElementByPath(selectedPath);
+        if (!refreshedElement) {
+          throw new Error('无法定位选中的目录');
+        }
+        return this.resolveCreationTarget();
+      }
+
+      if (selectedElement.classList.contains('folder-item')) {
         let childContainer = selectedElement.nextElementSibling;
         if (!childContainer || !childContainer.dataset.parent) {
           childContainer = document.createElement('div');
-          childContainer.dataset.parent = this.selectedItemPath;
+          childContainer.dataset.parent = selectedPath;
           childContainer.style.display = 'block';
           selectedElement.parentElement.insertBefore(childContainer, selectedElement.nextSibling);
         } else {
-          // 如果子容器存在但被收起，则展开它
-          this.expandedFolders.add(this.selectedItemPath);
+          this.expandedFolders.add(selectedPath);
           childContainer.style.display = 'block';
           const arrow = selectedElement.querySelector('.folder-arrow');
           if (arrow) {
             arrow.style.transform = 'rotate(90deg)';
           }
-          const folderIcon = selectedElement.querySelector('.folder-icon');
+          const folderIcon = selectedElement.querySelector('.folder-icon, .file-icon-wrapper');
           if (folderIcon) {
-            const folderName = selectedElement.textContent.trim();
-            folderIcon.innerHTML = getFileIcon(folderName, true, true);
+            folderIcon.innerHTML = getFileTreeIcon(selectedElement.textContent.trim(), true, true);
           }
         }
-        targetContainer = childContainer;
-      } else {
-        // 如果选中的是文件，在其父目录创建
-        const parentContainer = selectedElement.parentElement;
-        targetContainer = parentContainer;
-        // 获取文件的父目录路径
-        const filePath = this.selectedItemPath;
-        // 使用字符串操作获取父目录路径，避免require问题
-        const lastSlashIndex = filePath.lastIndexOf('/');
-        targetPath = lastSlashIndex > 0 ? filePath.substring(0, lastSlashIndex) : filePath;
+        ensureVisibleContainer(childContainer);
+        return { container: childContainer, parentPath: selectedPath };
       }
-    } else {
-      // 在data目录下创建（资源管理器最下方）
-      targetContainer = this.fileTreeEl;
-      // 获取data目录路径
-      window.fsAPI.getFileTree().then(tree => {
-        targetPath = tree.path;
-        // 确保容器存在且可见
-        if (!targetContainer.parentElement) {
-          document.body.appendChild(targetContainer);
-        }
-        this.createInlineInput(targetContainer, targetPath, false);
-      });
-      return;
+
+      const parentContainer = selectedElement.parentElement;
+      const filePath = selectedPath;
+      const lastSlashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+      const parentPath = lastSlashIndex > 0 ? filePath.substring(0, lastSlashIndex) : parentContainer?.dataset.parent;
+      if (!parentPath) {
+        throw new Error('无法解析父目录');
+      }
+      ensureVisibleContainer(parentContainer);
+      return { container: parentContainer, parentPath };
     }
-    
-    this.createInlineInput(targetContainer, targetPath, false);
+
+    const tree = await window.fsAPI.getFileTree();
+    if (!tree || !tree.path) {
+      throw new Error('未能获取根目录');
+    }
+    ensureVisibleContainer(this.fileTreeEl);
+    return { container: this.fileTreeEl, parentPath: tree.path };
   }
 
   // 创建内联输入框
@@ -279,7 +289,7 @@ class ExplorerModule {
     let depth = 0;
     if (container.dataset.parent) {
       // 如果是子容器，需要计算父级深度
-      const parentElement = document.querySelector(`[data-path="${container.dataset.parent}"]`);
+      const parentElement = findElementByPath(container.dataset.parent);
       if (parentElement) {
         const parentPadding = parentElement.style.paddingLeft || '0px';
         depth = parseInt(parentPadding) / 12 + 1;
@@ -330,7 +340,7 @@ class ExplorerModule {
       
       // 添加文件夹图标
       const folderIcon = document.createElement('span');
-      folderIcon.innerHTML = getFileIcon('', true);
+      folderIcon.innerHTML = getFileTreeIcon('', true);
       folderIcon.style.display = 'flex';
       folderIcon.style.alignItems = 'center';
       folderIcon.style.fontSize = '10px';
@@ -340,7 +350,7 @@ class ExplorerModule {
     } else {
       // 添加文件图标
       const fileIcon = document.createElement('span');
-      fileIcon.innerHTML = getFileIcon('', false);
+      fileIcon.innerHTML = getFileTreeIcon('', false);
       fileIcon.style.display = 'flex';
       fileIcon.style.alignItems = 'center';
       fileIcon.style.fontSize = '10px';
@@ -440,7 +450,7 @@ class ExplorerModule {
         // 确定目标路径
         let targetPath;
         if (this.selectedItemPath) {
-          const selectedElement = document.querySelector(`[data-path="${this.selectedItemPath}"]`);
+      const selectedElement = findElementByPath(this.selectedItemPath);
           if (selectedElement && selectedElement.classList.contains('folder-item')) {
             targetPath = this.selectedItemPath;
           } else {
@@ -506,7 +516,7 @@ class ExplorerModule {
 
   // 判断选中项是否为文件夹
   isSelectedItemFolder(itemPath) {
-    const selectedElement = document.querySelector(`[data-path="${itemPath}"]`);
+    const selectedElement = findElementByPath(itemPath);
     return selectedElement && selectedElement.classList.contains('folder-item');
   }
 
@@ -523,7 +533,7 @@ class ExplorerModule {
       return;
     }
     
-    const element = document.querySelector(`[data-path="${targetPath}"]`);
+    const element = findElementByPath(targetPath);
     if (!element) return;
     
     // 设置重命名状态

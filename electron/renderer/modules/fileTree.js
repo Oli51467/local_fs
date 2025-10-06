@@ -97,6 +97,137 @@
     }
   };
 
+  async function resolveProjectAbsolutePath(pathValue) {
+    if (!pathValue) {
+      return null;
+    }
+    if (typeof window.fsAPI?.resolveProjectPath === 'function') {
+      try {
+        const resolved = await window.fsAPI.resolveProjectPath(pathValue);
+        return resolved || null;
+      } catch (error) {
+        console.warn('解析项目路径失败:', error);
+        return null;
+      }
+    }
+    return pathValue;
+  }
+
+  function resolveProjectAbsolutePathSync(pathValue) {
+    if (!pathValue) {
+      return null;
+    }
+    if (typeof window.fsAPI?.resolveProjectPathSync === 'function') {
+      try {
+        const resolved = window.fsAPI.resolveProjectPathSync(pathValue);
+        return resolved || null;
+      } catch (error) {
+        console.warn('解析项目路径失败:', error);
+        return null;
+      }
+    }
+    return pathValue;
+  }
+
+  async function ensureProjectAbsolutePath(pathValue) {
+    const resolved = await resolveProjectAbsolutePath(pathValue);
+    if (!resolved) {
+      throw new Error('文件必须位于项目根目录内');
+    }
+    return resolved;
+  }
+
+  function computeRelativeFromRuntime(absolutePath) {
+    if (!absolutePath) {
+      return null;
+    }
+    try {
+      const runtimePaths = typeof window.fsAPI?.getRuntimePathsSync === 'function'
+        ? window.fsAPI.getRuntimePathsSync()
+        : null;
+      if (!runtimePaths?.externalRoot) {
+        return null;
+      }
+      const normalizedAbs = String(absolutePath).replace(/\\/g, '/');
+      const normalizedRoot = String(runtimePaths.externalRoot).replace(/\\/g, '/').replace(/\/+$/, '');
+      if (!normalizedAbs.startsWith(normalizedRoot)) {
+        return null;
+      }
+      const remainder = normalizedAbs.slice(normalizedRoot.length).replace(/^\/+/, '');
+      return remainder || '';
+    } catch (error) {
+      console.warn('计算项目相对路径失败:', error);
+      return null;
+    }
+  }
+
+  async function toProjectRelativePath(pathValue) {
+    if (!pathValue) {
+      return null;
+    }
+
+    if (typeof window.fsAPI?.toProjectRelativePath === 'function') {
+      try {
+        const relative = await window.fsAPI.toProjectRelativePath(pathValue);
+        if (relative !== null && relative !== undefined) {
+          return relative;
+        }
+      } catch (error) {
+        console.warn('转换项目相对路径失败:', error);
+      }
+    }
+
+    const absolute = await resolveProjectAbsolutePath(pathValue);
+    return computeRelativeFromRuntime(absolute);
+  }
+
+  function toProjectRelativePathSync(pathValue) {
+    if (!pathValue) {
+      return null;
+    }
+
+    if (typeof window.fsAPI?.toProjectRelativePathSync === 'function') {
+      try {
+        const relative = window.fsAPI.toProjectRelativePathSync(pathValue);
+        if (relative !== null && relative !== undefined) {
+          return relative;
+        }
+      } catch (error) {
+        console.warn('转换项目相对路径失败:', error);
+      }
+    }
+
+    const absolute = resolveProjectAbsolutePathSync(pathValue);
+    return computeRelativeFromRuntime(absolute);
+  }
+
+  const assetUrlCache = new Map();
+
+  const getAssetUrl = (relativePath) => {
+    if (!relativePath) {
+      return '';
+    }
+    if (assetUrlCache.has(relativePath)) {
+      return assetUrlCache.get(relativePath);
+    }
+
+    let resolved = `./${relativePath.replace(/^([./\\])+/, '')}`;
+
+    try {
+      if (window.fsAPI && typeof window.fsAPI.getAssetPathSync === 'function') {
+        const candidate = window.fsAPI.getAssetPathSync(relativePath);
+        if (candidate) {
+          resolved = candidate;
+        }
+      }
+    } catch (error) {
+      console.warn('解析资源路径失败，使用默认相对路径:', error);
+    }
+
+    assetUrlCache.set(relativePath, resolved);
+    return resolved;
+  };
+
   function configure(overrides = {}) {
     Object.keys(overrides).forEach((key) => {
       if (Object.prototype.hasOwnProperty.call(dependencies, key) && typeof overrides[key] === 'function') {
@@ -309,21 +440,8 @@
     dependencies.showLoadingOverlay(isFolder ? '正在取消挂载文件夹…' : '正在取消挂载…');
     try {
       dependencies.closeAllModals();
-      let unmountPath = filePath;
-      if (filePath.startsWith('/')) {
-        const normalizedRoot = '/Users/dingjianan/Desktop/fs/';
-        if (filePath.startsWith(normalizedRoot)) {
-          unmountPath = filePath.slice(normalizedRoot.length);
-        } else {
-          const dataIndex = filePath.indexOf('/data/');
-          if (dataIndex !== -1) {
-            unmountPath = filePath.slice(dataIndex + 1);
-          } else {
-            const parts = filePath.split('/');
-            unmountPath = parts[parts.length - 1];
-          }
-        }
-      }
+      const absolutePath = await ensureProjectAbsolutePath(filePath);
+      const unmountPath = toProjectRelativePathSync(absolutePath) || absolutePath;
 
       const fileItem = document.querySelector(`[data-path="${filePath}"]`);
       if (fileItem) {
@@ -394,10 +512,11 @@
   async function mountFolder(folderPath) {
     dependencies.showLoadingOverlay('正在挂载文件夹…');
     try {
+      const normalizedPath = await ensureProjectAbsolutePath(folderPath);
       const response = await fetch('http://localhost:8000/api/document/mount-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_path: folderPath })
+        body: JSON.stringify({ folder_path: normalizedPath })
       });
       const data = await response.json();
       if (!response.ok) {
@@ -414,10 +533,11 @@
   async function remountFolder(folderPath) {
     dependencies.showLoadingOverlay('正在重新挂载文件夹…');
     try {
+      const normalizedPath = await ensureProjectAbsolutePath(folderPath);
       const response = await fetch('http://localhost:8000/api/document/remount-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_path: folderPath, force_reupload: true })
+        body: JSON.stringify({ folder_path: normalizedPath, force_reupload: true })
       });
       const data = await response.json();
       if (!response.ok) {
@@ -434,10 +554,11 @@
   async function unmountFolder(folderPath) {
     dependencies.showLoadingOverlay('正在取消挂载文件夹…');
     try {
+      const normalizedPath = await ensureProjectAbsolutePath(folderPath);
       const response = await fetch('http://localhost:8000/api/document/unmount-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_path: folderPath })
+        body: JSON.stringify({ folder_path: normalizedPath })
       });
       const data = await response.json();
       if (!response.ok) {
@@ -584,10 +705,7 @@
     });
     try {
       dependencies.closeAllModals();
-      let requestPath = filePath;
-      if (!filePath.startsWith('/')) {
-        requestPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
-      }
+      const requestPath = await ensureProjectAbsolutePath(filePath);
       const response = await fetch('http://localhost:8000/api/document/parse-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -639,21 +757,18 @@
       dependencies.showLoadingOverlay(overlayMessage);
     }
 
+    const uploadPath = await ensureProjectAbsolutePath(filePath);
+
     let fileSizeBytes = null;
     if (typeof global.fsAPI?.getFileInfo === 'function') {
       try {
-        const infoResult = await global.fsAPI.getFileInfo(filePath);
+        const infoResult = await global.fsAPI.getFileInfo(uploadPath);
         if (infoResult?.success && infoResult.info && typeof infoResult.info.size === 'number') {
           fileSizeBytes = infoResult.info.size;
         }
       } catch (error) {
         console.warn('获取文件大小失败:', error);
       }
-    }
-
-    let uploadPath = filePath;
-    if (!filePath.startsWith('/')) {
-      uploadPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
     }
 
     let fileItem = null;
@@ -705,10 +820,7 @@
     dependencies.showLoadingOverlay('正在重新挂载…');
     try {
       dependencies.closeAllModals();
-      let uploadPath = filePath;
-      if (!filePath.startsWith('/')) {
-        uploadPath = `/Users/dingjianan/Desktop/fs/${filePath}`;
-      }
+      const uploadPath = await ensureProjectAbsolutePath(filePath);
       const fileItem = document.querySelector(`[data-path="${filePath}"]`);
       if (fileItem) {
         const indicator = fileItem.querySelector('.upload-indicator');
@@ -780,23 +892,23 @@
     const ext = fileName.toLowerCase().split('.').pop();
     switch (ext) {
       case 'txt':
-        return '<img src="./dist/assets/txt.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/txt.png')}" style="width: 13px; height: 13px;" />`;
       case 'html':
       case 'htm':
-        return '<img src="./dist/assets/html.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/html.png')}" style="width: 13px; height: 13px;" />`;
       case 'md':
       case 'markdown':
-        return '<img src="./dist/assets/markdown.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/markdown.png')}" style="width: 13px; height: 13px;" />`;
       case 'pdf':
-        return '<img src="./dist/assets/pdf.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/pdf.png')}" style="width: 13px; height: 13px;" />`;
       case 'docx':
       case 'doc':
-        return '<img src="./dist/assets/docx.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/docx.png')}" style="width: 13px; height: 13px;" />`;
       case 'pptx':
       case 'ppt':
-        return '<img src="./dist/assets/ppt.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/ppt.png')}" style="width: 13px; height: 13px;" />`;
       case 'json':
-        return '<img src="./dist/assets/json.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/json.png')}" style="width: 13px; height: 13px;" />`;
       case 'png':
       case 'apng':
       case 'bmp':
@@ -806,14 +918,14 @@
       case 'svg':
       case 'heic':
       case 'heif':
-        return '<img src="./dist/assets/png.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/png.png')}" style="width: 13px; height: 13px;" />`;
       case 'jpg':
       case 'jpe':
-        return '<img src="./dist/assets/jpg.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/jpg.png')}" style="width: 13px; height: 13px;" />`;
       case 'jpeg':
-        return '<img src="./dist/assets/jpeg.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/jpeg.png')}" style="width: 13px; height: 13px;" />`;
       case 'gif':
-        return '<img src="./dist/assets/gif.png" style="width: 13px; height: 13px;" />';
+        return `<img src="${getAssetUrl('dist/assets/gif.png')}" style="width: 13px; height: 13px;" />`;
       default:
         return global.icons?.file || '';
     }
@@ -1274,7 +1386,8 @@
     setSelectedItemPath: (value) => {
       state.selectedItemPath = value;
     },
-    getExpandedFolders: () => state.expandedFolders
+    getExpandedFolders: () => state.expandedFolders,
+    getFileIcon,
   };
 
   Object.defineProperty(global, 'selectedItemPath', {

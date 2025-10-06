@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -48,6 +49,42 @@ class DatabaseConfig:
         cls.SQLITE_DIR.mkdir(parents=True, exist_ok=True)
         cls.VECTOR_DIR.mkdir(parents=True, exist_ok=True)
         cls.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _path_from_env(name: str, fallback: Path) -> Path:
+    value = os.environ.get(name)
+    if not value:
+        return fallback
+    candidate = Path(value).expanduser()
+    try:
+        return candidate.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return fallback
+
+
+def _apply_runtime_path_overrides() -> None:
+    external_root = _path_from_env("FS_APP_EXTERNAL_ROOT", ServerConfig.PROJECT_ROOT)
+    data_root = _path_from_env("FS_APP_DATA_DIR", DatabaseConfig.DATABASE_DIR)
+    meta_root = _path_from_env("FS_APP_META_DIR", ServerConfig.PROJECT_ROOT / "meta")
+
+    ServerConfig.PROJECT_ROOT = external_root
+    ServerConfig.BGE_M3_MODEL_PATH = meta_root / "embedding" / "bge-m3"
+    ServerConfig.BGE_RERANKER_MODEL_PATH = meta_root / "reranker" / "bge-reranker-v3-m3"
+
+    DatabaseConfig.PROJECT_ROOT = external_root
+    DatabaseConfig.DATABASE_DIR = data_root
+    DatabaseConfig.SQLITE_DIR = meta_root / "sqlite"
+    DatabaseConfig.VECTOR_DIR = meta_root / "vector"
+    DatabaseConfig.IMAGES_DIR = meta_root / "images"
+
+    DatabaseConfig.SQLITE_DB_PATH = DatabaseConfig.SQLITE_DIR / "documents.db"
+    DatabaseConfig.VECTOR_INDEX_PATH = DatabaseConfig.VECTOR_DIR / "vector_index.faiss"
+    DatabaseConfig.VECTOR_METADATA_PATH = DatabaseConfig.VECTOR_DIR / "vector_metadata.json"
+    DatabaseConfig.IMAGE_VECTOR_INDEX_PATH = DatabaseConfig.VECTOR_DIR / "image_vector_index.faiss"
+    DatabaseConfig.IMAGE_VECTOR_METADATA_PATH = DatabaseConfig.VECTOR_DIR / "image_vector_metadata.json"
+
+
+_apply_runtime_path_overrides()
 
 
 _LOG = logging.getLogger(__name__)
