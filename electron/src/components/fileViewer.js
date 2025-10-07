@@ -137,13 +137,29 @@ class FileViewer {
       .file-content-display {
         height: 100%;
         width: 100%;
-        overflow: auto;
+        overflow-y: auto;
+        overflow-x: hidden;
         flex: 1;
         display: none;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(71, 85, 105, 0.85) transparent;
       }
 
       .file-content-display.active {
         display: block;
+      }
+
+      .file-content-display::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .file-content-display::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .file-content-display::-webkit-scrollbar-thumb {
+        background-color: rgba(71, 85, 105, 0.85);
+        border-radius: 999px;
       }
 
       .welcome-message {
@@ -164,8 +180,24 @@ class FileViewer {
         align-items: center;
         justify-content: center;
         background: var(--bg-color);
-        overflow: auto;
+        overflow-y: auto;
+        overflow-x: hidden;
         cursor: zoom-in;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(71, 85, 105, 0.85) transparent;
+      }
+
+      .image-file-viewer::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .image-file-viewer::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .image-file-viewer::-webkit-scrollbar-thumb {
+        background-color: rgba(71, 85, 105, 0.85);
+        border-radius: 999px;
       }
 
       .image-file-viewer img {

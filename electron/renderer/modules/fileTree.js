@@ -87,8 +87,8 @@
         overlayModule.stopLoadingOverlayProgressLoop(...args);
       }
     },
-    updateFolderUploadStatus: async () => {},
-    refreshFolderUploadIndicators: async () => {},
+    updateFolderUploadStatus: async () => { },
+    refreshFolderUploadIndicators: async () => { },
     resolveNodeRelativePath: (node) => {
       if (typeof global.resolveNodeRelativePath === 'function') {
         return global.resolveNodeRelativePath(node);
@@ -992,7 +992,7 @@
     if (isPdfFile) {
       parsePdfItem = document.createElement('div');
       parsePdfItem.className = 'context-menu-item';
-      parsePdfItem.innerHTML = `<span class="context-menu-icon">${global.icons.file}</span>解析为Markdown`;
+      parsePdfItem.innerHTML = `<span class="context-menu-icon">${global.icons.file}</span>深度解析`;
       parsePdfItem.addEventListener('click', () => {
         hideContextMenu();
         parsePdfToMarkdown(itemPath);

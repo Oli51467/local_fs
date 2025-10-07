@@ -36,11 +36,13 @@ class PdfViewer {
       .pdf-scroll-viewer {
         flex: 1;
         overflow-y: auto;
-        overflow-x: auto;
+        overflow-x: hidden;
         background: transparent;
         padding: 0;
         display: flex;
         justify-content: center;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(71, 85, 105, 0.85) transparent;
       }
       
       .pdf-pages-container {
@@ -111,21 +113,21 @@ class PdfViewer {
       
       /* PDF滚动查看器滚动条样式 */
       .pdf-scroll-viewer::-webkit-scrollbar {
-        width: 2px;
-        height: 2px;
+        width: 6px;
+        height: 6px;
       }
       
       .pdf-scroll-viewer::-webkit-scrollbar-track {
-        background: var(--tree-bg, #2d2d30);
+        background: transparent;
       }
       
       .pdf-scroll-viewer::-webkit-scrollbar-thumb {
-        background: var(--tree-border, #464647);
-        border-radius: 3px;
+        background-color: rgba(71, 85, 105, 0.85);
+        border-radius: 999px;
       }
       
       .pdf-scroll-viewer::-webkit-scrollbar-thumb:hover {
-        background: var(--accent-color, #007acc);
+        background-color: rgba(51, 65, 85, 0.9);
       }
     `;
     document.head.appendChild(style);

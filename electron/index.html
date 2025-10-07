@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="utf-8">
   <title>LoFS</title>
@@ -21,7 +22,7 @@
       --border-light: #d1d9e0;
       --shadow-light: rgba(27, 31, 35, 0.04);
     }
-    
+
     .dark-mode {
       --bg-color: #1e1e1e;
       --text-color: #cccccc;
@@ -36,13 +37,14 @@
       --border-light: #3c3c3c;
       --shadow-light: rgba(0, 0, 0, 0.3);
     }
-    
+
     @font-face {
       font-family: 'SimSun';
       src: local('SimSun');
     }
-    
-    html, body {
+
+    html,
+    body {
       margin: 0;
       padding: 0;
       width: 100%;
@@ -90,11 +92,11 @@
       border-radius: 4px;
       transition: background-color 0.2s;
     }
-    
+
     #sidebar button:hover {
       background-color: rgba(255, 255, 255, 0.1);
     }
-    
+
     #sidebar button svg {
       width: 20px;
       height: 20px;
@@ -105,14 +107,30 @@
     /* 文件内容展示 */
     #file-content {
       flex: 1;
-      padding: 10px;
-      overflow: auto;
+      padding: 10px 1px 10px 10px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(71, 85, 105, 0.85) transparent;
     }
-    
-    /* 设置页面样式已移至 src/styles/settings.css */
 
+    #file-content::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    #file-content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    #file-content::-webkit-scrollbar-thumb {
+      background-color: rgba(71, 85, 105, 0.85);
+      border-radius: 999px;
+    }
+
+    /* 设置页面样式已移至 src/styles/settings.css */
   </style>
 </head>
+
 <body>
   <!-- 启动页面 -->
   <div id="splash-screen">
@@ -120,20 +138,24 @@
       <div class="splash-logo">
         <div class="logo-icon">
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M3 7V17C3 18.1046 3.89543 19 5 19H19C20.1046 19 21 18.1046 21 17V7C21 5.89543 20.1046 5 19 5H5C3.89543 5 3 5.89543 3 7Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M8 21L16 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M12 17L12 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path
+              d="M3 7V17C3 18.1046 3.89543 19 5 19H19C20.1046 19 21 18.1046 21 17V7C21 5.89543 20.1046 5 19 5H5C3.89543 5 3 5.89543 3 7Z"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M8 21L16 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round" />
+            <path d="M12 17L12 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round" />
           </svg>
         </div>
         <h1 class="splash-title">LoFS</h1>
         <p class="splash-subtitle">Load Once Fast Search</p>
       </div>
-      
+
       <div class="splash-loading">
         <div class="loading-spinner"></div>
         <p class="loading-text">正在初始化系统...</p>
       </div>
-      
+
       <div class="splash-footer">
         <p class="version-info">Designed and powered by Oli51467</p>
       </div>
@@ -143,11 +165,21 @@
   <div id="app" style="display: none;">
     <!-- 左侧 sidebar -->
     <div id="sidebar">
-      <button id="toggle-tree"><div id="file-icon"></div></button>
-      <button id="search-btn"><div id="search-icon"></div></button>
-      <button id="chat-btn"><div id="chat-icon"></div></button>
-      <button id="settings-btn"><div id="settings-icon"></div></button>
-      <button id="database-btn"><div id="database-icon"></div></button>
+      <button id="toggle-tree">
+        <div id="file-icon"></div>
+      </button>
+      <button id="search-btn">
+        <div id="search-icon"></div>
+      </button>
+      <button id="chat-btn">
+        <div id="chat-icon"></div>
+      </button>
+      <button id="settings-btn">
+        <div id="settings-icon"></div>
+      </button>
+      <button id="database-btn">
+        <div id="database-icon"></div>
+      </button>
     </div>
 
     <!-- 文件树栏 -->
@@ -156,24 +188,34 @@
       <div id="file-tree-header">
         <span id="resource-title">资源管理器</span>
         <div>
-          <button id="new-folder"><div id="folder-icon"></div></button>
-              <button id="new-file"><div id="new-file-icon"></div></button>
-              <button id="import-files"><div id="import-icon"></div></button>
-              <button id="refresh-tree"><div id="refresh-icon"></div></button>
-          <button id="delete-item"><div id="trash-icon"></div></button>
+          <button id="new-folder">
+            <div id="folder-icon"></div>
+          </button>
+          <button id="new-file">
+            <div id="new-file-icon"></div>
+          </button>
+          <button id="import-files">
+            <div id="import-icon"></div>
+          </button>
+          <button id="refresh-tree">
+            <div id="refresh-icon"></div>
+          </button>
+          <button id="delete-item">
+            <div id="trash-icon"></div>
+          </button>
         </div>
       </div>
       <div id="file-tree">Loading...</div>
-      
+
       <!-- 搜索区域 -->
       <div id="search-area" style="display: none;">
-      <div id="search-input-container">
-        <input type="text" id="search-input" placeholder="搜索文件内容" />
-        <div id="search-mode-toggle">
-          <button class="search-mode-btn active" data-mode="text">文本检索</button>
-          <button class="search-mode-btn" data-mode="image">图片检索</button>
+        <div id="search-input-container">
+          <input type="text" id="search-input" placeholder="搜索文件内容" />
+          <div id="search-mode-toggle">
+            <button class="search-mode-btn active" data-mode="text">文本检索</button>
+            <button class="search-mode-btn" data-mode="image">图片检索</button>
+          </div>
         </div>
-      </div>
         <div id="search-history"></div>
       </div>
     </div>
@@ -212,7 +254,7 @@
         </div>
       </div>
     </div>
-    
+
     <!-- 设置页面 -->
     <div id="settings-page">
       <section class="settings-section">
@@ -248,13 +290,8 @@
                 </div>
                 <span class="slider-value" id="retrieval-chunk-size-value">-</span>
               </div>
-              <input type="range"
-                     id="retrieval-chunk-size"
-                     min="50"
-                     max="2000"
-                     step="10"
-                     value="300"
-                     data-config-key="RECURSIVE_CHUNK_SIZE">
+              <input type="range" id="retrieval-chunk-size" min="50" max="2000" step="10" value="300"
+                data-config-key="RECURSIVE_CHUNK_SIZE">
             </div>
 
             <div class="settings-slider" data-config-key="RECURSIVE_CHUNK_OVERLAP">
@@ -264,13 +301,8 @@
                 </div>
                 <span class="slider-value" id="retrieval-chunk-overlap-value">-</span>
               </div>
-              <input type="range"
-                     id="retrieval-chunk-overlap"
-                     min="0"
-                     max="500"
-                     step="5"
-                     value="80"
-                     data-config-key="RECURSIVE_CHUNK_OVERLAP">
+              <input type="range" id="retrieval-chunk-overlap" min="0" max="500" step="5" value="80"
+                data-config-key="RECURSIVE_CHUNK_OVERLAP">
             </div>
 
             <div class="settings-slider" data-config-key="BM25S_WEIGHT">
@@ -280,13 +312,8 @@
                 </div>
                 <span class="slider-value" id="retrieval-bm25s-weight-value">-</span>
               </div>
-              <input type="range"
-                     id="retrieval-bm25s-weight"
-                     min="0"
-                     max="1"
-                     step="0.01"
-                     value="0.70"
-                     data-config-key="BM25S_WEIGHT">
+              <input type="range" id="retrieval-bm25s-weight" min="0" max="1" step="0.01" value="0.70"
+                data-config-key="BM25S_WEIGHT">
             </div>
 
             <div class="settings-slider" data-config-key="EMBEDDING_WEIGHT">
@@ -296,13 +323,8 @@
                 </div>
                 <span class="slider-value" id="retrieval-embedding-weight-value">-</span>
               </div>
-              <input type="range"
-                     id="retrieval-embedding-weight"
-                     min="0"
-                     max="1"
-                     step="0.01"
-                     value="0.30"
-                     data-config-key="EMBEDDING_WEIGHT">
+              <input type="range" id="retrieval-embedding-weight" min="0" max="1" step="0.01" value="0.30"
+                data-config-key="EMBEDDING_WEIGHT">
             </div>
           </div>
         </div>
@@ -312,14 +334,14 @@
     <div id="database-page">
       <div class="database-section">
         <h2>数据库管理</h2>
-        
+
         <!-- 数据库类型选择tab -->
         <div class="db-tabs">
           <button class="db-tab-btn active" data-tab="sqlite">SQLite 数据库</button>
           <button class="db-tab-btn" data-tab="faiss">Faiss 向量数据库</button>
           <button class="db-tab-btn" data-tab="image-vectors">图片向量存储</button>
         </div>
-        
+
         <!-- SQLite 数据库面板 -->
         <div id="sqlite-panel" class="db-panel active">
           <div class="database-controls">
@@ -332,27 +354,29 @@
               <button id="query-table" class="db-btn">查询表数据</button>
             </div>
           </div>
-          
+
           <div class="database-status">
             <div id="db-status" class="status-indicator"></div>
           </div>
-          
+
           <div class="database-results">
             <div id="db-tables-list" class="tables-section">
               <h3>数据库表列表</h3>
               <div id="tables-content"></div>
             </div>
-            
+
             <div id="db-table-data" class="table-data-section">
               <h3>表数据
-                <button id="delete-all-data" class="db-btn delete-btn" style="display: none; margin-left: 10px; background-color: #dc3545;">删除所有数据</button>
-                <button id="cleanup-sqlite-data" class="db-btn delete-btn" style="display: inline-block; margin-left: 10px; background-color: #dc3545;">清空SQLite数据</button>
+                <button id="delete-all-data" class="db-btn delete-btn"
+                  style="display: none; margin-left: 10px; background-color: #dc3545;">删除所有数据</button>
+                <button id="cleanup-sqlite-data" class="db-btn delete-btn"
+                  style="display: inline-block; margin-left: 10px; background-color: #dc3545;">清空SQLite数据</button>
               </h3>
               <div id="table-data-content"></div>
             </div>
           </div>
         </div>
-        
+
         <!-- Faiss 向量数据库面板 -->
         <div id="faiss-panel" class="db-panel">
           <div class="database-controls">
@@ -365,20 +389,21 @@
               <button id="query-vectors" class="db-btn">查询向量数据</button>
             </div>
           </div>
-          
+
           <div class="database-status">
             <div id="faiss-status" class="status-indicator"></div>
           </div>
-          
+
           <div class="database-results">
             <div id="faiss-statistics" class="statistics-section">
               <h3>Faiss 统计信息</h3>
               <div id="statistics-content"></div>
             </div>
-            
+
             <div id="faiss-vectors-data" class="vectors-data-section">
               <h3>向量数据
-                <button id="cleanup-faiss-vectors" class="db-btn delete-btn" style="display: inline-block; margin-left: 10px; background-color: #dc3545;">清空Faiss向量</button>
+                <button id="cleanup-faiss-vectors" class="db-btn delete-btn"
+                  style="display: inline-block; margin-left: 10px; background-color: #dc3545;">清空Faiss向量</button>
               </h3>
               <div id="vectors-data-content"></div>
             </div>
@@ -434,7 +459,7 @@
   <link rel="stylesheet" href="./src/styles/explorer.css">
   <link rel="stylesheet" href="./src/styles/chat.css">
   <link rel="stylesheet" href="./src/styles/database.css">
-  
+
   <script src="./src/modules/splash.js"></script>
   <script src="./src/modules/tab-manager.js"></script>
   <script src="./src/components/textViewer.js"></script>
@@ -452,9 +477,9 @@
   <script src="./static/libs/jszip.min.js"></script>
   <script src="./node_modules/xml2js/lib/xml2js.js"></script>
   <script src="./static/libs/docx-preview.js"></script>
-<script src="./node_modules/marked/lib/marked.umd.js"></script>
-<script src="./node_modules/highlight.js/lib/index.js"></script>
-<script src="./static/libs/pptx-preview.umd.js"></script>
+  <script src="./node_modules/marked/lib/marked.umd.js"></script>
+  <script src="./node_modules/highlight.js/lib/index.js"></script>
+  <script src="./static/libs/pptx-preview.umd.js"></script>
   <script src="./renderer/modules/loadingOverlay.js"></script>
   <script src="./renderer/modules/uploadStatus.js"></script>
   <script src="./renderer/modules/search.js"></script>
@@ -463,4 +488,5 @@
   <script src="./renderer/modules/modalNotifications.js"></script>
   <script src="./renderer.js"></script>
 </body>
+
 </html>
