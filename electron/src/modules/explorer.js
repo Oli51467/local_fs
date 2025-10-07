@@ -96,7 +96,12 @@ class ExplorerModule {
     // 绑定删除按钮事件
     document.getElementById('delete-item').addEventListener('click', () => {
       if (!this.selectedItemPath) {
-        alert('请先选择要删除的文件或文件夹');
+        if (typeof window.showAlert === 'function') {
+          window.showAlert('请先选择要删除的文件或文件夹', 'warning');
+        } else {
+          console.warn('showAlert 未初始化，fallback 到浏览器原生提示');
+          alert('请先选择要删除的文件或文件夹');
+        }
         return;
       }
       
@@ -570,7 +575,59 @@ class ExplorerModule {
 
   // 创建删除确认弹窗
   createDeleteModal(itemPath, isFolder) {
-    // 创建遮罩层
+    const itemName = itemPath.split('/').pop() || itemPath.split('\\').pop();
+    const message = isFolder
+      ? `是否确认删除该文件夹及该文件夹下的所有文件？\n\n文件夹名称：${itemName}`
+      : `是否确认删除文件？\n\n文件名称：${itemName}`;
+
+    const notifyError = (error) => {
+      const content = `删除失败: ${error.message}`;
+      if (typeof window.showAlert === 'function') {
+        window.showAlert(content, 'error');
+      } else {
+        alert(content);
+      }
+    };
+
+    const performDeletion = async () => {
+      try {
+        await window.fsAPI.deleteItem(itemPath);
+
+        if (isFolder) {
+          // 对于文件夹，需要关闭文件夹内所有打开的文件tab
+          this.closeTabsInFolder(itemPath);
+        } else if (this.fileViewer) {
+          // 对于单个文件，关闭对应的tab
+          this.fileViewer.closeTabByFilePath(itemPath);
+        }
+
+        // 清除选中状态
+        this.selectedItemPath = null;
+
+        // 刷新文件树
+        await this.loadFileTree();
+      } catch (error) {
+        console.error('删除失败:', error);
+        notifyError(error);
+      }
+    };
+
+    if (typeof window.showModal === 'function') {
+      window.showModal({
+        type: 'warning',
+        title: '确认删除',
+        message,
+        confirmText: '删除',
+        cancelText: '取消',
+        showCancel: true,
+        onConfirm: () => {
+          performDeletion();
+        }
+      });
+      return;
+    }
+
+    // 如果统一弹窗模块不可用，则回退到基础弹窗以保证功能可用
     const overlay = document.createElement('div');
     overlay.style.cssText = `
       position: fixed;
@@ -584,126 +641,83 @@ class ExplorerModule {
       align-items: center;
       justify-content: center;
     `;
-    
-    // 创建弹窗
+
     const modal = document.createElement('div');
     modal.style.cssText = `
       background-color: var(--bg-color);
-      border-radius: 8px;
-      padding: 20px;
-      min-width: 300px;
-      max-width: 500px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      border-radius: 12px;
+      padding: 24px;
+      min-width: 320px;
+      max-width: 480px;
+      box-shadow: 0 24px 48px rgba(15, 23, 42, 0.3);
       color: var(--text-color);
     `;
-    
-    // 标题
+
     const title = document.createElement('h3');
     title.textContent = '确认删除';
     title.style.cssText = `
-      margin: 0 0 15px 0;
-      font-size: 16px;
-      font-weight: bold;
+      margin: 0 0 16px 0;
+      font-size: 18px;
+      font-weight: 600;
     `;
-    
-    // 消息内容
-    const message = document.createElement('p');
-    const itemName = itemPath.split('/').pop() || itemPath.split('\\').pop();
-    if (isFolder) {
-      message.textContent = `是否确认删除该文件夹及该文件夹下的所有文件？\n\n文件夹名称：${itemName}`;
-    } else {
-      message.textContent = `是否确认删除文件？\n\n文件名称：${itemName}`;
-    }
-    message.style.cssText = `
-      margin: 0 0 20px 0;
-      line-height: 1.5;
+
+    const messageEl = document.createElement('p');
+    messageEl.textContent = message;
+    messageEl.style.cssText = `
+      margin: 0 0 24px 0;
+      line-height: 1.6;
       white-space: pre-line;
     `;
-    
-    // 按钮容器
+
     const buttonContainer = document.createElement('div');
     buttonContainer.style.cssText = `
       display: flex;
       justify-content: flex-end;
-      gap: 10px;
+      gap: 12px;
     `;
-    
-    // 取消按钮
+
     const cancelButton = document.createElement('button');
     cancelButton.textContent = '取消';
     cancelButton.style.cssText = `
-      padding: 8px 16px;
-      border: 1px solid var(--tree-border);
-      background: var(--bg-color);
+      padding: 9px 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      background: rgba(148, 163, 184, 0.12);
       color: var(--text-color);
-      border-radius: 4px;
-      cursor: pointer;
       font-size: 14px;
-    `;
-    
-    // 确认按钮
-    const confirmButton = document.createElement('button');
-    confirmButton.textContent = '删除';
-    confirmButton.style.cssText = `
-      padding: 8px 16px;
-      border: none;
-      background: #dc3545;
-      color: white;
-      border-radius: 4px;
       cursor: pointer;
-      font-size: 14px;
     `;
-    
-    // 按钮事件
     cancelButton.addEventListener('click', () => {
       document.body.removeChild(overlay);
     });
-    
-    confirmButton.addEventListener('click', async () => {
-      try {
-        if (isFolder) {
-          await window.fsAPI.deleteItem(itemPath);
-          // 对于文件夹，需要关闭文件夹内所有打开的文件tab
-          this.closeTabsInFolder(itemPath);
-        } else {
-          await window.fsAPI.deleteItem(itemPath);
-          // 对于单个文件，关闭对应的tab
-          if (this.fileViewer) {
-            this.fileViewer.closeTabByFilePath(itemPath);
-          }
+
+    const confirmButton = document.createElement('button');
+    confirmButton.textContent = '删除';
+    confirmButton.style.cssText = `
+      padding: 9px 20px;
+      border-radius: 999px;
+      border: none;
+      background: linear-gradient(135deg, rgba(251, 191, 36, 0.35), #f59e0b);
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    `;
+    confirmButton.addEventListener('click', () => {
+      performDeletion().finally(() => {
+        if (document.body.contains(overlay)) {
+          document.body.removeChild(overlay);
         }
-        
-        // 清除选中状态
-        this.selectedItemPath = null;
-        
-        // 刷新文件树
-        await this.loadFileTree();
-        
-        // 关闭弹窗
-        document.body.removeChild(overlay);
-      } catch (error) {
-        console.error('删除失败:', error);
-        showAlert(`删除失败: ${error.message}`, 'error');
-      }
+      });
     });
-    
-    // 组装弹窗
+
     buttonContainer.appendChild(cancelButton);
     buttonContainer.appendChild(confirmButton);
     modal.appendChild(title);
-    modal.appendChild(message);
+    modal.appendChild(messageEl);
     modal.appendChild(buttonContainer);
     overlay.appendChild(modal);
-    
-    // 显示弹窗
     document.body.appendChild(overlay);
-    
-    // 点击遮罩层关闭弹窗
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) {
-        document.body.removeChild(overlay);
-      }
-    });
   }
 
   // 获取选中项路径
