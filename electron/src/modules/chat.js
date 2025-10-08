@@ -285,10 +285,17 @@ class ChatModule {
       const wrapper = document.createElement('div');
       wrapper.className = `chat-message ${message.role}`;
 
-      const label = document.createElement('span');
-      label.className = 'chat-label';
-      label.textContent = message.role === 'user' ? '用户' : 'AI';
-      wrapper.appendChild(label);
+      const header = document.createElement('div');
+      header.className = 'chat-message-header';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'chat-avatar';
+      if (message.role === 'user') {
+        avatar.classList.add('is-user');
+      } else {
+        avatar.classList.add('is-assistant');
+      }
+      header.appendChild(avatar);
 
       const bubble = document.createElement('div');
       bubble.className = 'chat-bubble';
@@ -321,7 +328,8 @@ class ChatModule {
         bubble.textContent = message.content || '';
       }
 
-      wrapper.appendChild(bubble);
+      header.appendChild(bubble);
+      wrapper.appendChild(header);
       this.chatMessagesEl.appendChild(wrapper);
     });
   }
