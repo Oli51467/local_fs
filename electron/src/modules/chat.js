@@ -5,7 +5,6 @@ class ChatModule {
     this.historyContainer = document.getElementById('chat-history-container');
     this.historyListEl = document.getElementById('chat-history-list');
     this.historyTitleEl = document.getElementById('chat-history-title');
-    this.startNewChatBtn = document.getElementById('start-new-chat-btn');
 
     this.chatPageEl = document.getElementById('chat-page');
     this.chatMessagesContainer = document.getElementById('chat-messages-container');
@@ -22,6 +21,7 @@ class ChatModule {
     this.messages = [];
     this.initialized = false;
     this.historyVisible = true;
+    this.isHistoryCollapsed = false;
     this.pendingRequest = null;
     this.chatInputBaseHeight = null;
     this.chatInputMaxHeight = null;
@@ -54,9 +54,23 @@ class ChatModule {
       });
     }
 
-    if (this.startNewChatBtn) {
-      this.startNewChatBtn.addEventListener('click', () => {
-        this.startNewConversation();
+    // 绑定折叠按钮事件
+    const collapseBtn = document.querySelector('#chat-history-collapse-btn');
+    if (collapseBtn) {
+      collapseBtn.innerHTML = window.icons?.chevronLeft || '';
+      collapseBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.toggleHistoryCollapse();
+      });
+    }
+
+    // 绑定折叠状态下的展开按钮事件
+    const expandBtn = document.querySelector('#collapsed-expand-btn');
+    if (expandBtn) {
+      expandBtn.innerHTML = window.icons?.chevronRight || '';
+      expandBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.toggleHistoryCollapse();
       });
     }
   }
@@ -159,13 +173,27 @@ class ChatModule {
 
     this.historyListEl.innerHTML = '';
 
+    // 添加固定的"新对话"行
+    const newChatItem = document.createElement('div');
+    newChatItem.className = 'chat-history-item new-chat-item';
+    newChatItem.innerHTML = `
+      <div class="new-chat-icon">${window.icons?.edit || ''}</div>
+      <div class="chat-history-title">新对话</div>
+    `;
+    newChatItem.addEventListener('click', () => {
+      this.startNewConversation();
+    });
+    this.historyListEl.appendChild(newChatItem);
+
     if (!this.conversations.length) {
-      const empty = document.createElement('div');
-      empty.className = 'chat-history-empty';
-      empty.textContent = '暂无对话，点击“新建”开始交流。';
-      this.historyListEl.appendChild(empty);
       return;
     }
+
+    // 添加"聊天"小标题（在历史对话列表之前）
+    const chatSectionTitle = document.createElement('div');
+    chatSectionTitle.className = 'chat-section-title';
+    chatSectionTitle.textContent = '聊天';
+    this.historyListEl.appendChild(chatSectionTitle);
 
     this.conversations.forEach((conversation) => {
       const item = document.createElement('div');
@@ -384,12 +412,45 @@ class ChatModule {
     }
     try {
       const date = new Date(value);
-      if (Number.isNaN(date.getTime())) {
-        return value;
-      }
-      return `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, '0')}-${`${date.getDate()}`.padStart(2, '0')} ${`${date.getHours()}`.padStart(2, '0')}:${`${date.getMinutes()}`.padStart(2, '0')}`;
+      return date.toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
     } catch (error) {
-      return value;
+      console.error('Error formatting timestamp:', error);
+      return '';
+    }
+  }
+
+  toggleHistoryCollapse() {
+    this.isHistoryCollapsed = !this.isHistoryCollapsed;
+    const historyContainer = document.querySelector('#chat-history-container');
+    const chatPageEl = document.querySelector('#chat-page');
+    const collapseBtn = document.querySelector('#chat-history-collapse-btn');
+    const expandBtn = document.querySelector('#collapsed-expand-btn');
+    
+    if (this.isHistoryCollapsed) {
+      historyContainer?.classList.add('collapsed');
+      chatPageEl?.classList.add('expanded');
+      if (collapseBtn) {
+        collapseBtn.innerHTML = window.icons?.chevronRight || '';
+      }
+      if (expandBtn) {
+        expandBtn.style.display = 'flex';
+        expandBtn.innerHTML = window.icons?.chevronRight || '';
+      }
+    } else {
+      historyContainer?.classList.remove('collapsed');
+      chatPageEl?.classList.remove('expanded');
+      if (collapseBtn) {
+        collapseBtn.innerHTML = window.icons?.chevronLeft || '';
+      }
+      if (expandBtn) {
+        expandBtn.style.display = 'none';
+      }
     }
   }
 

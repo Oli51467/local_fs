@@ -224,10 +224,8 @@
     <div id="chat-history-container" style="display: none;">
       <div id="chat-history-header">
         <span id="chat-history-title">对话历史</span>
-        <button id="start-new-chat-btn" class="chat-history-action" type="button" aria-label="新建对话">
-          <svg class="icon-plus" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
+        <button id="chat-history-collapse-btn" class="chat-history-collapse-btn">
+          <!-- 折叠按钮图标将通过JavaScript设置 -->
         </button>
       </div>
       <div id="chat-history-list"></div>
@@ -241,6 +239,10 @@
       <div id="chat-page-header">
         <div class="chat-page-header-info">
           <h2 id="chat-conversation-title">新对话</h2>
+          <!-- 折叠状态下的展开按钮 -->
+          <button id="collapsed-expand-btn" class="collapsed-expand-btn" style="display: none;">
+            <!-- 展开按钮图标将通过JavaScript设置 -->
+          </button>
           <span id="chat-conversation-updated" class="chat-timestamp"></span>
         </div>
         <div class="chat-page-header-actions">
@@ -252,7 +254,7 @@
       <div id="chat-input-area">
         <div id="chat-status-text"></div>
         <div class="chat-input-wrapper">
-          <textarea id="chat-input" rows="1" placeholder="输入你的问题，按 Enter 发送，Shift+Enter 换行" autocomplete="off" spellcheck="false"></textarea>
+          <textarea id="chat-input" rows="1" placeholder="询问任何问题" autocomplete="off" spellcheck="false"></textarea>
           <button id="chat-send-btn" type="button" aria-label="发送消息">
             <svg class="icon-arrow" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
