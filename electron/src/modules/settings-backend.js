@@ -7,7 +7,13 @@ class SettingsBackendModule {
   constructor() {
     this.settingsPath = path.join(__dirname, '..', '..', 'settings.json');
     this.defaultSettings = {
-      darkMode: false
+      darkMode: false,
+      openaiApiKey: '',
+      modelscopeApiKey: '',
+      qwenApiKey: '',
+      kimiApiKey: '',
+      claudeApiKey: '',
+      siliconflwApiKey: ''
     };
     
     // 初始化配置管理器

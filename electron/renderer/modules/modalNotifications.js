@@ -1,6 +1,29 @@
 (function initModalNotificationsModule(global) {
   const modules = global.RendererModules = global.RendererModules || {};
 
+  function resolveIsDarkMode() {
+    const root = document.documentElement;
+    const body = document.body;
+    const themeAttr = root?.getAttribute('data-theme');
+    if (themeAttr && themeAttr.toLowerCase().includes('dark')) {
+      return true;
+    }
+    if (root?.classList?.contains('dark') || root?.classList?.contains('dark-mode')) {
+      return true;
+    }
+    if (body?.classList?.contains('dark') || body?.classList?.contains('dark-mode')) {
+      return true;
+    }
+    if (window.matchMedia) {
+      try {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches;
+      } catch (error) {
+        console.warn('检测暗色模式失败:', error);
+      }
+    }
+    return false;
+  }
+
   function showModal(options) {
     const {
       type = 'info',
@@ -13,34 +36,42 @@
       onCancel = null
     } = options || {};
 
+    const isDarkMode = resolveIsDarkMode();
+    const surfaceColors = {
+      background: isDarkMode ? '#000000' : '#ffffff',
+      text: isDarkMode ? '#e2e8f0' : '#0f172a',
+      textMuted: isDarkMode ? 'rgba(226, 232, 240, 0.75)' : 'rgba(71, 85, 105, 0.85)',
+      border: isDarkMode ? 'rgba(59, 130, 246, 0.45)' : 'rgba(59, 130, 246, 0.22)'
+    };
+    const baseBlue = {
+      accent: '#3b82f6',
+      accentStrong: '#2563eb',
+      accentSoft: '#60a5fa',
+      shadow: isDarkMode ? 'rgba(37, 99, 235, 0.5)' : 'rgba(59, 130, 246, 0.28)'
+    };
+    const deepBlue = {
+      accent: '#1e40af',
+      accentStrong: '#1d4ed8',
+      accentSoft: '#3b82f6',
+      shadow: isDarkMode ? 'rgba(29, 78, 216, 0.45)' : 'rgba(30, 64, 175, 0.26)'
+    };
+
     const palette = {
       success: {
         defaultTitle: '操作成功',
-        accent: '#22c55e',
-        accentStrong: '#16a34a',
-        accentSoft: '#bbf7d0',
-        shadow: 'rgba(34, 197, 94, 0.25)'
+        ...baseBlue
       },
       error: {
         defaultTitle: '发生错误',
-        accent: '#f87171',
-        accentStrong: '#ef4444',
-        accentSoft: '#fecaca',
-        shadow: 'rgba(248, 113, 113, 0.25)'
+        ...deepBlue
       },
       warning: {
         defaultTitle: '温馨提示',
-        accent: '#fbbf24',
-        accentStrong: '#f59e0b',
-        accentSoft: '#fde68a',
-        shadow: 'rgba(251, 191, 36, 0.25)'
+        ...baseBlue
       },
       info: {
         defaultTitle: '提示',
-        accent: '#60a5fa',
-        accentStrong: '#3b82f6',
-        accentSoft: '#bfdbfe',
-        shadow: 'rgba(96, 165, 250, 0.25)'
+        ...baseBlue
       }
     };
 
@@ -68,14 +99,14 @@
     const modal = document.createElement('div');
     modal.className = 'modal-shell';
     modal.style.cssText = [
-      'background: var(--bg-color)',
-      'color: var(--text-color)',
+      `background: ${surfaceColors.background}`,
+      `color: ${surfaceColors.text}`,
       'min-width: 320px',
       'max-width: 420px',
       'border-radius: 16px',
       'padding: 24px 26px 22px',
       'box-shadow: 0 22px 60px rgba(15, 23, 42, 0.25)',
-      'border: 1px solid rgba(148, 163, 184, 0.18)',
+      `border: 1px solid ${surfaceColors.border}`,
       'display: flex',
       'flex-direction: column',
       'gap: 16px',
@@ -106,7 +137,7 @@
       'margin: 0',
       'line-height: 1.6',
       'font-size: 14px',
-      'color: var(--text-muted, rgba(75, 85, 99, 0.85))',
+      `color: ${surfaceColors.textMuted}`,
       'white-space: pre-line'
     ].join(';');
 
@@ -125,9 +156,9 @@
       cancelButton.style.cssText = [
         'padding: 9px 18px',
         'border-radius: 999px',
-        'border: 1px solid rgba(148, 163, 184, 0.35)',
-        'background: rgba(148, 163, 184, 0.12)',
-        'color: var(--text-color)',
+        `border: 1px solid ${isDarkMode ? 'rgba(59, 130, 246, 0.4)' : 'rgba(59, 130, 246, 0.26)'}`,
+        `background: ${isDarkMode ? 'rgba(37, 99, 235, 0.18)' : 'rgba(59, 130, 246, 0.12)'}`,
+        `color: ${surfaceColors.text}`,
         'font-size: 14px',
         'font-weight: 500',
         'cursor: pointer',
@@ -135,15 +166,15 @@
       ].join(';');
 
       cancelButton.addEventListener('mouseenter', () => {
-        cancelButton.style.boxShadow = '0 8px 16px rgba(15, 23, 42, 0.18)';
+        cancelButton.style.boxShadow = '0 8px 16px rgba(37, 99, 235, 0.22)';
         cancelButton.style.transform = 'translateY(-1px)';
-        cancelButton.style.background = 'rgba(148, 163, 184, 0.18)';
+        cancelButton.style.background = isDarkMode ? 'rgba(37, 99, 235, 0.24)' : 'rgba(59, 130, 246, 0.18)';
       });
 
       cancelButton.addEventListener('mouseleave', () => {
         cancelButton.style.boxShadow = 'none';
         cancelButton.style.transform = 'none';
-        cancelButton.style.background = 'rgba(148, 163, 184, 0.12)';
+        cancelButton.style.background = isDarkMode ? 'rgba(37, 99, 235, 0.18)' : 'rgba(59, 130, 246, 0.12)';
       });
 
       cancelButton.addEventListener('click', () => {
@@ -232,4 +263,3 @@
     showSuccessModal
   };
 })(window);
-

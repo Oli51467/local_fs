@@ -24,6 +24,8 @@ class ChatModule {
     this.initialized = false;
     this.historyVisible = true;
     this.pendingRequest = null;
+    this.chatInputBaseHeight = null;
+    this.chatInputMaxHeight = null;
   }
 
   async init() {
@@ -393,8 +395,20 @@ class ChatModule {
     if (!this.chatInputEl) {
       return;
     }
+    const computed = window.getComputedStyle(this.chatInputEl);
+    if (this.chatInputBaseHeight === null) {
+      const minHeight = parseFloat(computed.minHeight) || parseFloat(computed.lineHeight) || 24;
+      this.chatInputBaseHeight = minHeight;
+    }
+    if (this.chatInputMaxHeight === null) {
+      const maxHeight = parseFloat(computed.maxHeight);
+      this.chatInputMaxHeight = Number.isNaN(maxHeight) ? 320 : maxHeight;
+    }
+    const base = this.chatInputBaseHeight;
+    const limit = this.chatInputMaxHeight;
     this.chatInputEl.style.height = 'auto';
-    this.chatInputEl.style.height = `${this.chatInputEl.scrollHeight}px`;
+    const next = Math.min(Math.max(base, this.chatInputEl.scrollHeight), limit);
+    this.chatInputEl.style.height = `${next}px`;
   }
 
   formatTimestamp(value) {

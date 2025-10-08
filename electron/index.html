@@ -224,7 +224,11 @@
     <div id="chat-history-container" style="display: none;">
       <div id="chat-history-header">
         <span id="chat-history-title">对话历史</span>
-        <button id="start-new-chat-btn" class="chat-history-action">新建</button>
+        <button id="start-new-chat-btn" class="chat-history-action" type="button" aria-label="新建对话">
+          <svg class="icon-plus" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
       </div>
       <div id="chat-history-list"></div>
     </div>
@@ -249,8 +253,12 @@
       <div id="chat-input-area">
         <div id="chat-status-text"></div>
         <div class="chat-input-wrapper">
-          <textarea id="chat-input" placeholder="输入你的问题，按 Enter 发送，Shift+Enter 换行"></textarea>
-          <button id="chat-send-btn">发送</button>
+          <textarea id="chat-input" rows="1" placeholder="输入你的问题，按 Enter 发送，Shift+Enter 换行" autocomplete="off" spellcheck="false"></textarea>
+          <button id="chat-send-btn" type="button" aria-label="发送消息">
+            <svg class="icon-arrow" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -328,6 +336,195 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <h2>API-Key</h2>
+          <div class="retrieval-actions">
+            <span id="api-settings-status" class="settings-status-text" aria-live="polite"></span>
+            <div class="retrieval-actions-buttons">
+              <button type="button" id="api-settings-save" class="settings-btn primary" disabled>更新</button>
+            </div>
+          </div>
+        </div>
+        <div class="settings-divider"></div>
+        <div class="settings-form-grid">
+          <div class="settings-input-field">
+            <label for="api-key-openai" class="settings-input-label">OpenAI API Key</label>
+            <div class="settings-input-control">
+              <input type="password" id="api-key-openai" class="settings-input" placeholder="sk-..." autocomplete="off"
+                autocapitalize="none" spellcheck="false" data-settings-key="openaiApiKey">
+              <button type="button" class="settings-input-visibility-toggle" data-target-input="api-key-openai"
+                data-platform-name="OpenAI" aria-label="显示 OpenAI API Key" aria-pressed="false">
+                <svg class="icon-eye icon-eye-open" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M12 5C6.9 5 3.1 8.3 1.5 12c1.6 3.7 5.4 7 10.5 7s8.9-3.3 10.5-7C20.9 8.3 17.1 5 12 5Z"
+                    stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6" />
+                </svg>
+                <svg class="icon-eye icon-eye-closed" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M3 3l18 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                  <path
+                    d="M9.5 5.6C10.3 5.3 11.1 5 12 5c5.1 0 8.9 3.3 10.5 7-.6 1.2-1.4 2.3-2.4 3.2m-6.7 2.1c-.5.1-1 .1-1.4.1-5.1 0-8.9-3.3-10.5-7 1-2.3 3-4.3 5.5-5.5"
+                    stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+                    fill="none" />
+                  <path d="M14.5 14.5a3 3 0 0 1-4.2-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                    stroke-linejoin="round" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <p class="settings-input-hint">用于访问 OpenAI 模型服务。</p>
+          </div>
+
+          <div class="settings-input-field">
+            <label for="api-key-modelscope" class="settings-input-label">ModelScope API Key</label>
+            <div class="settings-input-control">
+              <input type="password" id="api-key-modelscope" class="settings-input" placeholder="输入 ModelScope Key"
+                autocomplete="off" autocapitalize="none" spellcheck="false" data-settings-key="modelscopeApiKey">
+              <button type="button" class="settings-input-visibility-toggle" data-target-input="api-key-modelscope"
+                data-platform-name="ModelScope" aria-label="显示 ModelScope API Key" aria-pressed="false">
+                <svg class="icon-eye icon-eye-open" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M12 5C6.9 5 3.1 8.3 1.5 12c1.6 3.7 5.4 7 10.5 7s8.9-3.3 10.5-7C20.9 8.3 17.1 5 12 5Z"
+                    stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6" />
+                </svg>
+                <svg class="icon-eye icon-eye-closed" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M3 3l18 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                  <path
+                    d="M9.5 5.6C10.3 5.3 11.1 5 12 5c5.1 0 8.9 3.3 10.5 7-.6 1.2-1.4 2.3-2.4 3.2m-6.7 2.1c-.5.1-1 .1-1.4.1-5.1 0-8.9-3.3-10.5-7 1-2.3 3-4.3 5.5-5.5"
+                    stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+                    fill="none" />
+                  <path d="M14.5 14.5a3 3 0 0 1-4.2-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                    stroke-linejoin="round" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <p class="settings-input-hint">用于调用魔搭 ModelScope 平台。</p>
+          </div>
+
+          <div class="settings-input-field">
+            <label for="api-key-qwen" class="settings-input-label">Qwen API Key</label>
+            <div class="settings-input-control">
+              <input type="password" id="api-key-qwen" class="settings-input" placeholder="输入 Qwen Key"
+                autocomplete="off" autocapitalize="none" spellcheck="false" data-settings-key="qwenApiKey">
+              <button type="button" class="settings-input-visibility-toggle" data-target-input="api-key-qwen"
+                data-platform-name="Qwen" aria-label="显示 Qwen API Key" aria-pressed="false">
+                <svg class="icon-eye icon-eye-open" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M12 5C6.9 5 3.1 8.3 1.5 12c1.6 3.7 5.4 7 10.5 7s8.9-3.3 10.5-7C20.9 8.3 17.1 5 12 5Z"
+                    stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6" />
+                </svg>
+                <svg class="icon-eye icon-eye-closed" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M3 3l18 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                  <path
+                    d="M9.5 5.6C10.3 5.3 11.1 5 12 5c5.1 0 8.9 3.3 10.5 7-.6 1.2-1.4 2.3-2.4 3.2m-6.7 2.1c-.5.1-1 .1-1.4.1-5.1 0-8.9-3.3-10.5-7 1-2.3 3-4.3 5.5-5.5"
+                    stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+                    fill="none" />
+                  <path d="M14.5 14.5a3 3 0 0 1-4.2-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                    stroke-linejoin="round" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <p class="settings-input-hint">用于通义千问开放平台。</p>
+          </div>
+
+          <div class="settings-input-field">
+            <label for="api-key-kimi" class="settings-input-label">Kimi API Key</label>
+            <div class="settings-input-control">
+              <input type="password" id="api-key-kimi" class="settings-input" placeholder="输入 Kimi Key"
+                autocomplete="off" autocapitalize="none" spellcheck="false" data-settings-key="kimiApiKey">
+              <button type="button" class="settings-input-visibility-toggle" data-target-input="api-key-kimi"
+                data-platform-name="Kimi" aria-label="显示 Kimi API Key" aria-pressed="false">
+                <svg class="icon-eye icon-eye-open" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M12 5C6.9 5 3.1 8.3 1.5 12c1.6 3.7 5.4 7 10.5 7s8.9-3.3 10.5-7C20.9 8.3 17.1 5 12 5Z"
+                    stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6" />
+                </svg>
+                <svg class="icon-eye icon-eye-closed" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M3 3l18 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                  <path
+                    d="M9.5 5.6C10.3 5.3 11.1 5 12 5c5.1 0 8.9 3.3 10.5 7-.6 1.2-1.4 2.3-2.4 3.2m-6.7 2.1c-.5.1-1 .1-1.4.1-5.1 0-8.9-3.3-10.5-7 1-2.3 3-4.3 5.5-5.5"
+                    stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+                    fill="none" />
+                  <path d="M14.5 14.5a3 3 0 0 1-4.2-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                    stroke-linejoin="round" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <p class="settings-input-hint">用于调用 Moonshot Kimi 服务。</p>
+          </div>
+
+          <div class="settings-input-field">
+            <label for="api-key-claude" class="settings-input-label">Claude API Key</label>
+            <div class="settings-input-control">
+              <input type="password" id="api-key-claude" class="settings-input" placeholder="输入 Claude Key"
+                autocomplete="off" autocapitalize="none" spellcheck="false" data-settings-key="claudeApiKey">
+              <button type="button" class="settings-input-visibility-toggle" data-target-input="api-key-claude"
+                data-platform-name="Claude" aria-label="显示 Claude API Key" aria-pressed="false">
+                <svg class="icon-eye icon-eye-open" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M12 5C6.9 5 3.1 8.3 1.5 12c1.6 3.7 5.4 7 10.5 7s8.9-3.3 10.5-7C20.9 8.3 17.1 5 12 5Z"
+                    stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6" />
+                </svg>
+                <svg class="icon-eye icon-eye-closed" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M3 3l18 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                  <path
+                    d="M9.5 5.6C10.3 5.3 11.1 5 12 5c5.1 0 8.9 3.3 10.5 7-.6 1.2-1.4 2.3-2.4 3.2m-6.7 2.1c-.5.1-1 .1-1.4.1-5.1 0-8.9-3.3-10.5-7 1-2.3 3-4.3 5.5-5.5"
+                    stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+                    fill="none" />
+                  <path d="M14.5 14.5a3 3 0 0 1-4.2-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                    stroke-linejoin="round" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <p class="settings-input-hint">用于访问 Anthropic Claude 模型。</p>
+          </div>
+
+          <div class="settings-input-field">
+            <label for="api-key-siliconflw" class="settings-input-label">SiliconFlow API Key</label>
+            <div class="settings-input-control">
+              <input type="password" id="api-key-siliconflw" class="settings-input" placeholder="输入 SiliconFlow Key"
+                autocomplete="off" autocapitalize="none" spellcheck="false" data-settings-key="siliconflwApiKey">
+              <button type="button" class="settings-input-visibility-toggle" data-target-input="api-key-siliconflw"
+                data-platform-name="SiliconFlow" aria-label="显示 SiliconFlow API Key" aria-pressed="false">
+                <svg class="icon-eye icon-eye-open" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M12 5C6.9 5 3.1 8.3 1.5 12c1.6 3.7 5.4 7 10.5 7s8.9-3.3 10.5-7C20.9 8.3 17.1 5 12 5Z"
+                    stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6" />
+                </svg>
+                <svg class="icon-eye icon-eye-closed" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M3 3l18 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                  <path
+                    d="M9.5 5.6C10.3 5.3 11.1 5 12 5c5.1 0 8.9 3.3 10.5 7-.6 1.2-1.4 2.3-2.4 3.2m-6.7 2.1c-.5.1-1 .1-1.4.1-5.1 0-8.9-3.3-10.5-7 1-2.3 3-4.3 5.5-5.5"
+                    stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+                    fill="none" />
+                  <path d="M14.5 14.5a3 3 0 0 1-4.2-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                    stroke-linejoin="round" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <p class="settings-input-hint">用于调用 SiliconFlow 平台模型。</p>
+          </div>
+        </div>
+      </section>
       </section>
     </div>
     <!-- 数据库页面 -->

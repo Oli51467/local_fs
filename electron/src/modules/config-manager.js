@@ -13,6 +13,15 @@ class ConfigManager extends EventEmitter {
     this.settingsDir = this.resolveSettingsDir();
     this.settingsPath = path.join(this.settingsDir, 'settings.json');
     this.legacySettingsPath = path.join(__dirname, '..', '..', 'settings.json');
+    this.defaultConfig = {
+      darkMode: false,
+      openaiApiKey: '',
+      modelscopeApiKey: '',
+      qwenApiKey: '',
+      kimiApiKey: '',
+      claudeApiKey: '',
+      siliconflwApiKey: ''
+    };
 
     this.ensureSettingsDirExists();
     this.migrateLegacySettingsIfNeeded();
@@ -60,20 +69,17 @@ class ConfigManager extends EventEmitter {
     try {
       if (fs.existsSync(this.settingsPath)) {
         const configData = fs.readFileSync(this.settingsPath, 'utf-8');
-        this.config = JSON.parse(configData);
+        const parsed = JSON.parse(configData);
+        this.config = { ...this.defaultConfig, ...parsed };
         //console.log('配置已加载:', this.config);
       } else {
         // 创建默认配置
-        this.config = {
-          darkMode: false
-        };
+        this.config = { ...this.defaultConfig };
         this.saveConfig();
       }
     } catch (error) {
       console.error('加载配置失败:', error);
-      this.config = {
-        darkMode: false
-      };
+      this.config = { ...this.defaultConfig };
     }
   }
 

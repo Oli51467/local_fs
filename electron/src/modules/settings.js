@@ -35,6 +35,33 @@ class SettingsModule {
     this.retrievalStatusTimer = null;
     this.retrievalValidationError = null;
     this.retrievalStatusContext = null;
+
+    this.apiStatusEl = document.getElementById('api-settings-status');
+    this.apiSaveBtn = document.getElementById('api-settings-save');
+    this.apiInputs = {
+      openaiApiKey: document.getElementById('api-key-openai'),
+      modelscopeApiKey: document.getElementById('api-key-modelscope'),
+      qwenApiKey: document.getElementById('api-key-qwen'),
+      kimiApiKey: document.getElementById('api-key-kimi'),
+      claudeApiKey: document.getElementById('api-key-claude'),
+      siliconflwApiKey: document.getElementById('api-key-siliconflw')
+    };
+    this.apiVisibilityControllers = [];
+    this.apiSettings = {
+      openaiApiKey: '',
+      modelscopeApiKey: '',
+      qwenApiKey: '',
+      kimiApiKey: '',
+      claudeApiKey: '',
+      siliconflwApiKey: ''
+    };
+    this.apiSettingsOriginal = { ...this.apiSettings };
+    this.apiSettingsKeys = Object.keys(this.apiSettings);
+    this.apiSettingsDirty = false;
+    this.apiSettingsLoading = false;
+    this.apiStatusTimer = null;
+
+    this.currentSettings = {};
     
     this.init();
   }
@@ -59,6 +86,10 @@ class SettingsModule {
         console.log('收到配置更新:', newConfig);
         this.isDarkMode = newConfig.darkMode || false;
         this.applyTheme();
+        this.currentSettings = { ...this.currentSettings, ...newConfig };
+        if (!this.apiSettingsDirty) {
+          this.updateApiSettingsFromConfig(newConfig, { replaceOriginal: true, silent: true, resetVisibility: true });
+        }
         // 不需要保存，因为配置已经在主进程中更新了
       });
     }
@@ -87,6 +118,7 @@ class SettingsModule {
     
     // 搜索按钮点击事件已在renderer.js中处理，这里不需要重复绑定
 
+    this.bindApiSettingsEvents();
     this.bindRetrievalEvents();
   }
 
@@ -109,8 +141,11 @@ class SettingsModule {
   async loadSettings() {
     try {
       const settings = await window.fsAPI.getSettings();
-      this.isDarkMode = settings.darkMode || false;
+      this.currentSettings = settings || {};
+      this.isDarkMode = Boolean(settings?.darkMode);
       this.applyTheme();
+      this.updateApiSettingsFromConfig(settings, { replaceOriginal: true, silent: true, resetVisibility: true });
+      this.updateApiSaveButtonState();
     } catch (error) {
       console.error('加载设置失败:', error);
     }
@@ -119,11 +154,285 @@ class SettingsModule {
   /**
    * 保存设置
    */
-  async saveSettings() {
+  async saveSettings(overrides = {}) {
+    const payload = {
+      darkMode: this.isDarkMode,
+      ...overrides
+    };
+    const cleanedPayload = {};
+    Object.keys(payload).forEach((key) => {
+      if (payload[key] !== undefined) {
+        cleanedPayload[key] = payload[key];
+      }
+    });
+
     try {
-      await window.fsAPI.saveSettings({ darkMode: this.isDarkMode });
+      const result = await window.fsAPI.saveSettings(cleanedPayload);
+      if (!result || result.success !== false) {
+        this.currentSettings = { ...this.currentSettings, ...cleanedPayload };
+      }
+      return result;
     } catch (error) {
       console.error('保存设置失败:', error);
+      return { success: false, error: error?.message || error };
+    }
+  }
+
+  bindApiSettingsEvents() {
+    const handleInput = (event) => {
+      const target = event?.target;
+      const settingsKey = target?.dataset?.settingsKey;
+      if (!settingsKey) {
+        return;
+      }
+      this.handleApiInputChange(settingsKey, target.value);
+    };
+
+    const handleBlur = (event) => {
+      const target = event?.target;
+      const settingsKey = target?.dataset?.settingsKey;
+      if (!settingsKey) {
+        return;
+      }
+      const trimmed = target.value.trim();
+      if (trimmed !== target.value) {
+        target.value = trimmed;
+        this.handleApiInputChange(settingsKey, trimmed);
+      }
+    };
+
+    Object.entries(this.apiInputs).forEach(([key, inputEl]) => {
+      if (!inputEl) {
+        return;
+      }
+      inputEl.addEventListener('input', handleInput);
+      inputEl.addEventListener('blur', handleBlur);
+    });
+
+    this.setupApiVisibilityControllers();
+
+    if (this.apiSaveBtn) {
+      this.apiSaveBtn.addEventListener('click', () => {
+        this.saveApiSettings();
+      });
+    }
+
+    this.hideAllApiKeys();
+    this.updateApiInputValues();
+    this.updateApiSaveButtonState();
+  }
+
+  setupApiVisibilityControllers() {
+    this.apiVisibilityControllers = [];
+    const toggles = document.querySelectorAll('.settings-input-visibility-toggle');
+    toggles.forEach((button) => {
+      const inputId = button?.dataset?.targetInput;
+      const inputEl = inputId ? document.getElementById(inputId) : null;
+      if (!inputEl) {
+        button.disabled = true;
+        return;
+      }
+      const controller = { button, input: inputEl, visible: false };
+      this.apiVisibilityControllers.push(controller);
+      this.updateApiVisibility(controller, false);
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        if (button.disabled) {
+          return;
+        }
+        controller.visible = !controller.visible;
+        this.updateApiVisibility(controller, controller.visible);
+        if (controller.visible && !this.apiSettingsLoading) {
+          controller.input.focus({ preventScroll: true });
+          const valueLength = controller.input.value?.length ?? 0;
+          try {
+            controller.input.setSelectionRange(valueLength, valueLength);
+          } catch (error) {
+            // 某些输入类型不支持 setSelectionRange，忽略即可
+          }
+        }
+      });
+    });
+  }
+
+  updateApiVisibility(controller, shouldShow) {
+    if (!controller || !controller.input || !controller.button) {
+      return;
+    }
+    const nextType = shouldShow ? 'text' : 'password';
+    try {
+      controller.input.type = nextType;
+    } catch (error) {
+      controller.input.setAttribute('type', nextType);
+    }
+    controller.visible = shouldShow;
+    controller.button.classList.toggle('is-visible', shouldShow);
+    controller.button.setAttribute('aria-pressed', shouldShow ? 'true' : 'false');
+    const platform = controller.button.dataset?.platformName || '';
+    const prefix = shouldShow ? '隐藏' : '显示';
+    const suffix = platform ? ` ${platform} API Key` : ' API Key';
+    controller.button.setAttribute('aria-label', `${prefix}${suffix}`);
+  }
+
+  hideAllApiKeys() {
+    if (!this.apiVisibilityControllers || !this.apiVisibilityControllers.length) {
+      return;
+    }
+    this.apiVisibilityControllers.forEach((controller) => {
+      this.updateApiVisibility(controller, false);
+    });
+  }
+
+  handleApiInputChange(settingsKey, rawValue) {
+    if (!this.apiSettingsKeys.includes(settingsKey)) {
+      return;
+    }
+    this.apiSettings[settingsKey] = rawValue;
+    const wasDirty = this.apiSettingsDirty;
+    this.apiSettingsDirty = this.checkApiSettingsDirty();
+    this.updateApiSaveButtonState();
+    if (this.apiSettingsDirty) {
+      this.setApiStatus('有未更新的更改', 'info');
+    } else if (wasDirty) {
+      this.clearApiStatus();
+    }
+  }
+
+  checkApiSettingsDirty() {
+    return this.apiSettingsKeys.some((key) => {
+      const current = this.apiSettings[key] ?? '';
+      const original = this.apiSettingsOriginal[key] ?? '';
+      return current !== original;
+    });
+  }
+
+  updateApiSaveButtonState() {
+    const disableActions = this.apiSettingsLoading || !this.apiSettingsDirty;
+    if (this.apiSaveBtn) {
+      this.apiSaveBtn.disabled = disableActions;
+    }
+  }
+
+  setApiSettingsLoading(isLoading) {
+    this.apiSettingsLoading = Boolean(isLoading);
+    Object.values(this.apiInputs).forEach((inputEl) => {
+      if (inputEl) {
+        inputEl.disabled = this.apiSettingsLoading;
+      }
+    });
+    if (this.apiVisibilityControllers && this.apiVisibilityControllers.length) {
+      this.apiVisibilityControllers.forEach((controller) => {
+        if (controller?.button) {
+          controller.button.disabled = this.apiSettingsLoading;
+        }
+      });
+    }
+    this.updateApiSaveButtonState();
+  }
+
+  setApiStatus(message, status = 'info', options = {}) {
+    if (!this.apiStatusEl) {
+      return;
+    }
+    if (this.apiStatusTimer) {
+      clearTimeout(this.apiStatusTimer);
+      this.apiStatusTimer = null;
+    }
+    if (message) {
+      this.apiStatusEl.textContent = message;
+      this.apiStatusEl.dataset.status = status;
+    } else {
+      this.apiStatusEl.textContent = '';
+      this.apiStatusEl.removeAttribute('data-status');
+    }
+
+    const autoClear = options.autoClear;
+    if (autoClear) {
+      const delay = typeof autoClear === 'number' ? autoClear : 3200;
+      this.apiStatusTimer = window.setTimeout(() => {
+        this.clearApiStatus();
+      }, delay);
+    }
+  }
+
+  clearApiStatus() {
+    if (!this.apiStatusEl) {
+      return;
+    }
+    if (this.apiStatusTimer) {
+      clearTimeout(this.apiStatusTimer);
+      this.apiStatusTimer = null;
+    }
+    this.apiStatusEl.textContent = '';
+    this.apiStatusEl.removeAttribute('data-status');
+  }
+
+  updateApiInputValues() {
+    Object.entries(this.apiInputs).forEach(([key, inputEl]) => {
+      if (!inputEl) {
+        return;
+      }
+      inputEl.value = this.apiSettings[key] ?? '';
+    });
+  }
+
+  updateApiSettingsFromConfig(source = {}, options = {}) {
+    let changed = false;
+    const configSource = source || {};
+    this.apiSettingsKeys.forEach((key) => {
+      const incoming = configSource[key] !== undefined && configSource[key] !== null ? String(configSource[key]) : '';
+      if (this.apiSettings[key] !== incoming) {
+        this.apiSettings[key] = incoming;
+        changed = true;
+      }
+    });
+    if (changed || options.forceUpdateInputs) {
+      this.updateApiInputValues();
+    }
+    if (options.resetVisibility || options.replaceOriginal) {
+      this.hideAllApiKeys();
+    }
+    if (options.replaceOriginal) {
+      this.apiSettingsOriginal = { ...this.apiSettings };
+      this.apiSettingsDirty = false;
+      this.updateApiSaveButtonState();
+      if (!options.silent) {
+        this.clearApiStatus();
+      }
+    }
+  }
+
+  async saveApiSettings() {
+    if (!this.apiSettingsDirty || this.apiSettingsLoading) {
+      return;
+    }
+
+    const payload = {};
+    this.apiSettingsKeys.forEach((key) => {
+      const trimmed = (this.apiSettings[key] ?? '').trim();
+      this.apiSettings[key] = trimmed;
+      payload[key] = trimmed;
+    });
+
+    this.setApiSettingsLoading(true);
+    this.setApiStatus('正在更新...', 'info');
+
+    try {
+      const result = await this.saveSettings(payload);
+      if (result && result.success === false) {
+        this.setApiStatus('更新失败，请稍后重试。', 'error');
+        return;
+      }
+      this.apiSettingsOriginal = { ...this.apiSettings };
+      this.apiSettingsDirty = false;
+      this.updateApiSaveButtonState();
+      this.hideAllApiKeys();
+      this.setApiStatus('更新成功', 'success', { autoClear: 3200 });
+    } catch (error) {
+      console.error('更新 API Key 失败:', error);
+      this.setApiStatus('更新失败，请稍后重试。', 'error');
+    } finally {
+      this.setApiSettingsLoading(false);
     }
   }
 
