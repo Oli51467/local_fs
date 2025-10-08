@@ -16,7 +16,6 @@ class ChatModule {
     this.chatStatusTextEl = document.getElementById('chat-status-text');
     this.chatTitleEl = document.getElementById('chat-conversation-title');
     this.chatTimestampEl = document.getElementById('chat-conversation-updated');
-    this.chatHistoryToggleBtn = document.getElementById('chat-history-toggle');
 
     this.currentConversationId = null;
     this.conversations = [];
@@ -60,22 +59,9 @@ class ChatModule {
         this.startNewConversation();
       });
     }
-
-    if (this.chatHistoryToggleBtn) {
-      this.chatHistoryToggleBtn.addEventListener('click', () => {
-        this.toggleHistoryVisibility();
-      });
-    }
   }
 
-  toggleHistoryVisibility() {
-    if (!this.historyContainer) {
-      return;
-    }
-    this.historyVisible = !this.historyVisible;
-    this.historyContainer.style.display = this.historyVisible ? 'flex' : 'none';
-    this.updateHistoryToggleLabel();
-  }
+
 
   async enterChatMode() {
     await this.init();
@@ -86,6 +72,7 @@ class ChatModule {
       this.startNewConversation();
     }
     this.autoResizeTextarea();
+    this.showChatPage();
   }
 
   leaveChatMode() {
@@ -106,7 +93,6 @@ class ChatModule {
       this.historyContainer.style.display = 'flex';
       this.historyVisible = true;
     }
-    this.updateHistoryToggleLabel();
     if (this.chatInputEl) {
       setTimeout(() => this.chatInputEl.focus(), 50);
     }
@@ -120,7 +106,6 @@ class ChatModule {
       this.historyContainer.style.display = 'none';
       this.historyVisible = false;
     }
-    this.updateHistoryToggleLabel();
   }
 
   startNewConversation() {
@@ -197,9 +182,8 @@ class ChatModule {
 
       const metaEl = document.createElement('div');
       metaEl.className = 'chat-history-meta';
-      const updated = conversation.updated_time ? this.formatTimestamp(conversation.updated_time) : '';
       const count = typeof conversation.message_count === 'number' ? conversation.message_count : 0;
-      metaEl.innerHTML = `<span>${updated}</span><span>${count} 条</span>`;
+      metaEl.innerHTML = `<span>${count} 条</span>`;
 
       item.appendChild(titleEl);
       item.appendChild(metaEl);
@@ -276,7 +260,7 @@ class ChatModule {
     if (!this.messages.length) {
       const empty = document.createElement('div');
       empty.className = 'chat-empty-placeholder';
-      empty.textContent = '和 AI 开始一场新的对话吧。';
+      empty.textContent = '在时刻准备着。';
       this.chatMessagesEl.appendChild(empty);
       return;
     }
@@ -300,33 +284,8 @@ class ChatModule {
       const bubble = document.createElement('div');
       bubble.className = 'chat-bubble';
 
-      if (message.role === 'assistant' && message.metadata && Array.isArray(message.metadata.chunks)) {
-        const chunkList = document.createElement('div');
-        chunkList.className = 'chat-chunk-list';
-
-        message.metadata.chunks.forEach((chunk, index) => {
-          const item = document.createElement('div');
-          item.className = 'chat-chunk-item';
-
-          const meta = document.createElement('div');
-          meta.className = 'chat-chunk-meta';
-          const title = chunk.filename || chunk.file_path || `片段 ${index + 1}`;
-          const scoreText = typeof chunk.score === 'number' ? `相关度 ${chunk.score.toFixed(2)}` : '';
-          meta.textContent = `${title}${scoreText ? ` · ${scoreText}` : ''}`;
-
-          const content = document.createElement('div');
-          content.className = 'chat-chunk-content';
-          content.textContent = chunk.content || '';
-
-          item.appendChild(meta);
-          item.appendChild(content);
-          chunkList.appendChild(item);
-        });
-
-        bubble.appendChild(chunkList);
-      } else {
-        bubble.textContent = message.content || '';
-      }
+      // 直接显示AI回复内容，不使用内嵌卡片
+      bubble.textContent = message.content || '';
 
       header.appendChild(bubble);
       wrapper.appendChild(header);
@@ -434,12 +393,7 @@ class ChatModule {
     }
   }
 
-  updateHistoryToggleLabel() {
-    if (!this.chatHistoryToggleBtn) {
-      return;
-    }
-    this.chatHistoryToggleBtn.textContent = this.historyVisible ? '隐藏历史' : '显示历史';
-  }
+
 }
 
 window.ChatModule = ChatModule;
