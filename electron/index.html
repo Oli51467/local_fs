@@ -241,15 +241,20 @@
     <div id="chat-page" style="display: none;">
       <div id="chat-page-header">
         <div class="chat-page-header-info">
-          <h2 id="chat-conversation-title">新对话</h2>
+          <div class="chat-model-selector">
+            <button id="chat-model-button" class="chat-model-button" type="button" aria-haspopup="listbox" aria-expanded="false">
+              <span id="chat-model-button-text" class="chat-model-button-text">暂无可用模型</span>
+              <span class="chat-model-button-icon"></span>
+            </button>
+            <div id="chat-model-dropdown" class="chat-model-dropdown" role="listbox" aria-label="聊天模型列表"></div>
+          </div>
           <!-- 折叠状态下的展开按钮 -->
           <button id="collapsed-expand-btn" class="collapsed-expand-btn" style="display: none;">
             <!-- 展开按钮图标将通过JavaScript设置 -->
           </button>
           <span id="chat-conversation-updated" class="chat-timestamp"></span>
         </div>
-        <div class="chat-page-header-actions">
-        </div>
+        <div class="chat-page-header-actions"></div>
       </div>
       <div id="chat-messages-container">
         <div id="chat-messages"></div>
@@ -272,7 +277,13 @@
       <div class="model-page">
         <section class="model-content">
           <div class="model-content-header">
-            <h2 id="model-provider-title">模型库</h2>
+            <div class="model-header-titles">
+              <h2 id="model-provider-title">模型库</h2>
+            </div>
+            <button id="model-add-btn" class="model-add-btn" type="button" aria-label="添加模型">
+              <span class="model-add-btn__icon">+</span>
+              <span>添加</span>
+            </button>
           </div>
           <div id="model-card-container" class="model-card-container"></div>
         </section>

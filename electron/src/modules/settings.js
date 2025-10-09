@@ -62,6 +62,7 @@ class SettingsModule {
     this.apiStatusTimer = null;
 
     this.currentSettings = {};
+    this.customModels = [];
     
     this.init();
   }
@@ -90,6 +91,7 @@ class SettingsModule {
         if (!this.apiSettingsDirty) {
           this.updateApiSettingsFromConfig(newConfig, { replaceOriginal: true, silent: true, resetVisibility: true });
         }
+        this.customModels = this.normalizeCustomModels(newConfig?.customModels);
         // 不需要保存，因为配置已经在主进程中更新了
       });
     }
@@ -146,6 +148,7 @@ class SettingsModule {
       this.applyTheme();
       this.updateApiSettingsFromConfig(settings, { replaceOriginal: true, silent: true, resetVisibility: true });
       this.updateApiSaveButtonState();
+      this.customModels = this.normalizeCustomModels(settings?.customModels);
     } catch (error) {
       console.error('加载设置失败:', error);
     }
@@ -157,6 +160,7 @@ class SettingsModule {
   async saveSettings(overrides = {}) {
     const payload = {
       darkMode: this.isDarkMode,
+      customModels: this.customModels,
       ...overrides
     };
     const cleanedPayload = {};
@@ -842,6 +846,52 @@ class SettingsModule {
     this.isDarkMode = darkMode;
     this.applyTheme();
     await this.saveSettings();
+  }
+
+  getApiKey(key) {
+    if (!key) {
+      return '';
+    }
+    const normalizedKey = String(key);
+    if (this.apiSettings && Object.prototype.hasOwnProperty.call(this.apiSettings, normalizedKey)) {
+      const stored = this.apiSettings[normalizedKey];
+      if (stored && stored.trim) {
+        const trimmed = stored.trim();
+        if (trimmed) {
+          return trimmed;
+        }
+      }
+    }
+
+    const inputEl = this.apiInputs ? this.apiInputs[normalizedKey] : null;
+    if (inputEl && typeof inputEl.value === 'string') {
+      return inputEl.value.trim();
+    }
+
+    return '';
+  }
+
+  normalizeCustomModels(models) {
+    if (!Array.isArray(models)) {
+      return [];
+    }
+    return models.map((model) => ({ ...model })).filter((model) => model && model.modelId);
+  }
+
+  getCustomModels() {
+    return this.customModels.map((model) => ({ ...model }));
+  }
+
+  async updateCustomModels(models) {
+    const sanitized = this.normalizeCustomModels(models);
+    if (JSON.stringify(sanitized) === JSON.stringify(this.customModels)) {
+      return;
+    }
+    this.customModels = sanitized;
+    const result = await this.saveSettings({ customModels: this.customModels });
+    if (result && result.success === false) {
+      console.error('保存模型列表失败:', result.error || '未知错误');
+    }
   }
 }
 

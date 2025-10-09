@@ -271,7 +271,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     databaseModule = new DatabaseModule();
     
-    modelModule = new ModelModule();
+    modelModule = new ModelModule({
+      getSettingsModule: () => settingsModule
+    });
     modelModule.init();
     window.modelModule = modelModule;
     

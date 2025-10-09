@@ -13,7 +13,8 @@ class SettingsBackendModule {
       qwenApiKey: '',
       kimiApiKey: '',
       claudeApiKey: '',
-      siliconflwApiKey: ''
+      siliconflwApiKey: '',
+      customModels: []
     };
     
     // 初始化配置管理器

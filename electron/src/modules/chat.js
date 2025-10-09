@@ -15,6 +15,9 @@ class ChatModule {
     this.chatStatusTextEl = document.getElementById('chat-status-text');
     this.chatTitleEl = document.getElementById('chat-conversation-title');
     this.chatTimestampEl = document.getElementById('chat-conversation-updated');
+    this.chatModelButtonEl = document.getElementById('chat-model-button');
+    this.chatModelButtonTextEl = document.getElementById('chat-model-button-text');
+    this.chatModelDropdownEl = document.getElementById('chat-model-dropdown');
 
     this.currentConversationId = null;
     this.conversations = [];
@@ -25,6 +28,12 @@ class ChatModule {
     this.pendingRequest = null;
     this.chatInputBaseHeight = null;
     this.chatInputMaxHeight = null;
+    this.availableModels = [];
+    this.selectedModel = null;
+    this.modelDropdownVisible = false;
+    this.modelRegistryHandler = (event) => this.handleModelRegistryChanged(event);
+    this.handleDocumentClick = (event) => this.handleGlobalClick(event);
+    this.handleDocumentKeydown = (event) => this.handleGlobalKeydown(event);
   }
 
   async init() {
@@ -33,6 +42,7 @@ class ChatModule {
     }
 
     this.bindEvents();
+    this.updateModelSelect(this.getInitialModelList());
     this.initialized = true;
   }
 
@@ -73,6 +83,226 @@ class ChatModule {
         this.toggleHistoryCollapse();
       });
     }
+
+    if (this.chatModelButtonEl) {
+      this.chatModelButtonEl.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.toggleModelDropdown();
+      });
+    }
+
+    if (this.chatModelDropdownEl) {
+      this.chatModelDropdownEl.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+    }
+
+    document.addEventListener('click', this.handleDocumentClick);
+    document.addEventListener('keydown', this.handleDocumentKeydown);
+    document.addEventListener('modelRegistryChanged', this.modelRegistryHandler);
+  }
+
+  getInitialModelList() {
+    if (window.modelModule && typeof window.modelModule.getModels === 'function') {
+      try {
+        const models = window.modelModule.getModels();
+        return Array.isArray(models) ? models : [];
+      } catch (error) {
+        console.warn('获取初始模型列表失败:', error);
+      }
+    }
+    return [];
+  }
+
+  handleModelRegistryChanged(event) {
+    const models = event?.detail?.models || [];
+    this.updateModelSelect(models);
+  }
+
+  updateModelSelect(models) {
+    if (!this.chatModelButtonEl || !this.chatModelDropdownEl || !this.chatModelButtonTextEl) {
+      return;
+    }
+
+    this.closeModelDropdown();
+
+    this.availableModels = Array.isArray(models) ? models.map((model) => ({ ...model })) : [];
+    const previousKey = this.selectedModel ? this.getModelKey(this.selectedModel) : '';
+    let effectiveKey = previousKey;
+
+    if (effectiveKey && !this.availableModels.some((model) => this.getModelKey(model) === effectiveKey)) {
+      this.selectedModel = null;
+      effectiveKey = '';
+    }
+
+    if (!effectiveKey && this.availableModels.length) {
+      const firstModel = this.availableModels[0];
+      this.selectedModel = { ...firstModel };
+      effectiveKey = this.getModelKey(firstModel);
+    }
+
+    this.renderModelDropdown(effectiveKey);
+    this.updateModelButtonState(effectiveKey);
+  }
+
+  renderModelDropdown(activeKey) {
+    if (!this.chatModelDropdownEl) {
+      return;
+    }
+
+    this.chatModelDropdownEl.innerHTML = '';
+
+    if (!this.availableModels.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-model-dropdown-empty';
+      empty.textContent = '尚未添加模型';
+      this.chatModelDropdownEl.appendChild(empty);
+      return;
+    }
+
+    this.availableModels.forEach((model) => {
+      const key = this.getModelKey(model);
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'chat-model-option';
+      option.setAttribute('role', 'option');
+      option.dataset.modelKey = key;
+      if (key === activeKey) {
+        option.classList.add('active');
+      }
+
+      const label = document.createElement('div');
+      label.className = 'chat-model-option-label';
+
+      const name = document.createElement('span');
+      name.className = 'chat-model-option-name';
+      name.textContent = model.name || '未命名模型';
+      label.appendChild(name);
+
+      const provider = document.createElement('span');
+      provider.className = 'chat-model-option-provider';
+      provider.textContent = model.providerName || model.sourceId || '自定义';
+      label.appendChild(provider);
+
+      const check = document.createElement('span');
+      check.className = 'chat-model-option-check';
+      check.textContent = '✓';
+
+      option.appendChild(label);
+      option.appendChild(check);
+
+      option.addEventListener('click', () => {
+        this.selectModel(model);
+      });
+
+      this.chatModelDropdownEl.appendChild(option);
+    });
+  }
+
+  updateModelButtonState(activeKey) {
+    if (!this.chatModelButtonEl || !this.chatModelButtonTextEl) {
+      return;
+    }
+
+    const hasModels = this.availableModels.length > 0;
+    this.chatModelButtonEl.disabled = !hasModels;
+
+    if (!hasModels) {
+      this.selectedModel = null;
+      this.chatModelButtonTextEl.textContent = '暂无可用模型';
+      this.chatModelButtonEl.setAttribute('aria-expanded', 'false');
+      this.closeModelDropdown();
+      return;
+    }
+
+    if (!activeKey && this.availableModels.length) {
+      const firstModel = this.availableModels[0];
+      this.selectedModel = { ...firstModel };
+      activeKey = this.getModelKey(firstModel);
+      this.renderModelDropdown(activeKey);
+    }
+
+    const active = this.selectedModel || this.availableModels.find((model) => this.getModelKey(model) === activeKey);
+    if (active) {
+      this.selectedModel = { ...active };
+      this.chatModelButtonTextEl.textContent = active.name || '未命名模型';
+    } else {
+      this.selectedModel = null;
+      this.chatModelButtonTextEl.textContent = '请选择模型';
+    }
+
+    this.chatModelButtonEl.setAttribute('aria-expanded', this.modelDropdownVisible ? 'true' : 'false');
+  }
+
+  selectModel(model) {
+    this.selectedModel = model ? { ...model } : null;
+    const key = this.selectedModel ? this.getModelKey(this.selectedModel) : '';
+    this.updateModelButtonState(key);
+    this.renderModelDropdown(key);
+    this.closeModelDropdown();
+  }
+
+  getModelKey(model) {
+    if (!model) {
+      return '';
+    }
+    return `${model.sourceId || ''}::${model.modelId || ''}`;
+  }
+
+  toggleModelDropdown() {
+    if (this.chatModelButtonEl && this.chatModelButtonEl.disabled) {
+      return;
+    }
+
+    if (this.modelDropdownVisible) {
+      this.closeModelDropdown();
+    } else {
+      this.openModelDropdown();
+    }
+  }
+
+  openModelDropdown() {
+    if (!this.chatModelDropdownEl || !this.availableModels.length) {
+      return;
+    }
+    const activeKey = this.selectedModel ? this.getModelKey(this.selectedModel) : '';
+    this.renderModelDropdown(activeKey);
+    this.modelDropdownVisible = true;
+    this.chatModelDropdownEl.classList.add('visible');
+    if (this.chatModelButtonEl) {
+      this.chatModelButtonEl.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  closeModelDropdown() {
+    if (!this.chatModelDropdownEl) {
+      return;
+    }
+    this.modelDropdownVisible = false;
+    this.chatModelDropdownEl.classList.remove('visible');
+    if (this.chatModelButtonEl) {
+      this.chatModelButtonEl.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  handleGlobalClick(event) {
+    if (!this.modelDropdownVisible) {
+      return;
+    }
+    const target = event.target;
+    if (this.chatModelButtonEl && this.chatModelButtonEl.contains(target)) {
+      return;
+    }
+    if (this.chatModelDropdownEl && this.chatModelDropdownEl.contains(target)) {
+      return;
+    }
+    this.closeModelDropdown();
+  }
+
+  handleGlobalKeydown(event) {
+    if (event.key === 'Escape' && this.modelDropdownVisible) {
+      this.closeModelDropdown();
+    }
   }
 
 
@@ -97,6 +327,7 @@ class ChatModule {
     if (this.chatStatusTextEl) {
       this.chatStatusTextEl.textContent = '';
     }
+    this.closeModelDropdown();
   }
 
   showChatPage() {
@@ -344,6 +575,10 @@ class ChatModule {
       conversation_id: this.currentConversationId,
       top_k: 5
     };
+
+    if (this.selectedModel && this.selectedModel.apiModel) {
+      payload.model_name = this.selectedModel.apiModel;
+    }
 
     try {
       this.pendingRequest = fetch(this.baseApiUrl, {
