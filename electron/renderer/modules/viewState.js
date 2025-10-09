@@ -10,16 +10,19 @@
   const dependencies = {
     getSettingsModule: () => global.settingsModule,
     getDatabaseModule: () => global.databaseModule,
+    getModelModule: () => global.modelModule,
     getFileTreeEl: () => document.getElementById('file-tree'),
     getFileTreeContainer: () => document.getElementById('file-tree-container'),
     getResizerEl: () => document.getElementById('file-tree-resizer'),
     getSearchAreaEl: () => document.getElementById('search-area'),
     getResourceTitleEl: () => document.getElementById('resource-title'),
     getDatabasePageEl: () => document.getElementById('database-page'),
+    getModelPageEl: () => document.getElementById('model-page'),
     getHeaderButtons: () => document.querySelectorAll('#file-tree-header > div > button'),
     getSearchButton: () => document.getElementById('search-btn'),
     getSearchInput: () => document.getElementById('search-input'),
     getDatabaseButton: () => document.getElementById('database-btn'),
+    getModelButton: () => document.getElementById('model-btn'),
     getToggleTreeButton: () => document.getElementById('toggle-tree'),
     getChatButton: () => document.getElementById('chat-btn'),
     getChatHistoryContainer: () => document.getElementById('chat-history-container'),
@@ -46,6 +49,18 @@
 
   function hideDatabasePage() {
     const page = dependencies.getDatabasePageEl && dependencies.getDatabasePageEl();
+    if (page) {
+      page.style.display = 'none';
+    }
+  }
+
+  function hideModelPage() {
+    const moduleInstance = dependencies.getModelModule ? dependencies.getModelModule() : null;
+    if (moduleInstance && typeof moduleInstance.hideModelPage === 'function') {
+      moduleInstance.hideModelPage();
+      return;
+    }
+    const page = dependencies.getModelPageEl && dependencies.getModelPageEl();
     if (page) {
       page.style.display = 'none';
     }
@@ -92,6 +107,7 @@
     }
 
     hideDatabasePage();
+    hideModelPage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
     if (fileTreeEl) {
@@ -138,6 +154,7 @@
     hideChatInterface();
 
     hideDatabasePage();
+    hideModelPage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
     if (fileTreeEl) {
@@ -185,6 +202,7 @@
     }
 
     hideDatabasePage();
+    hideModelPage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
     if (fileTreeEl) {
@@ -232,6 +250,51 @@
       Promise.resolve(chatModule.enterChatMode()).catch((error) => {
         console.error('进入对话模式失败:', error);
       });
+    }
+  }
+
+  function switchToModelMode() {
+    state.isSearchMode = false;
+    state.activeMode = 'model';
+
+    hideChatInterface();
+    hideDatabasePage();
+
+    const fileTreeEl = dependencies.getFileTreeEl();
+    if (fileTreeEl) {
+      fileTreeEl.style.display = 'none';
+    }
+
+    const fileTreeContainer = dependencies.getFileTreeContainer ? dependencies.getFileTreeContainer() : null;
+    if (fileTreeContainer) {
+      fileTreeContainer.style.display = 'none';
+    }
+
+    const searchArea = dependencies.getSearchAreaEl();
+    if (searchArea) {
+      searchArea.style.display = 'none';
+    }
+
+    const resourceTitle = dependencies.getResourceTitleEl();
+    if (resourceTitle) {
+      resourceTitle.textContent = '模型';
+    }
+
+    updateHeaderButtons('none');
+
+    const fileContent = dependencies.getFileContentEl ? dependencies.getFileContentEl() : null;
+    if (fileContent) {
+      fileContent.style.display = 'none';
+    }
+
+    const modelModule = dependencies.getModelModule ? dependencies.getModelModule() : null;
+    if (modelModule && typeof modelModule.showModelPage === 'function') {
+      modelModule.showModelPage();
+    } else {
+      const modelPageEl = dependencies.getModelPageEl ? dependencies.getModelPageEl() : null;
+      if (modelPageEl) {
+        modelPageEl.style.display = 'flex';
+      }
     }
   }
 
@@ -333,10 +396,17 @@
       });
     }
 
+    const modelBtn = dependencies.getModelButton ? dependencies.getModelButton() : null;
+    if (modelBtn) {
+      modelBtn.addEventListener('click', () => {
+        switchToModelMode();
+      });
+    }
+
     const toggleTreeBtn = dependencies.getToggleTreeButton();
     if (toggleTreeBtn) {
       toggleTreeBtn.addEventListener('click', () => {
-        if (state.isSearchMode || state.activeMode === 'chat') {
+        if (state.isSearchMode || state.activeMode === 'chat' || state.activeMode === 'model') {
           switchToFileMode();
         }
       });
@@ -362,12 +432,14 @@
     switchToSearchMode,
     switchToFileMode,
     switchToChatMode,
+    switchToModelMode,
     isSearchMode: getIsSearchMode
   };
 
   global.switchToSearchMode = switchToSearchMode;
   global.switchToFileMode = switchToFileMode;
   global.switchToChatMode = switchToChatMode;
+  global.switchToModelMode = switchToModelMode;
   Object.defineProperty(global, 'isSearchMode', {
     configurable: true,
     get: () => state.isSearchMode

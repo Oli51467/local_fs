@@ -1,0 +1,62 @@
+directories:
+  output: dist
+  buildResources: build
+appId: com.electron.python.app
+productName: Electron Python App
+files:
+  - filter:
+      - '**/*'
+      - '!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}'
+      - '!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}'
+      - '!**/node_modules/*.d.ts'
+      - '!**/node_modules/.bin'
+      - '!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}'
+      - '!.editorconfig'
+      - '!**/._*'
+      - '!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}'
+      - '!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}'
+      - '!**/{appveyor.yml,.travis.yml,circle.yml}'
+      - '!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}'
+extraResources:
+  - from: python_backend
+    to: python_backend
+    filter:
+      - '**/*'
+  - from: static
+    to: static
+    filter:
+      - '**/*'
+  - from: meta
+    to: meta
+    filter:
+      - '**/*'
+  - from: data
+    to: data
+    filter:
+      - '**/*'
+  - from: dist/assets
+    to: dist/assets
+    filter:
+      - '**/*'
+mac:
+  category: public.app-category.utilities
+  target:
+    - dmg
+win:
+  target:
+    - nsis
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Utility
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+asarUnpack:
+  - data/**
+  - dist/assets/**
+  - meta/**
+  - python_backend/**
+  - static/**
+electronVersion: 26.6.10

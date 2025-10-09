@@ -96,7 +96,7 @@
     ]
   },
   "devDependencies": {
-    "electron": "^26.0.0",
+    "electron": "^26.6.10",
     "electron-builder": "^24.13.3",
     "electronmon": "^2.0.2"
   },

@@ -237,6 +237,11 @@ class DatabaseModule {
     document.getElementById('settings-page').style.display = 'none';
     document.getElementById('file-tree-container').style.display = 'none';
     
+    const modelPage = document.getElementById('model-page');
+    if (modelPage) {
+      modelPage.style.display = 'none';
+    }
+    
     // 显示数据库页面
     document.getElementById('database-page').style.display = 'block';
     

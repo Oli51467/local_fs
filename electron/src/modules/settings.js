@@ -777,6 +777,11 @@ class SettingsModule {
       chatPage.style.display = 'none';
     }
 
+    const modelPage = document.getElementById('model-page');
+    if (modelPage) {
+      modelPage.style.display = 'none';
+    }
+
     const chatHistory = document.getElementById('chat-history-container');
     if (chatHistory) {
       chatHistory.style.display = 'none';
@@ -804,6 +809,11 @@ class SettingsModule {
     const chatPage = document.getElementById('chat-page');
     if (chatPage) {
       chatPage.style.display = 'none';
+    }
+
+    const modelPage = document.getElementById('model-page');
+    if (modelPage) {
+      modelPage.style.display = 'none';
     }
 
     const chatHistory = document.getElementById('chat-history-container');

@@ -123,6 +123,7 @@ function renderIcons() {
     { id: 'file-icon', icon: icons.file },
     { id: 'search-icon', icon: icons.search },
     { id: 'chat-icon', icon: icons.chat },
+    { id: 'model-icon', icon: icons.model },
     { id: 'settings-icon', icon: icons.settings },
     { id: 'database-icon', icon: icons.database }
   ];
@@ -158,10 +159,12 @@ let settingsModule;
 let explorerModule;
 let databaseModule;
 let chatModule;
+let modelModule;
 let splashScreen;
 
 configureViewStateModule({
   getSettingsModule: () => settingsModule,
+  getModelModule: () => modelModule,
   getDatabaseModule: () => databaseModule,
   getFileTreeEl: () => fileTreeEl,
   getFileTreeContainer: () => fileTreeContainer,
@@ -169,10 +172,12 @@ configureViewStateModule({
   getSearchAreaEl: () => document.getElementById('search-area'),
   getResourceTitleEl: () => document.getElementById('resource-title'),
   getDatabasePageEl: () => document.getElementById('database-page'),
+  getModelPageEl: () => document.getElementById('model-page'),
   getHeaderButtons: () => document.querySelectorAll('#file-tree-header > div > button'),
   getSearchButton: () => document.getElementById('search-btn'),
   getSearchInput: () => document.getElementById('search-input'),
   getDatabaseButton: () => document.getElementById('database-btn'),
+  getModelButton: () => document.getElementById('model-btn'),
   getToggleTreeButton: () => document.getElementById('toggle-tree'),
   getChatButton: () => document.getElementById('chat-btn'),
   getChatHistoryContainer: () => document.getElementById('chat-history-container'),
@@ -265,6 +270,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     await settingsModule.init();
     
     databaseModule = new DatabaseModule();
+    
+    modelModule = new ModelModule();
+    modelModule.init();
+    window.modelModule = modelModule;
     
     // 默认显示文件页面
     settingsModule.showFilePage();

@@ -174,6 +174,9 @@
       <button id="chat-btn">
         <div id="chat-icon"></div>
       </button>
+      <button id="model-btn">
+        <div id="model-icon"></div>
+      </button>
       <button id="settings-btn">
         <div id="settings-icon"></div>
       </button>
@@ -261,6 +264,18 @@
             </svg>
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- 模型页面 -->
+    <div id="model-page" style="display: none;">
+      <div class="model-page">
+        <section class="model-content">
+          <div class="model-content-header">
+            <h2 id="model-provider-title">模型库</h2>
+          </div>
+          <div id="model-card-container" class="model-card-container"></div>
+        </section>
       </div>
     </div>
 
@@ -657,6 +672,7 @@
   <link rel="stylesheet" href="./src/styles/explorer.css">
   <link rel="stylesheet" href="./src/styles/chat.css">
   <link rel="stylesheet" href="./src/styles/database.css">
+  <link rel="stylesheet" href="./src/styles/model.css">
 
   <script src="./src/modules/splash.js"></script>
   <script src="./src/modules/tab-manager.js"></script>
@@ -669,6 +685,7 @@
   <script src="./src/components/fileViewer.js"></script>
   <script src="./src/modules/settings.js"></script>
   <script src="./src/modules/explorer.js"></script>
+  <script src="./src/modules/model.js"></script>
   <script src="./src/modules/database.js"></script>
   <script src="./src/modules/chat.js"></script>
   <script src="./icons.js"></script>
