@@ -2,6 +2,7 @@ import sqlite3
 import json
 import logging
 import pathlib
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from config.config import DatabaseConfig
@@ -19,6 +20,7 @@ class SQLiteManager:
     def init_database(self):
         """初始化数据库表结构"""
         with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
             # 启用外键约束
@@ -89,7 +91,9 @@ class SQLiteManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
                     created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    messages_json TEXT DEFAULT '[]',
+                    message_seq INTEGER DEFAULT 0
                 )
             """)
 
@@ -107,6 +111,75 @@ class SQLiteManager:
 
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_time)")
+
+            cursor.execute("PRAGMA table_info(conversations)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            if 'messages_json' not in existing_columns:
+                cursor.execute("ALTER TABLE conversations ADD COLUMN messages_json TEXT DEFAULT '[]'")
+            if 'message_seq' not in existing_columns:
+                cursor.execute("ALTER TABLE conversations ADD COLUMN message_seq INTEGER DEFAULT 0")
+            cursor.execute("UPDATE conversations SET messages_json = '[]' WHERE messages_json IS NULL")
+            cursor.execute("UPDATE conversations SET message_seq = 0 WHERE message_seq IS NULL")
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS message_registry (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    last_message_id INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            cursor.execute(
+                "INSERT OR IGNORE INTO message_registry (id, last_message_id) VALUES (1, 0)"
+            )
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM conversations WHERE messages_json IS NOT NULL AND messages_json != '[]'"
+            )
+            populated_conversations = cursor.fetchone()[0]
+            if populated_conversations == 0:
+                cursor.execute(
+                    """
+                    SELECT id, conversation_id, role, content, metadata, created_time
+                    FROM chat_messages
+                    ORDER BY conversation_id ASC, created_time ASC, id ASC
+                    """
+                )
+                rows = cursor.fetchall()
+                if rows:
+                    conversations_payload = {}
+                    last_message_id = 0
+                    for row in rows:
+                        conv_id = row['conversation_id']
+                        try:
+                            metadata = json.loads(row['metadata']) if row['metadata'] else None
+                        except json.JSONDecodeError:
+                            metadata = None
+                        message = {
+                            'id': row['id'],
+                            'conversation_id': conv_id,
+                            'role': row['role'],
+                            'content': row['content'],
+                            'metadata': metadata,
+                            'created_time': row['created_time']
+                        }
+                        conversations_payload.setdefault(conv_id, []).append(message)
+                        last_message_id = max(last_message_id, row['id'])
+
+                    for conv_id, messages in conversations_payload.items():
+                        cursor.execute(
+                            """
+                            UPDATE conversations
+                            SET messages_json = ?, message_seq = ?, updated_time = COALESCE(updated_time, CURRENT_TIMESTAMP)
+                            WHERE id = ?
+                            """,
+                            (json.dumps(messages, ensure_ascii=False), len(messages), conv_id)
+                        )
+
+                    cursor.execute(
+                        "UPDATE message_registry SET last_message_id = ? WHERE id = 1",
+                        (last_message_id,)
+                    )
             
             conn.commit()
     
@@ -878,8 +951,8 @@ class SQLiteManager:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO conversations (title)
-                VALUES (?)
+                INSERT INTO conversations (title, messages_json, message_seq)
+                VALUES (?, '[]', 0)
                 """,
                 (normalized_title,)
             )
@@ -912,6 +985,17 @@ class SQLiteManager:
                 (conversation_id,)
             )
 
+    def delete_conversation(self, conversation_id: int) -> bool:
+        """删除指定会话及其关联消息"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM conversations WHERE id = ?",
+                (conversation_id,)
+            )
+            return cursor.rowcount > 0
+
     def get_conversation_by_id(self, conversation_id: int) -> Optional[Dict[str, Any]]:
         """根据ID获取会话信息"""
         with sqlite3.connect(self.db_path) as conn:
@@ -942,45 +1026,28 @@ class SQLiteManager:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT
-                    c.id,
-                    c.title,
-                    c.created_time,
-                    c.updated_time,
-                    (
-                        SELECT content
-                        FROM chat_messages m
-                        WHERE m.conversation_id = c.id
-                        ORDER BY m.created_time DESC, m.id DESC
-                        LIMIT 1
-                    ) AS last_message,
-                    (
-                        SELECT role
-                        FROM chat_messages m
-                        WHERE m.conversation_id = c.id
-                        ORDER BY m.created_time DESC, m.id DESC
-                        LIMIT 1
-                    ) AS last_role,
-                    (
-                        SELECT COUNT(*)
-                        FROM chat_messages m
-                        WHERE m.conversation_id = c.id
-                    ) AS message_count
-                FROM conversations c
-                ORDER BY c.updated_time DESC, c.id DESC
+                SELECT id, title, created_time, updated_time, messages_json
+                FROM conversations
+                ORDER BY updated_time DESC, id DESC
                 """
             )
 
             conversations = []
             for row in cursor.fetchall():
+                messages_raw = row['messages_json'] or '[]'
+                try:
+                    messages = json.loads(messages_raw)
+                except json.JSONDecodeError:
+                    messages = []
+                last_message = messages[-1] if messages else None
                 conversations.append({
                     'id': row['id'],
                     'title': row['title'],
                     'created_time': row['created_time'],
                     'updated_time': row['updated_time'],
-                    'last_message': row['last_message'],
-                    'last_role': row['last_role'],
-                    'message_count': row['message_count'] or 0
+                    'last_message': last_message.get('content') if last_message else None,
+                    'last_role': last_message.get('role') if last_message else None,
+                    'message_count': len(messages)
                 })
 
             return conversations
@@ -993,23 +1060,138 @@ class SQLiteManager:
         metadata: Optional[Dict[str, Any]] = None
     ) -> int:
         """插入一条聊天消息，并更新会话更新时间"""
-        metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
+        stored_metadata = None
+        if metadata is not None:
+            try:
+                stored_metadata = json.loads(json.dumps(metadata, ensure_ascii=False))
+            except (TypeError, ValueError) as exc:
+                logger.warning('消息元数据无法序列化，将被忽略: %s', exc)
+                stored_metadata = None
+
+        timestamp = datetime.utcnow().isoformat() + 'Z'
 
         with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
-                """
-                INSERT INTO chat_messages (conversation_id, role, content, metadata)
-                VALUES (?, ?, ?, ?)
-                """,
-                (conversation_id, role, content, metadata_json)
-            )
-            message_id = cursor.lastrowid
-            cursor.execute(
-                "UPDATE conversations SET updated_time = CURRENT_TIMESTAMP WHERE id = ?",
+                "SELECT messages_json, message_seq FROM conversations WHERE id = ?",
                 (conversation_id,)
             )
-            return message_id
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError(f"Conversation {conversation_id} does not exist")
+
+            messages_raw = row['messages_json'] or '[]'
+            try:
+                messages = json.loads(messages_raw)
+            except json.JSONDecodeError:
+                messages = []
+
+            cursor.execute("SELECT last_message_id FROM message_registry WHERE id = 1")
+            registry_row = cursor.fetchone()
+            last_global_id = registry_row['last_message_id'] if registry_row else 0
+            next_global_id = int(last_global_id or 0) + 1
+            cursor.execute(
+                "UPDATE message_registry SET last_message_id = ? WHERE id = 1",
+                (next_global_id,)
+            )
+
+            next_sequence = int(row['message_seq'] or 0) + 1
+            message_record = {
+                'id': next_global_id,
+                'conversation_id': conversation_id,
+                'role': role,
+                'content': content,
+                'metadata': stored_metadata,
+                'created_time': timestamp
+            }
+            messages.append(message_record)
+
+            cursor.execute(
+                """
+                UPDATE conversations
+                SET messages_json = ?, message_seq = ?, updated_time = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (json.dumps(messages, ensure_ascii=False), next_sequence, conversation_id)
+            )
+
+            return next_global_id
+
+    def update_chat_message(
+        self,
+        message_id: int,
+        content: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        conversation_id: Optional[int] = None
+    ) -> None:
+        """更新聊天消息内容或元信息"""
+        if content is None and metadata is None:
+            return
+
+        sanitized_metadata = None
+        if metadata is not None:
+            try:
+                sanitized_metadata = json.loads(json.dumps(metadata, ensure_ascii=False))
+            except (TypeError, ValueError) as exc:
+                logger.warning('消息元数据更新失败，无法序列化: %s', exc)
+                sanitized_metadata = None
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            target_row = None
+            target_conversation_id = conversation_id
+            if target_conversation_id is not None:
+                cursor.execute(
+                    "SELECT id, messages_json FROM conversations WHERE id = ?",
+                    (target_conversation_id,)
+                )
+                target_row = cursor.fetchone()
+            else:
+                cursor.execute("SELECT id, messages_json FROM conversations")
+                for row in cursor.fetchall():
+                    messages_raw = row['messages_json'] or '[]'
+                    try:
+                        messages = json.loads(messages_raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if any(msg.get('id') == message_id for msg in messages):
+                        target_row = row
+                        target_conversation_id = row['id']
+                        break
+
+            if not target_row or target_conversation_id is None:
+                return
+
+            messages_raw = target_row['messages_json'] or '[]'
+            try:
+                messages = json.loads(messages_raw)
+            except json.JSONDecodeError:
+                messages = []
+
+            updated = False
+            for message in messages:
+                if message.get('id') == message_id:
+                    if content is not None:
+                        message['content'] = content
+                    if metadata is not None:
+                        message['metadata'] = sanitized_metadata
+                    updated = True
+                    break
+
+            if not updated:
+                return
+
+            cursor.execute(
+                """
+                UPDATE conversations
+                SET messages_json = ?, updated_time = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (json.dumps(messages, ensure_ascii=False), target_conversation_id)
+            )
 
     def get_conversation_messages(self, conversation_id: int) -> List[Dict[str, Any]]:
         """获取指定会话的全部消息，按时间顺序排序"""
@@ -1017,66 +1199,49 @@ class SQLiteManager:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
-                """
-                SELECT id, conversation_id, role, content, metadata, created_time
-                FROM chat_messages
-                WHERE conversation_id = ?
-                ORDER BY created_time ASC, id ASC
-                """,
+                "SELECT messages_json FROM conversations WHERE id = ?",
                 (conversation_id,)
             )
+            row = cursor.fetchone()
+            if not row:
+                return []
 
-            messages = []
-            for row in cursor.fetchall():
-                metadata = None
-                if row['metadata']:
-                    try:
-                        metadata = json.loads(row['metadata'])
-                    except json.JSONDecodeError:
-                        metadata = None
-                messages.append({
-                    'id': row['id'],
-                    'conversation_id': row['conversation_id'],
-                    'role': row['role'],
-                    'content': row['content'],
-                    'metadata': metadata,
-                    'created_time': row['created_time']
-                })
+            try:
+                messages = json.loads(row['messages_json'] or '[]')
+            except json.JSONDecodeError:
+                messages = []
 
+            for message in messages:
+                message['conversation_id'] = conversation_id
             return messages
 
-    def get_chat_message(self, message_id: int) -> Optional[Dict[str, Any]]:
+    def get_chat_message(self, message_id: int, conversation_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """根据消息ID获取聊天消息"""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, conversation_id, role, content, metadata, created_time
-                FROM chat_messages
-                WHERE id = ?
-                """,
-                (message_id,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                return None
 
-            metadata = None
-            if row['metadata']:
+            if conversation_id is not None:
+                cursor.execute(
+                    "SELECT id, messages_json FROM conversations WHERE id = ?",
+                    (conversation_id,)
+                )
+                rows = cursor.fetchall()
+            else:
+                cursor.execute("SELECT id, messages_json FROM conversations")
+                rows = cursor.fetchall()
+
+            for row in rows:
                 try:
-                    metadata = json.loads(row['metadata'])
+                    messages = json.loads(row['messages_json'] or '[]')
                 except json.JSONDecodeError:
-                    metadata = None
+                    continue
+                for message in messages:
+                    if message.get('id') == message_id:
+                        message['conversation_id'] = row['id']
+                        return message
 
-            return {
-                'id': row['id'],
-                'conversation_id': row['conversation_id'],
-                'role': row['role'],
-                'content': row['content'],
-                'metadata': metadata,
-                'created_time': row['created_time']
-            }
+            return None
 
     def cleanup_all(self):
         """清理所有数据"""
@@ -1090,6 +1255,7 @@ class SQLiteManager:
                 cursor.execute("DELETE FROM document_chunks")
                 cursor.execute("DELETE FROM document_images")
                 cursor.execute("DELETE FROM documents")
+                cursor.execute("UPDATE message_registry SET last_message_id = 0 WHERE id = 1")
                 
                 # 重置自增ID
                 cursor.execute(

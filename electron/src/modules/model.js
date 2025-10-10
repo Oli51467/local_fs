@@ -17,13 +17,15 @@ class ModelModule {
         sourceId: 'siliconflow',
         name: '硅基流动',
         icon: './dist/assets/qwen.png',
+        apiKeySetting: 'siliconflwApiKey',
         models: [
           {
             modelId: 'Qwen/Qwen3-8B',
             name: 'Qwen/Qwen3-8B',
             description: '硅基流动提供的 Qwen3-8B 通用模型，兼顾推理与创作表现。',
             tags: ['硅基流动', 'Qwen3', '8B'],
-            apiModel: 'Qwen/Qwen3-8B'
+            apiModel: 'Qwen/Qwen3-8B',
+            apiKeySetting: 'siliconflwApiKey'
           }
         ]
       }
@@ -218,13 +220,14 @@ class ModelModule {
       return;
     }
 
+    const apiKeySetting = model.apiKeySetting || source.apiKeySetting || 'siliconflwApiKey';
     const settingsModule = this.dependencies.getSettingsModule ? this.dependencies.getSettingsModule() : null;
     const apiKey = settingsModule && typeof settingsModule.getApiKey === 'function'
-      ? settingsModule.getApiKey('siliconflwApiKey')
+      ? settingsModule.getApiKey(apiKeySetting)
       : '';
 
     if (!apiKey) {
-      this.setModalStatus('请先在设置页面填写 SiliconFlow API Key。', 'error');
+      this.setModalStatus('请先在设置页面填写对应的 API Key。', 'error');
       return;
     }
 
@@ -238,6 +241,7 @@ class ModelModule {
         sourceId: source.sourceId,
         modelId: model.modelId,
         apiModel: model.apiModel,
+        apiKeySetting,
         name: model.name,
         providerName: source.name,
         providerIcon: model.icon || source.icon || null,
@@ -585,6 +589,7 @@ class ModelModule {
     if (source) {
       enriched.providerName = enriched.providerName || source.name;
       enriched.providerIcon = enriched.providerIcon || source.icon || null;
+      enriched.apiKeySetting = enriched.apiKeySetting || source.apiKeySetting || 'siliconflwApiKey';
       if (!enriched.apiModel) {
         const catalogModel = this.getModelById(enriched.sourceId, enriched.modelId);
         if (catalogModel && catalogModel.apiModel) {
@@ -592,6 +597,7 @@ class ModelModule {
         }
       }
     }
+    enriched.apiKeySetting = enriched.apiKeySetting || 'siliconflwApiKey';
     return enriched;
   }
 

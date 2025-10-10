@@ -16,6 +16,7 @@ from service.sqlite_service import SQLiteManager
 from service.faiss_service import FaissManager
 from service.image_faiss_service import ImageFaissManager
 from service.embedding_service import EmbeddingService
+from service.llm_client import SiliconFlowClient
 from service.reranker_service import init_reranker_service
 from service.bm25s_service import init_bm25s_service
 from service.model_manager import get_model_manager
@@ -79,11 +80,14 @@ async def lifespan(app: FastAPI):
     )
     
     # 初始化对话API
+    llm_client_instance = SiliconFlowClient()
+
     init_chat_api(
         faiss_instance,
         sqlite_instance,
         embedding_instance,
         bm25s_service_instance,
+        llm_client_instance,
     )
     
     # 初始化清理API

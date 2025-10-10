@@ -298,6 +298,53 @@
     }
   }
 
+  function switchToDatabaseMode() {
+    state.isSearchMode = false;
+    state.activeMode = 'database';
+
+    hideChatInterface();
+    hideModelPage();
+
+    const fileTreeEl = dependencies.getFileTreeEl();
+    if (fileTreeEl) {
+      fileTreeEl.style.display = 'none';
+    }
+
+    const fileTreeContainer = dependencies.getFileTreeContainer ? dependencies.getFileTreeContainer() : null;
+    if (fileTreeContainer) {
+      fileTreeContainer.style.display = 'none';
+    }
+
+    const searchArea = dependencies.getSearchAreaEl();
+    if (searchArea) {
+      searchArea.style.display = 'none';
+    }
+
+    const resourceTitle = dependencies.getResourceTitleEl();
+    if (resourceTitle) {
+      resourceTitle.textContent = '数据库';
+    }
+
+    updateHeaderButtons('none');
+
+    const fileContent = dependencies.getFileContentEl ? dependencies.getFileContentEl() : null;
+    if (fileContent) {
+      fileContent.style.display = 'none';
+    }
+
+    dependencies.hideSearchResultsPane();
+
+    const databaseModule = dependencies.getDatabaseModule ? dependencies.getDatabaseModule() : null;
+    if (databaseModule && typeof databaseModule.showDatabasePage === 'function') {
+      databaseModule.showDatabasePage();
+    } else {
+      const databasePage = dependencies.getDatabasePageEl ? dependencies.getDatabasePageEl() : null;
+      if (databasePage) {
+        databasePage.style.display = 'block';
+      }
+    }
+  }
+
   function initResizer() {
     const resizer = dependencies.getResizerEl();
     const fileTreeContainer = dependencies.getFileTreeContainer();
@@ -391,7 +438,7 @@
       databaseBtn.addEventListener('click', () => {
         const databaseModule = getDatabaseModule ? getDatabaseModule() : null;
         if (databaseModule && typeof databaseModule.showDatabasePage === 'function') {
-          databaseModule.showDatabasePage();
+          switchToDatabaseMode();
         }
       });
     }
@@ -406,7 +453,7 @@
     const toggleTreeBtn = dependencies.getToggleTreeButton();
     if (toggleTreeBtn) {
       toggleTreeBtn.addEventListener('click', () => {
-        if (state.isSearchMode || state.activeMode === 'chat' || state.activeMode === 'model') {
+        if (state.isSearchMode || state.activeMode === 'chat' || state.activeMode === 'model' || state.activeMode === 'database') {
           switchToFileMode();
         }
       });
@@ -432,6 +479,7 @@
     switchToSearchMode,
     switchToFileMode,
     switchToChatMode,
+    switchToDatabaseMode,
     switchToModelMode,
     isSearchMode: getIsSearchMode
   };
@@ -439,6 +487,7 @@
   global.switchToSearchMode = switchToSearchMode;
   global.switchToFileMode = switchToFileMode;
   global.switchToChatMode = switchToChatMode;
+  global.switchToDatabaseMode = switchToDatabaseMode;
   global.switchToModelMode = switchToModelMode;
   Object.defineProperty(global, 'isSearchMode', {
     configurable: true,

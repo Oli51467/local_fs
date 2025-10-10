@@ -236,6 +236,23 @@ class DatabaseModule {
     document.getElementById('file-content').style.display = 'none';
     document.getElementById('settings-page').style.display = 'none';
     document.getElementById('file-tree-container').style.display = 'none';
+    const resourceTitle = document.getElementById('resource-title');
+    if (resourceTitle) {
+      resourceTitle.textContent = '数据库';
+    }
+    const chatHistory = document.getElementById('chat-history-container');
+    if (chatHistory) {
+      chatHistory.style.display = 'none';
+    }
+    const chatPage = document.getElementById('chat-page');
+    if (chatPage) {
+      chatPage.style.display = 'none';
+    }
+    
+    const chatModule = window.chatModule;
+    if (chatModule && typeof chatModule.leaveChatMode === 'function') {
+      chatModule.leaveChatMode();
+    }
     
     const modelPage = document.getElementById('model-page');
     if (modelPage) {

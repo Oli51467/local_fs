@@ -268,6 +268,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     settingsModule = new SettingsModule();
     await settingsModule.init();
+    window.settingsModule = settingsModule;
     
     databaseModule = new DatabaseModule();
     

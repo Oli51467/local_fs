@@ -26,6 +26,10 @@ class ServerConfig:
     RECURSIVE_CHUNK_OVERLAP = 80
     RECURSIVE_SEPARATORS = ["\n\n", "\n", " ", ""]
 
+    CHAT_MAX_TOKENS = 1024
+    CHAT_TEMPERATURE = 0.3
+    CHAT_TOP_P = 0.85
+
 
 class DatabaseConfig:
     """数据库配置"""

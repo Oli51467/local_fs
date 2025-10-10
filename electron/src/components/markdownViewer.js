@@ -5,7 +5,10 @@
 class MarkdownViewer {
   constructor() {
     this.tabStates = new Map(); // 存储每个标签页的状态
-    this.addStyles();
+    if (typeof document !== 'undefined') {
+      this.addStyles();
+    }
+    this.markdownIt = null;
   }
 
   /**
@@ -292,246 +295,220 @@ class MarkdownViewer {
    * @param {string} content - Markdown内容
    * @returns {string} 解析后的HTML
    */
+
   parseMarkdown(content, filePath = null) {
-    // 调试信息
-    console.log('parseMarkdown called with content length:', content.length);
-    console.log('marked available:', typeof marked !== 'undefined');
-    console.log('hljs available:', typeof hljs !== 'undefined');
-    
-    // 使用 marked 库解析 Markdown
-    if (typeof marked !== 'undefined') {
-      // 配置 marked 解析器
-      marked.setOptions({
-        gfm: true,       // 启用 GitHub 风格（表格/任务列表等）
-        breaks: true,    // 换行符转 <br>
-        headerIds: true, // 为标题生成 id
-        mangle: false,   // 防止标题 id 被转义乱码
-        highlight: function (code, lang) {
-          // 如果 highlight.js 可用，进行代码高亮
-          if (typeof hljs !== 'undefined') {
-            try {
-              if (lang && hljs.getLanguage(lang)) {
-                return hljs.highlight(code, { language: lang }).value;
-              }
-              return hljs.highlightAuto(code).value;
-            } catch (e) {
-              console.warn('Highlight.js error:', e);
-              return code;
-            }
-          }
-          return code;
-        }
-      });
-
-      let bodyHtml = marked.parse(content);
-      console.log('Generated HTML length:', bodyHtml.length);
-      console.log('Generated HTML preview:', bodyHtml.substring(0, 200) + '...');
-
-      bodyHtml = this.enhanceMarkdownHtml(bodyHtml, filePath);
-
-      return `
-        <!-- GitHub Markdown 样式 -->
-        <link rel="stylesheet" href="./node_modules/github-markdown-css/github-markdown.css">
-        <!-- highlight.js 样式 -->
-        <link rel="stylesheet" href="./node_modules/highlight.js/styles/github.min.css">
-        
-        <style>
-          .markdown-body {
-            box-sizing: border-box;
-            min-width: 200px;
-            max-width: none;
-            margin: 0;
-            padding: 20px;
-            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;
-            font-size: 16px;
-            line-height: 1.5;
-            word-wrap: break-word;
-            background-color: var(--bg-color) !important;
-            color: var(--text-color) !important;
-          }
-          
-          .markdown-body table {
-            border-spacing: 0;
-            border-collapse: collapse;
-            display: block;
-            width: max-content;
-            max-width: 100%;
-            overflow: auto;
-            margin-top: 0;
-            margin-bottom: 16px;
-          }
-          
-          .markdown-body table th,
-          .markdown-body table td {
-            padding: 6px 13px;
-            border: 1px solid var(--tree-border) !important;
-            background-color: var(--bg-color) !important;
-            color: var(--text-color) !important;
-          }
-          
-          .markdown-body table th {
-            font-weight: 600;
-            background-color: var(--tree-bg) !important;
-          }
-          
-          .markdown-body table tr {
-            background-color: var(--bg-color) !important;
-            border-top: 1px solid var(--tree-border) !important;
-          }
-          
-          .markdown-body table tr:nth-child(2n) {
-            background-color: var(--tree-bg) !important;
-          }
-          
-          .markdown-body pre {
-            padding: 16px;
-            overflow: auto;
-            font-size: 85%;
-            line-height: 1.45;
-            background-color: var(--tree-bg) !important;
-            color: var(--text-color) !important;
-            border: 1px solid var(--tree-border) !important;
-            border-radius: 6px;
-            margin-top: 0;
-            margin-bottom: 16px;
-          }
-          
-          .markdown-body code {
-            padding: 0.2em 0.4em;
-            margin: 0;
-            font-size: 85%;
-            background-color: var(--tree-bg) !important;
-            color: var(--accent-color) !important;
-            border-radius: 6px;
-            font-family: ui-monospace,SFMono-Regular,"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;
-          }
-          
-          .markdown-body pre code {
-            display: inline;
-            max-width: auto;
-            padding: 0;
-            margin: 0;
-            overflow: visible;
-            line-height: inherit;
-            word-wrap: normal;
-            background-color: transparent !important;
-            color: var(--text-color) !important;
-            border: 0;
-          }
-          
-          .markdown-body hr {
-            height: 0.25em;
-            padding: 0;
-            margin: 24px 0;
-            background-color: var(--tree-border) !important;
-            border: 0;
-          }
-          
-          .markdown-body ol,
-          .markdown-body ul {
-            padding-left: 2em;
-            margin-top: 0;
-            margin-bottom: 16px;
-            color: var(--text-color) !important;
-          }
-          
-          .markdown-body li {
-            color: var(--text-color) !important;
-          }
-          
-          .markdown-body blockquote {
-            padding: 0 1em;
-            color: var(--text-muted) !important;
-            border-left: 0.25em solid var(--accent-color) !important;
-            margin-top: 0;
-            margin-bottom: 16px;
-          }
-          
-          .markdown-body h1,
-          .markdown-body h2,
-          .markdown-body h3,
-          .markdown-body h4,
-          .markdown-body h5,
-          .markdown-body h6 {
-            margin-top: 24px;
-            margin-bottom: 16px;
-            font-weight: 600;
-            line-height: 1.25;
-            color: var(--text-color) !important;
-          }
-          
-          .markdown-body h1 {
-            font-size: 2em;
-            border-bottom: 1px solid var(--tree-border) !important;
-            padding-bottom: 0.3em;
-          }
-          
-          .markdown-body h2 {
-            font-size: 1.5em;
-            border-bottom: 1px solid var(--tree-border) !important;
-            padding-bottom: 0.3em;
-          }
-          
-          .markdown-body p {
-            color: var(--text-color) !important;
-            margin-bottom: 16px;
-          }
-          
-          .markdown-body a {
-            color: var(--accent-color) !important;
-            text-decoration: none;
-          }
-          
-          .markdown-body a:hover {
-            text-decoration: underline;
-          }
-        </style>
-        
-        <div class="markdown-body">
-          ${bodyHtml}
-        </div>
-      `;
-    } else {
-      // 降级到简单解析器
-      let html = content
-        // 图片
-        .replace(/!\[([^\]]*)\]\(([^\)]+)\)/gim, '<img alt="$1" src="$2" />')
-        // 标题
-        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-        // 粗体
-        .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
-        // 斜体
-        .replace(/\*(.*?)\*/gim, '<em>$1</em>')
-        // 代码块
-        .replace(/```([\s\S]*?)```/gim, '<pre><code>$1</code></pre>')
-        // 行内代码
-        .replace(/`(.*?)`/gim, '<code>$1</code>')
-        // 链接
-        .replace(/\[([^\]]+)\]\(([^\)]+)\)/gim, '<a href="$2" target="_blank">$1</a>')
-        // 无序列表
-        .replace(/^\* (.*$)/gim, '<li>$1</li>')
-        .replace(/^- (.*$)/gim, '<li>$1</li>')
-        // 有序列表
-        .replace(/^\d+\. (.*$)/gim, '<li>$1</li>')
-        // 换行
-        .replace(/\n/gim, '<br>');
-      
-      // 包装列表项
-      html = html.replace(/(<li>.*<\/li>)/gims, '<ul>$1</ul>');
-      
-      // 添加样式
-      html = this.enhanceMarkdownHtml(html, filePath);
-
-      return `
-        <div style="padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: var(--text-color);">
-          ${html}
-        </div>
-      `;
+    const source = typeof content === 'string' ? content : String(content || '');
+    const md = this.ensureMarkdownIt();
+    if (md) {
+      try {
+        const bodyHtml = this.enhanceMarkdownHtml(md.render(source), filePath);
+        return this.composeMarkdownHtml(bodyHtml);
+      } catch (error) {
+        console.warn('markdown-it 渲染失败，回退到简易解析器:', error);
+      }
     }
+
+    const fallbackHtml = this.enhanceMarkdownHtml(this.renderFallbackMarkdown(source), filePath);
+    return this.composeMarkdownHtml(fallbackHtml);
   }
 
+  ensureMarkdownIt() {
+    if (this.markdownIt) {
+      return this.markdownIt;
+    }
+
+    let factory = null;
+    if (typeof MarkdownIt !== 'undefined') {
+      factory = MarkdownIt;
+    } else if (typeof window !== 'undefined' && typeof window.markdownit === 'function') {
+      factory = window.markdownit;
+    } else if (typeof require === 'function') {
+      try {
+        factory = require('markdown-it');
+      } catch (error) {
+        factory = null;
+      }
+    }
+
+    if (!factory) {
+      return null;
+    }
+
+    try {
+      const options = {
+        html: true,
+        linkify: true,
+        typographer: true,
+        highlight: (code, lang) => {
+          if (typeof hljs !== 'undefined' && hljs) {
+            try {
+              if (lang && hljs.getLanguage && hljs.getLanguage(lang)) {
+                return hljs.highlight(code, { language: lang }).value;
+              }
+              if (hljs.highlightAuto) {
+                return hljs.highlightAuto(code).value;
+              }
+            } catch (error) {
+              console.warn('Highlight.js error:', error);
+            }
+          }
+          return '';
+        }
+      };
+
+      let instance = null;
+      if (factory.prototype && typeof factory.prototype.render === 'function') {
+        instance = new factory(options);
+      } else if (typeof factory === 'function') {
+        instance = factory(options);
+      }
+
+      this.markdownIt = instance && typeof instance.render === 'function' ? instance : null;
+    } catch (error) {
+      console.warn('markdown-it 初始化失败:', error);
+      this.markdownIt = null;
+    }
+
+    return this.markdownIt;
+  }
+
+  composeMarkdownHtml(bodyHtml) {
+    return `
+      <!-- GitHub Markdown 样式 -->
+      <link rel="stylesheet" href="./node_modules/github-markdown-css/github-markdown.css">
+      <!-- highlight.js 样式 -->
+      <link rel="stylesheet" href="./node_modules/highlight.js/styles/github.min.css">
+
+      <style>
+        .markdown-body {
+          box-sizing: border-box;
+          min-width: 200px;
+          max-width: none;
+          margin: 0;
+          padding: 16px 20px;
+          font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;
+          font-size: 15px;
+          line-height: 1.65;
+          word-wrap: break-word;
+          background-color: var(--bg-color) !important;
+          color: var(--text-color) !important;
+        }
+
+        .markdown-body h1,
+        .markdown-body h2,
+        .markdown-body h3,
+        .markdown-body h4,
+        .markdown-body h5,
+        .markdown-body h6 {
+          margin-top: 24px;
+          margin-bottom: 12px;
+          font-weight: 600;
+          line-height: 1.3;
+          color: var(--text-color) !important;
+        }
+
+        .markdown-body p {
+          margin: 12px 0;
+          color: var(--text-color) !important;
+        }
+
+        .markdown-body ul,
+        .markdown-body ol {
+          padding-left: 1.6em;
+          margin: 12px 0;
+        }
+
+        .markdown-body table {
+          border-spacing: 0;
+          border-collapse: collapse;
+          display: block;
+          max-width: 100%;
+          overflow: auto;
+          margin: 16px 0;
+        }
+
+        .markdown-body table th,
+        .markdown-body table td {
+          padding: 6px 13px;
+          border: 1px solid var(--tree-border) !important;
+          background-color: var(--bg-color) !important;
+          color: var(--text-color) !important;
+        }
+
+        .markdown-body pre {
+          padding: 14px;
+          overflow: auto;
+          font-size: 0.9em;
+          line-height: 1.45;
+          background-color: var(--tree-bg) !important;
+          color: var(--text-color) !important;
+          border: 1px solid var(--tree-border) !important;
+          border-radius: 6px;
+          margin: 16px 0;
+        }
+
+        .markdown-body code {
+          padding: 0.2em 0.4em;
+          margin: 0;
+          font-size: 0.9em;
+          background-color: var(--tree-bg) !important;
+          color: var(--accent-color) !important;
+          border-radius: 4px;
+          font-family: ui-monospace,SFMono-Regular,"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;
+        }
+
+        .markdown-body a {
+          color: var(--accent-color) !important;
+          text-decoration: none;
+        }
+
+        .markdown-body a:hover {
+          text-decoration: underline;
+        }
+      </style>
+
+      <div class="markdown-body">
+        ${bodyHtml}
+      </div>
+    `;
+  }
+
+
+  renderFallbackMarkdown(source) {
+    let html = String(source || '').replace(/\r?\n/g, '\n');
+    html = html
+      .replace(/!\[([^\]]*)\]\(([^\)]+)\)/gim, '<img alt="$1" src="$2" />')
+      .replace(/^######\s+(.*)$/gim, '<h6>$1</h6>')
+      .replace(/^#####\s+(.*)$/gim, '<h5>$1</h5>')
+      .replace(/^####\s+(.*)$/gim, '<h4>$1</h4>')
+      .replace(/^###\s+(.*)$/gim, '<h3>$1</h3>')
+      .replace(/^##\s+(.*)$/gim, '<h2>$1</h2>')
+      .replace(/^#\s+(.*)$/gim, '<h1>$1</h1>')
+      .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+      .replace(/```([\s\S]*?)```/gim, '<pre><code>$1</code></pre>')
+      .replace(/`(.*?)`/gim, '<code>$1</code>')
+      .replace(/\[([^\]]+)\]\(([^\)]+)\)/gim, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/^\* (.*)$/gim, '<li>$1</li>')
+      .replace(/^- (.*)$/gim, '<li>$1</li>')
+      .replace(/^\d+\. (.*)$/gim, '<li>$1</li>');
+  
+    html = html.replace(/(<li>.*<\/li>)/gims, '<ul>$1</ul>');
+    html = html.replace(/(<ul>)(\s*<ul>)+/gims, '<ul>').replace(/<\/ul>\s*<ul>/gims, '');
+  
+    const blocks = html
+      .split(/\n{2,}/)
+      .map((block) => block.trim())
+      .filter(Boolean)
+      .map((block) => {
+        if (/^<(h[1-6]|ul|ol|pre|table|blockquote)>/i.test(block)) {
+          return block;
+        }
+        return `<p>${block.replace(/\n+/g, ' ')}</p>`;
+      });
+  
+    return blocks.join('\n');
+  }
   enhanceMarkdownHtml(html, filePath) {
     if (!html) {
       return '';
