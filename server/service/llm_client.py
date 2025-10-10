@@ -26,11 +26,12 @@ class SiliconFlowClient:
     self.endpoint = endpoint
     self.timeout = timeout
 
-  def _build_headers(self, api_key: str) -> Dict[str, str]:
+  def _build_headers(self, api_key: str, stream: bool = False) -> Dict[str, str]:
+    accept = "text/event-stream" if stream else "application/json"
     return {
       "Authorization": f"Bearer {api_key}",
       "Content-Type": "application/json",
-      "Accept": "application/json",
+      "Accept": accept,
       "Accept-Charset": "utf-8"
     }
 
@@ -69,7 +70,7 @@ class SiliconFlowClient:
       raise LLMClientError("无法解析模型返回的数据") from exc
 
   def stream_chat(self, api_key: str, payload: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
-    headers = self._build_headers(api_key)
+    headers = self._build_headers(api_key, stream=True)
     stream_payload = dict(payload)
     stream_payload["stream"] = True
 

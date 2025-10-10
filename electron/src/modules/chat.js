@@ -717,6 +717,7 @@ class ChatModule {
       const rawContent = typeof message.content === 'string' ? message.content : '';
       const trimmedContent = rawContent.trim();
       const isStreamingMessage = streamingId && String(message.id) === streamingId;
+      const isWaitingMessage = isStreamingMessage && !trimmedContent;
       if (message.role === 'assistant' && !trimmedContent && !isStreamingMessage) {
         return;
       }
@@ -739,14 +740,20 @@ class ChatModule {
       const contentEl = document.createElement('div');
       contentEl.className = 'chat-bubble-content';
 
-      const content = rawContent;
-      this.setBubbleContent(contentEl, content, message.role);
+      if (isWaitingMessage) {
+        this.renderWaitingIndicator(contentEl);
+      } else {
+        const content = rawContent;
+        this.setBubbleContent(contentEl, content, message.role);
+      }
 
       bubble.appendChild(contentEl);
 
       header.appendChild(bubble);
       wrapper.appendChild(header);
       this.chatMessagesEl.appendChild(wrapper);
+
+      this.applyWaitingState(wrapper, avatar, bubble, isWaitingMessage, message.role);
     });
 
     if (this.streamingState) {
@@ -754,22 +761,77 @@ class ChatModule {
       this.streamingState.wrapper = elements.wrapper;
       this.streamingState.bubble = elements.bubble;
       this.streamingState.content = elements.content;
+      this.streamingState.avatar = elements.avatar;
       this.updateStreamingBubble();
+    }
+  }
+
+  renderWaitingIndicator(target) {
+    if (!target) {
+      return;
+    }
+    target.innerHTML = '';
+    const indicator = document.createElement('div');
+    indicator.className = 'chat-waiting-indicator';
+
+    const spinner = document.createElement('div');
+    spinner.className = 'chat-waiting-spinner';
+
+    const text = document.createElement('span');
+    text.className = 'chat-waiting-text';
+    text.textContent = '正在思考中';
+
+    indicator.appendChild(spinner);
+    indicator.appendChild(text);
+    target.appendChild(indicator);
+  }
+
+  applyWaitingState(wrapper, avatar, bubble, isWaiting, role = 'assistant') {
+    if (wrapper) {
+      wrapper.classList.toggle('is-waiting', Boolean(isWaiting));
+    }
+    if (bubble) {
+      bubble.classList.toggle('is-waiting', Boolean(isWaiting));
+    }
+    if (!avatar) {
+      return;
+    }
+
+    // 始终根据角色设置头像类型
+    if (role === 'user') {
+      avatar.classList.add('is-user');
+      avatar.classList.remove('is-assistant');
+    } else {
+      avatar.classList.add('is-assistant');
+      avatar.classList.remove('is-user');
+    }
+
+    // 等待状态下，弱化头像阴影并显示头像后的加载圆圈
+    if (isWaiting) {
+      avatar.classList.add('chat-avatar-waiting');
+    } else {
+      avatar.classList.remove('chat-avatar-waiting');
+    }
+
+    const spinnerEl = wrapper ? wrapper.querySelector('.chat-avatar-spinner') : null;
+    if (spinnerEl) {
+      spinnerEl.style.display = isWaiting && role !== 'user' ? 'inline-block' : 'none';
     }
   }
 
   findMessageElements(messageId) {
     if (!this.chatMessagesEl) {
-      return { wrapper: null, bubble: null, content: null };
+      return { wrapper: null, bubble: null, content: null, avatar: null };
     }
     const selectorId = messageId !== undefined && messageId !== null ? String(messageId) : '';
     if (!selectorId) {
-      return { wrapper: null, bubble: null, content: null };
+      return { wrapper: null, bubble: null, content: null, avatar: null };
     }
     const wrapper = this.chatMessagesEl.querySelector(`[data-message-id="${selectorId}"]`);
     const bubble = wrapper ? wrapper.querySelector('.chat-bubble') : null;
     const content = bubble ? bubble.querySelector('.chat-bubble-content') : null;
-    return { wrapper, bubble, content };
+    const avatar = wrapper ? wrapper.querySelector('.chat-avatar') : null;
+    return { wrapper, bubble, content, avatar };
   }
 
   updateStreamingBubble() {
@@ -777,17 +839,26 @@ class ChatModule {
       return;
     }
     const state = this.streamingState;
-    if (!state.wrapper || !state.content) {
+    if (!state.wrapper || !state.content || !state.avatar) {
       const elements = this.findMessageElements(state.messageId);
       state.wrapper = elements.wrapper;
       state.bubble = elements.bubble;
       state.content = elements.content;
+      state.avatar = elements.avatar;
     }
     if (!state.content) {
       return;
     }
     const content = state.buffer || state.message?.content || '';
-    this.setBubbleContent(state.content, content, state.message?.role || 'assistant');
+    const trimmed = content.trim();
+    const role = state.message?.role || 'assistant';
+    if (!trimmed) {
+      this.renderWaitingIndicator(state.content);
+      this.applyWaitingState(state.wrapper, state.avatar, state.bubble, true, role);
+      return;
+    }
+    this.setBubbleContent(state.content, content, role);
+    this.applyWaitingState(state.wrapper, state.avatar, state.bubble, false, role);
   }
 
   normalizeModelText(text) {
@@ -1177,6 +1248,10 @@ class ChatModule {
     if (!payload) {
       return null;
     }
+    // 兼容上游以 [DONE] 结束的流
+    if (payload === '[DONE]') {
+      return { event: 'done', data: {} };
+    }
     try {
       return JSON.parse(payload);
     } catch (error) {
@@ -1186,8 +1261,30 @@ class ChatModule {
   }
 
   handleStreamEvent(eventPayload) {
-    if (!eventPayload || !eventPayload.event) {
+    if (!eventPayload) {
       return null;
+    }
+
+    // 支持直接转发的上游 SSE 事件（无 event 字段）
+    if (!eventPayload.event) {
+      const choices = Array.isArray(eventPayload.choices) ? eventPayload.choices : [];
+      if (choices.length) {
+        const choice = choices[0] || {};
+        const deltaObj = choice.delta || choice.message || {};
+        const rawDelta = typeof deltaObj.content === 'string' ? deltaObj.content : '';
+        if (rawDelta) {
+          if (!this.streamingState) {
+            return null;
+          }
+          const delta = this.normalizeModelText(rawDelta) || rawDelta;
+          this.streamingState.buffer += delta;
+          if (this.streamingState.message) {
+            this.streamingState.message.content = this.streamingState.buffer;
+          }
+          this.updateStreamingBubble();
+          return null;
+        }
+      }
     }
     const { event, data = {} } = eventPayload;
 
@@ -1273,7 +1370,6 @@ class ChatModule {
         }
         this.updateStreamingBubble();
       }
-      this.setStatus('回答已生成', 'success');
       return 'done';
     }
 
@@ -1441,6 +1537,7 @@ class ChatModule {
       question,
       conversation_id: this.currentConversationId,
       top_k: 5,
+      stream: true,
       model: {
         source_id: this.selectedModel.sourceId,
         model_id: this.selectedModel.modelId,
@@ -1475,18 +1572,26 @@ class ChatModule {
     };
     this.messages.push(streamingMessage);
 
-    this.renderMessages();
-
-    const elements = this.findMessageElements(streamingMessage.id);
+    // 先设置流式状态，再渲染消息，以便等待样式正确显示
     this.streamingState = {
       message: streamingMessage,
       messageId: streamingMessage.id,
-      wrapper: elements.wrapper,
-      bubble: elements.bubble,
-      content: elements.content,
+      wrapper: null,
+      bubble: null,
+      content: null,
+      avatar: null,
       buffer: '',
       metadata: null
     };
+
+    this.renderMessages();
+
+    // 渲染后再绑定元素引用并刷新等待气泡
+    const elements = this.findMessageElements(streamingMessage.id);
+    this.streamingState.wrapper = elements.wrapper;
+    this.streamingState.bubble = elements.bubble;
+    this.streamingState.content = elements.content;
+    this.streamingState.avatar = elements.avatar;
     this.updateStreamingBubble();
 
     this.chatInputEl.value = '';
@@ -1496,7 +1601,8 @@ class ChatModule {
       const response = await fetch(`${this.baseApiUrl}/stream`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream'
         },
         body: JSON.stringify(payload)
       });

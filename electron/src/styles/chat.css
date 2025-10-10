@@ -604,6 +604,17 @@
   flex-shrink: 0;
 }
 
+/* 头像后面的加载转动圆圈（助手消息等待中显示） */
+.chat-avatar-spinner {
+  display: none; /* 默认隐藏，等待时显示 */
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(148, 163, 184, 0.35);
+  border-top-color: rgba(148, 163, 184, 0.85);
+  border-radius: 50%;
+  animation: chat-waiting-spin 0.8s linear infinite;
+}
+
 .chat-bubble {
   padding: 8px 14px;
   border-radius: 12px;
@@ -715,6 +726,41 @@
   color: var(--text-color);
   align-self: flex-end;
   margin-right: 16px;
+}
+
+.chat-message.is-waiting .chat-bubble,
+.chat-bubble.is-waiting {
+  background: rgba(245, 245, 245, 0.9);
+}
+
+.chat-avatar-waiting {
+  box-shadow: none;
+}
+
+.chat-waiting-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-waiting-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(148, 163, 184, 0.35);
+  border-top-color: rgba(148, 163, 184, 0.85);
+  border-radius: 50%;
+  animation: chat-waiting-spin 0.8s linear infinite;
+}
+
+.chat-waiting-text {
+  font-size: 13px;
+  color: var(--text-muted, #9ca3af);
+}
+
+@keyframes chat-waiting-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .chat-chunk-list {
@@ -903,6 +949,20 @@
   background: rgba(30, 41, 59, 0.86);
   border: 1px solid rgba(148, 163, 184, 0.28);
   box-shadow: 0 12px 28px rgba(8, 11, 18, 0.5);
+}
+
+.dark-mode .chat-message.is-waiting .chat-bubble,
+.dark-mode .chat-bubble.is-waiting {
+  background: rgba(30, 41, 59, 0.7);
+}
+
+.dark-mode .chat-waiting-spinner {
+  border: 2px solid rgba(148, 163, 184, 0.25);
+  border-top-color: rgba(148, 163, 184, 0.68);
+}
+
+.dark-mode .chat-waiting-text {
+  color: rgba(203, 213, 225, 0.72);
 }
 
 .dark-mode .chat-bubble .chat-markdown-body pre {
