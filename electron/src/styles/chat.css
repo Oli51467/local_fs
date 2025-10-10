@@ -181,9 +181,7 @@
 }
 
 .chat-history-meta {
-  font-size: 12px;
-  color: var(--text-muted);
-  flex-shrink: 0;
+  display: none; /* 不展示消息条数 */
 }
 
 .chat-history-delete-btn {
@@ -529,7 +527,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 900px;
+  max-width: 720px; /* 与输入框宽度保持一致，便于左右对齐 */
   margin: 0 auto;
   width: 100%;
 }
@@ -562,20 +560,21 @@
 .chat-message-header {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  max-width: 70%;
+  gap: 0; /* 移除内部间距，避免气泡相对输入框产生偏移 */
+  position: relative;
+  width: 100%;
 }
 
 .chat-message.assistant .chat-message-header {
-  flex-direction: row;
   justify-content: flex-start;
-  align-self: flex-start;
+  align-self: stretch;
+  text-align: left;
 }
 
 .chat-message.user .chat-message-header {
-  flex-direction: row-reverse;
-  justify-content: flex-start;
-  align-self: flex-end;
+  justify-content: flex-end;
+  align-self: stretch;
+  text-align: right;
 }
 
 .chat-avatar {
@@ -604,6 +603,18 @@
   flex-shrink: 0;
 }
 
+/* 绝对定位头像以避免影响气泡左右对齐 */
+.chat-message.assistant .chat-avatar {
+  position: absolute;
+  left: -46px; /* 头像宽度(30) + 间距(16)，增大至两倍当前长度 */
+  top: 0;
+}
+.chat-message.user .chat-avatar {
+  position: absolute;
+  right: -46px; /* 头像宽度(30) + 间距(16)，增大至两倍当前长度 */
+  top: 0;
+}
+
 /* 头像后面的加载转动圆圈（助手消息等待中显示） */
 .chat-avatar-spinner {
   display: none; /* 默认隐藏，等待时显示 */
@@ -624,7 +635,7 @@
   word-break: break-word;
   background: #f5f5f5;
   color: var(--text-color);
-  max-width: 70%;
+  max-width: 100%; /* 允许根据内容扩展至输入框左右边界 */
   min-width: fit-content;
   width: fit-content;
   display: inline-block;
@@ -718,14 +729,14 @@
 .chat-message.assistant .chat-bubble {
   background: #f5f5f5;
   color: var(--text-color);
-  margin-left: 16px;
+  margin-left: 0; /* 与输入框左侧对齐 */
 }
 
 .chat-message.user .chat-bubble {
   background: #e0e0e0;
   color: var(--text-color);
   align-self: flex-end;
-  margin-right: 16px;
+  margin-right: 0; /* 与输入框右侧对齐 */
 }
 
 .chat-message.is-waiting .chat-bubble,
@@ -840,12 +851,13 @@
   margin: 0 auto;
   display: flex;
   align-items: center;
+  box-sizing: border-box; /* 使最大宽度包含边框和内边距，保证与消息列对齐 */
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 12px;
   background: #ffffff;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
-  padding: 6px 50px 6px 16px;
-  min-height: 42px;
+  padding: 12px 50px 12px 16px; /* 略增上下内边距，稳定整体高度 */
+  min-height: 56px; /* 稍增最小高度，确保按钮始终可居中 */
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -860,7 +872,7 @@
   width: 100%;
   max-height: 320px;
   margin: 0;
-  padding: 0;
+  padding: 0; /* 保持无额外内边距，避免高度跳变 */
   min-height: 22px;
   border: none;
   font-size: 14px;
@@ -869,7 +881,7 @@
   background: transparent;
   resize: none;
   overflow-y: hidden;
-  line-height: 1.5;
+  line-height: 1.5; /* 固定行高，与容器高度配合 */
 }
 
 #chat-input::placeholder {
@@ -893,7 +905,8 @@
 #chat-send-btn {
   position: absolute;
   right: 10px;
-  bottom: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 30px;
   height: 30px;
   border-radius: 50%;
@@ -911,14 +924,24 @@
 #chat-send-btn:hover:not([disabled]) {
   background: var(--accent-hover);
   box-shadow: 0 16px 34px rgba(3, 102, 214, 0.3);
-  transform: translateY(-1px);
+  transform: translateY(calc(-50% - 1px));
+}
+
+#chat-send-btn:active:not([disabled]) {
+  transform: translateY(-50%) scale(0.98);
+}
+
+#chat-send-btn:focus,
+#chat-send-btn:focus-visible {
+  outline: none;
+  transform: translateY(-50%);
 }
 
 #chat-send-btn[disabled] {
   opacity: 0.6;
   cursor: not-allowed;
   box-shadow: none;
-  transform: none;
+  transform: translateY(-50%);
 }
 
 #chat-send-btn .icon-arrow {

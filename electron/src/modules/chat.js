@@ -360,6 +360,7 @@ class ChatModule {
     }
     if (this.chatStatusTextEl) {
       this.chatStatusTextEl.textContent = '';
+      delete this.chatStatusTextEl.dataset.statusType;
     }
     this.closeModelDropdown();
   }
@@ -374,6 +375,10 @@ class ChatModule {
     }
     if (this.chatInputEl) {
       setTimeout(() => this.chatInputEl.focus(), 50);
+    }
+    if (this.chatStatusTextEl) {
+      this.chatStatusTextEl.textContent = '';
+      delete this.chatStatusTextEl.dataset.statusType;
     }
   }
 
@@ -419,13 +424,19 @@ class ChatModule {
       return;
     }
 
+    // 仅在非 info 情况下显示（例如 warning），普通信息不显示
     const text = typeof message === 'string' ? message : '';
-    this.chatStatusTextEl.textContent = text;
-    if (!text) {
+    if (type === 'info') {
+      this.chatStatusTextEl.textContent = '';
       delete this.chatStatusTextEl.dataset.statusType;
       return;
     }
-    this.chatStatusTextEl.dataset.statusType = type;
+    this.chatStatusTextEl.textContent = text || '';
+    if (text) {
+      this.chatStatusTextEl.dataset.statusType = type;
+    } else {
+      delete this.chatStatusTextEl.dataset.statusType;
+    }
   }
 
   appendSystemErrorToChat(message) {
@@ -531,12 +542,6 @@ class ChatModule {
 
       const actions = document.createElement('div');
       actions.className = 'chat-history-actions';
-
-      const metaEl = document.createElement('div');
-      metaEl.className = 'chat-history-meta';
-      const count = typeof conversation.message_count === 'number' ? conversation.message_count : 0;
-      metaEl.textContent = `${count} 条`;
-      actions.appendChild(metaEl);
 
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
@@ -1347,6 +1352,7 @@ class ChatModule {
           }
           this.streamingState = null;
           this.renderMessages();
+          // 保留必要的警告，但不显示“回答已完成”
           this.setStatus('模型未返回内容。', 'warning');
           return 'done';
         }
@@ -1548,7 +1554,6 @@ class ChatModule {
     };
 
     this.pendingRequest = true;
-    this.setStatus('正在生成回答...', 'info');
     this.chatSendBtn.disabled = true;
     if (this.chatInputEl) {
       this.chatInputEl.disabled = true;
@@ -1665,6 +1670,11 @@ class ChatModule {
         this.chatInputEl.focus();
       }
       this.pendingRequest = null;
+      // 不显示“回答已完成”状态提示，保持底部状态为空
+      if (this.chatStatusTextEl) {
+        this.chatStatusTextEl.textContent = '';
+        delete this.chatStatusTextEl.dataset.statusType;
+      }
     }
   }
 
