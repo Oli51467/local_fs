@@ -759,6 +759,10 @@ class ChatModule {
       this.chatMessagesEl.appendChild(wrapper);
 
       this.applyWaitingState(wrapper, avatar, bubble, isWaitingMessage, message.role);
+
+      if (message.role === 'assistant') {
+        this.updateReferenceSection(wrapper, message.metadata);
+      }
     });
 
     if (this.streamingState) {
@@ -864,6 +868,11 @@ class ChatModule {
     }
     this.setBubbleContent(state.content, content, role);
     this.applyWaitingState(state.wrapper, state.avatar, state.bubble, false, role);
+
+    if (role === 'assistant' && state.wrapper) {
+      const metadata = state.message?.metadata || state.metadata;
+      this.updateReferenceSection(state.wrapper, metadata);
+    }
   }
 
   normalizeModelText(text) {
@@ -1232,6 +1241,418 @@ class ChatModule {
     }
 
     target.textContent = text;
+  }
+
+  normalizePath(value) {
+    if (!value || typeof value !== 'string') {
+      return '';
+    }
+    return value
+      .trim()
+      .replace(/^file:\/\//i, '')
+      .replace(/\\/g, '/')
+      .replace(/\/{2,}/g, '/');
+  }
+
+  expandPathVariants(value) {
+    const variants = new Set();
+    const normalized = this.normalizePath(value);
+    if (!normalized) {
+      return variants;
+    }
+
+    variants.add(normalized);
+
+    const withoutLeading = normalized.replace(/^\/+/, '');
+    if (withoutLeading !== normalized) {
+      variants.add(withoutLeading);
+    }
+
+    const runtimePaths = typeof window.fsAPI?.getRuntimePathsSync === 'function'
+      ? window.fsAPI.getRuntimePathsSync()
+      : null;
+    const externalRoot = this.normalizePath(runtimePaths?.externalRoot);
+    if (externalRoot && normalized.startsWith(externalRoot)) {
+      const trimmed = normalized.slice(externalRoot.length).replace(/^\/+/, '');
+      if (trimmed) {
+        variants.add(trimmed);
+      }
+    }
+
+    return variants;
+  }
+
+  delay(ms = 150) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  updateReferenceSection(wrapper, metadata) {
+    if (!wrapper) {
+      return;
+    }
+    const existing = wrapper.querySelector('.chat-reference-section');
+    const references = this.extractReferences(metadata);
+    if (!references.length) {
+      if (existing && existing.parentElement) {
+        existing.parentElement.removeChild(existing);
+      }
+      return;
+    }
+    const section = this.renderReferenceSection(references, metadata);
+    if (!section) {
+      if (existing && existing.parentElement) {
+        existing.parentElement.removeChild(existing);
+      }
+      return;
+    }
+    if (existing && existing.parentElement) {
+      existing.replaceWith(section);
+    } else {
+      wrapper.appendChild(section);
+    }
+  }
+
+  extractReferences(metadata) {
+    if (!metadata || typeof metadata !== 'object') {
+      return [];
+    }
+    const raw = metadata.references;
+    if (!Array.isArray(raw) || !raw.length) {
+      return [];
+    }
+    return raw.filter((item) => item && typeof item === 'object');
+  }
+
+  renderReferenceSection(references, metadata) {
+    if (!Array.isArray(references) || !references.length) {
+      return null;
+    }
+    const section = document.createElement('div');
+    section.className = 'chat-reference-section';
+
+    const header = document.createElement('div');
+    header.className = 'chat-reference-title';
+    header.textContent = '参考资料';
+    section.appendChild(header);
+
+    const list = document.createElement('div');
+    list.className = 'chat-reference-list';
+
+    references.forEach((reference) => {
+      const item = this.createReferenceItem(reference, metadata);
+      if (item) {
+        list.appendChild(item);
+      }
+    });
+
+    if (!list.children.length) {
+      return null;
+    }
+
+    section.appendChild(list);
+    return section;
+  }
+
+  createReferenceItem(reference, metadata) {
+    if (!reference || typeof reference !== 'object') {
+      return null;
+    }
+
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'chat-reference-item';
+    item.setAttribute('data-file-path', reference.file_path || '');
+    item.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.handleReferenceClick(reference, metadata, item);
+    });
+
+    const textWrapper = document.createElement('div');
+    textWrapper.className = 'chat-reference-texts';
+
+    const name = document.createElement('span');
+    name.className = 'chat-reference-name';
+    name.textContent = reference.display_name || reference.filename || '未命名文件';
+    textWrapper.appendChild(name);
+
+    item.appendChild(textWrapper);
+
+    if (Array.isArray(reference.chunk_indices) && reference.chunk_indices.length) {
+      const meta = document.createElement('span');
+      meta.className = 'chat-reference-meta';
+      meta.textContent = `${reference.chunk_indices.length} 个片段`;
+      item.appendChild(meta);
+    }
+
+    return item;
+  }
+
+  async handleReferenceClick(reference, metadata, trigger) {
+    if (!reference || typeof reference !== 'object') {
+      return;
+    }
+
+    const targetButton = trigger instanceof HTMLElement ? trigger : null;
+    if (targetButton) {
+      targetButton.classList.add('is-activating');
+    }
+
+    try {
+      const chunks = this.collectReferenceChunks(reference, metadata);
+      const targetPath = await this.resolveReferencePath(reference, chunks);
+      if (!targetPath) {
+        this.setStatus('无法定位参考资料路径。', 'warning');
+        return;
+      }
+
+      if (typeof window.switchToFileMode === 'function') {
+        window.switchToFileMode();
+      }
+
+      const searchModule = window.RendererModules?.search;
+      if (searchModule && typeof searchModule.openSearchResult === 'function') {
+        const primaryChunk = Array.isArray(chunks) && chunks.length ? chunks[0] : null;
+        const referencePayload = {
+          source: 'chat_reference',
+          sources: ['chat-reference'],
+          absolute_path: this.normalizePath(targetPath),
+          file_path: reference.project_relative_path || reference.file_path || '',
+          path: reference.project_relative_path || reference.file_path || '',
+          chunk_text: primaryChunk?.content || '',
+          text: primaryChunk?.content || '',
+          match_preview: primaryChunk?.content || '',
+          match_field: 'chunk_text',
+          chunk_index: primaryChunk?.chunk_index,
+          filename: reference.display_name || reference.filename || '',
+          display_name: reference.display_name || reference.filename || '',
+        };
+
+        try {
+          await searchModule.openSearchResult(referencePayload);
+        } catch (error) {
+          console.warn('调用搜索模块打开参考资料失败，尝试备用逻辑:', error);
+          await this.openReferenceManually(targetPath, reference, chunks, metadata);
+        }
+      } else {
+        await this.openReferenceManually(targetPath, reference, chunks, metadata);
+      }
+    } finally {
+      if (targetButton) {
+        targetButton.classList.remove('is-activating');
+      }
+    }
+  }
+
+  async openReferenceManually(targetPath, reference, chunks, metadata) {
+    let viewer = window.fileViewer;
+    if ((!viewer || typeof viewer.openFile !== 'function') && window.explorerModule && typeof window.explorerModule.getFileViewer === 'function') {
+      viewer = window.explorerModule.getFileViewer();
+      if (viewer) {
+        window.fileViewer = viewer;
+      }
+    }
+
+    if (viewer && typeof viewer.openFile === 'function') {
+      if (typeof window.switchToFileMode === 'function') {
+        window.switchToFileMode();
+      }
+
+      try {
+        await viewer.openFile(targetPath);
+        await this.delay();
+      } catch (error) {
+        console.error('打开参考资料失败:', error);
+        this.setStatus('打开参考资料失败，请稍后重试。', 'error');
+      }
+    }
+
+    await this.focusFileInTree(targetPath);
+    await this.highlightReferenceChunk(targetPath, reference, chunks, metadata);
+  }
+
+  async resolveReferencePath(reference, chunks = []) {
+    const candidateSet = new Set();
+    const addCandidate = (value) => {
+      this.expandPathVariants(value).forEach((variant) => {
+        if (variant) {
+          candidateSet.add(variant);
+        }
+      });
+    };
+
+    addCandidate(reference.absolute_path);
+    addCandidate(reference.project_relative_path);
+    addCandidate(reference.file_path);
+
+    (Array.isArray(chunks) ? chunks : []).forEach((chunk) => {
+      if (!chunk) {
+        return;
+      }
+      addCandidate(chunk.absolute_path);
+      addCandidate(chunk.file_path || chunk.path);
+    });
+
+    for (const candidate of candidateSet) {
+      if (!candidate) {
+        continue;
+      }
+
+      if (/^[a-zA-Z]:/.test(candidate)) {
+        return candidate.replace(/\\/g, '/');
+      }
+
+      if (candidate.startsWith('/')) {
+        return candidate;
+      }
+
+      let resolved = null;
+      if (typeof window.fsAPI?.resolveProjectPath === 'function') {
+        try {
+          resolved = await window.fsAPI.resolveProjectPath(candidate);
+        } catch (error) {
+          resolved = null;
+        }
+      }
+      if (!resolved && typeof window.fsAPI?.resolveProjectPathSync === 'function') {
+        try {
+          resolved = window.fsAPI.resolveProjectPathSync(candidate);
+        } catch (error) {
+          resolved = null;
+        }
+      }
+      if (resolved) {
+        return this.normalizePath(resolved);
+      }
+
+      if (window.fileTreeData && window.fileTreeData.path) {
+        const rootPath = this.normalizePath(window.fileTreeData.path);
+        if (rootPath) {
+          const combined = this.normalizePath(`${rootPath}/${candidate}`);
+          if (combined.startsWith('/')) {
+            return combined;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async focusFileInTree(targetPath) {
+    if (!targetPath) {
+      return;
+    }
+
+    if (window.RendererModules?.fileTree?.setSelectedItemPath) {
+      window.RendererModules.fileTree.setSelectedItemPath(targetPath);
+    }
+    if (window.explorerModule && typeof window.explorerModule.setSelectedItemPath === 'function') {
+      window.explorerModule.setSelectedItemPath(targetPath);
+    }
+
+    const selector = `[data-path="${this.cssEscape(targetPath)}"]`;
+    const treeElement = document.querySelector(selector);
+    if (treeElement) {
+      document.querySelectorAll('.file-item.selected').forEach((el) => el.classList.remove('selected'));
+      treeElement.classList.add('selected');
+      treeElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+
+  cssEscape(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    if (window.CSS && typeof window.CSS.escape === 'function') {
+      return window.CSS.escape(value);
+    }
+    return value.replace(/['"\\]/g, '\\$&');
+  }
+
+  collectReferenceChunks(reference, metadata) {
+    if (!metadata || !Array.isArray(metadata.chunks)) {
+      return [];
+    }
+    const referenceVariants = new Set();
+    this.expandPathVariants(reference.file_path).forEach((variant) => referenceVariants.add(variant));
+    this.expandPathVariants(reference.project_relative_path).forEach((variant) => referenceVariants.add(variant));
+    this.expandPathVariants(reference.absolute_path).forEach((variant) => referenceVariants.add(variant));
+
+    const displayName = (reference.display_name || reference.filename || '').trim();
+
+    return metadata.chunks.filter((chunk) => {
+      if (!chunk) {
+        return false;
+      }
+      const chunkVariants = new Set();
+      this.expandPathVariants(chunk.file_path || chunk.path).forEach((variant) => chunkVariants.add(variant));
+      this.expandPathVariants(chunk.absolute_path).forEach((variant) => chunkVariants.add(variant));
+
+      const hasMatch = [...chunkVariants].some((variant) => {
+        if (!variant) {
+          return false;
+        }
+        if (referenceVariants.has(variant)) {
+          return true;
+        }
+        for (const refVariant of referenceVariants) {
+          if (!refVariant) {
+            continue;
+          }
+          if (variant === refVariant || variant.endsWith(refVariant) || refVariant.endsWith(variant)) {
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (hasMatch) {
+        return true;
+      }
+
+      if (displayName) {
+        const chunkName = (chunk.filename || '').trim();
+        if (chunkName && chunkName === displayName) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+  }
+
+  async highlightReferenceChunk(targetPath, reference, chunks, metadata) {
+    const searchModule = window.RendererModules?.search;
+    if (!searchModule || typeof searchModule.highlightSearchMatchWithRetry !== 'function') {
+      return;
+    }
+
+    const chunkList = Array.isArray(chunks) && chunks.length
+      ? chunks
+      : this.collectReferenceChunks(reference, metadata);
+
+    if (!chunkList.length) {
+      return;
+    }
+
+    const primaryChunk = chunkList[0];
+    const payload = {
+      chunk_text: primaryChunk.content,
+      text: primaryChunk.content,
+      match_preview: primaryChunk.content,
+      match_field: 'chunk_text',
+      file_path: reference.file_path || reference.project_relative_path || reference.absolute_path || targetPath,
+      path: reference.file_path || reference.project_relative_path || reference.absolute_path || targetPath,
+      chunk_index: primaryChunk.chunk_index,
+      filename: reference.display_name || reference.filename
+    };
+
+    try {
+      await searchModule.highlightSearchMatchWithRetry(targetPath, payload);
+    } catch (error) {
+      console.warn('高亮参考片段失败:', error);
+    }
   }
 
   parseSSEEvent(rawEvent) {

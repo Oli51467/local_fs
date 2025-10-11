@@ -1,6 +1,7 @@
 import json
 import logging
 import textwrap
+from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, HTTPException, Response
@@ -47,8 +48,6 @@ LEXICAL_FUSION_WEIGHT = 0.15
 
 MIN_COMPONENT_SCORE = 0.4
 MIN_FINAL_SCORE = 0.45
-
-
 class RetrievedChunk(BaseModel):
     document_id: int
     filename: str
@@ -80,6 +79,17 @@ class ChatMessageModel(BaseModel):
     created_time: str
 
 
+class ReferenceDocument(BaseModel):
+    document_id: Optional[int] = None
+    filename: str
+    file_path: str
+    display_name: str
+    absolute_path: Optional[str] = None
+    project_relative_path: Optional[str] = None
+    score: Optional[float] = None
+    chunk_indices: List[int] = Field(default_factory=list)
+
+
 class ModelSelection(BaseModel):
     source_id: str = Field(..., description="模型来源 ID")
     model_id: str = Field(..., description="模型标识")
@@ -105,6 +115,7 @@ class ChatResponse(BaseModel):
     messages: List[ChatMessageModel]
     assistant_message: ChatMessageModel
     chunks: List[RetrievedChunk]
+    references: List[ReferenceDocument] = Field(default_factory=list)
 
 
 class ConversationSummary(BaseModel):
@@ -438,6 +449,80 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
     return filtered[:top_k]
 
 
+def _build_references_from_chunks(chunks: List[RetrievedChunk]) -> List[ReferenceDocument]:
+    references: Dict[str, ReferenceDocument] = {}
+
+    for chunk in chunks:
+        raw_path = (chunk.file_path or '').strip()
+        normalized_path = raw_path.replace('\\', '/') if raw_path else ''
+        file_path = normalized_path
+        filename = chunk.filename or (Path(normalized_path).name if normalized_path else '') or '未知文件'
+        key = file_path or filename
+
+        document_id = chunk.document_id if chunk.document_id is not None and chunk.document_id >= 0 else None
+
+        absolute_path: Optional[str] = None
+        project_relative: Optional[str] = None
+
+        if normalized_path:
+            try:
+                path_obj = Path(normalized_path)
+                if path_obj.is_absolute():
+                    resolved = path_obj.resolve()
+                    absolute_path = str(resolved)
+                    try:
+                        project_relative = str(resolved.relative_to(ServerConfig.PROJECT_ROOT)).replace('\\', '/')
+                    except ValueError:
+                        project_relative = normalized_path
+                else:
+                    project_relative = normalized_path
+                    absolute_path = str((ServerConfig.PROJECT_ROOT / path_obj).resolve())
+            except Exception:
+                absolute_path = absolute_path or normalized_path
+
+        if absolute_path is None and project_relative:
+            try:
+                absolute_path = str((ServerConfig.PROJECT_ROOT / Path(project_relative)).resolve())
+            except Exception:
+                absolute_path = None
+
+        if project_relative is None and absolute_path:
+            try:
+                project_relative = str(Path(absolute_path).resolve().relative_to(ServerConfig.PROJECT_ROOT)).replace('\\', '/')
+            except Exception:
+                project_relative = normalized_path or None
+
+        chunk_index = chunk.chunk_index if isinstance(chunk.chunk_index, int) else None
+
+        if key not in references:
+            indices = [chunk_index] if chunk_index is not None else []
+            references[key] = ReferenceDocument(
+                document_id=document_id,
+                filename=filename,
+                file_path=file_path,
+                display_name=filename,
+                absolute_path=absolute_path,
+                project_relative_path=project_relative,
+                score=chunk.score,
+                chunk_indices=indices,
+            )
+        else:
+            reference = references[key]
+            if chunk_index is not None:
+                reference.chunk_indices.append(chunk_index)
+            if chunk.score > (reference.score or float('-inf')):
+                reference.score = chunk.score
+            # prefer known document id if previously None
+            if reference.document_id is None and document_id is not None:
+                reference.document_id = document_id
+            if not reference.absolute_path and absolute_path:
+                reference.absolute_path = absolute_path
+            if not reference.project_relative_path and project_relative:
+                reference.project_relative_path = project_relative
+
+    return list(references.values())
+
+
 def _format_chunks_for_prompt(chunks: List[RetrievedChunk]) -> str:
     if not chunks:
         return ''
@@ -489,13 +574,18 @@ def _build_llm_messages(
         knowledge_text = f"以下资料可供参考：\n{knowledge_block}\n\n"
     else:
         knowledge_text = (
-            "未检索到足够的相关资料。请谨慎作答，必要时明确说明，同时可以发挥自身知识完成回答。\n\n"
+            "未检索到足够的相关资料。请谨慎作答，必要时明确说明，并可结合自身掌握的知识完成回答。\n\n"
         )
+
+    citation_instruction = (
+        "引用资料时请以自然语言描述来源，不要在回答中直接展示资料的编号、ID 或完整文件路径。"
+    )
 
     user_prompt = (
         f"{knowledge_text}"
         f"用户问题：{question}\n\n"
-        "请基于资料给出严谨、结构化的回答。引用资料时可以在段落末尾注明（资料编号）。"
+        "请基于上述资料（如有）给出严谨、结构化的回答，必要时补充自身知识。\n"
+        f"{citation_instruction}"
     )
     messages.append({'role': 'user', 'content': user_prompt})
     return messages
@@ -545,13 +635,15 @@ def _prepare_chat_context(
 
     conversation_messages = sqlite_manager.get_conversation_messages(conversation_id)
     chunks = _retrieve_chunks(normalized_question, top_k)
+    references = _build_references_from_chunks(chunks)
 
     selection_data = selection.model_dump(exclude={'api_key'}, exclude_none=True)
     assistant_metadata = {
         'query': normalized_question,
         'top_k': top_k,
         'model': selection_data,
-        'chunks': [chunk.dict() for chunk in chunks]
+        'chunks': [chunk.dict() for chunk in chunks],
+        'references': [reference.dict() for reference in references],
     }
 
     assistant_message_id = sqlite_manager.insert_chat_message(
@@ -575,6 +667,7 @@ def _prepare_chat_context(
         'assistant_message_id': assistant_message_id,
         'assistant_metadata': assistant_metadata,
         'chunks': chunks,
+        'references': references,
         'llm_messages': llm_messages,
         'selection': selection
     }
@@ -754,6 +847,7 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
         messages=[ChatMessageModel(**message) for message in messages],
         assistant_message=ChatMessageModel(**assistant_message),
         chunks=context['chunks'],
+        references=context['references'],
     )
 
 

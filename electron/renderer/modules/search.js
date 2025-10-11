@@ -2255,6 +2255,7 @@
     updateSearchModeUI,
     setSearchMode,
     performSearch,
-    highlightSearchMatchWithRetry
+    highlightSearchMatchWithRetry,
+    openSearchResult
   };
 })(window);
