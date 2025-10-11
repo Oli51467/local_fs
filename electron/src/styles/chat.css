@@ -1,11 +1,13 @@
 :root {
   --chat-banner-height: 48px;
+  --sidebar-dark-bg: rgba(55, 65, 81, 0.85);
+  --tree-bg-light: rgb(46, 52, 64);
 }
 
 #chat-history-container {
-  width: 260px;
-  min-width: 220px;
-  max-width: 420px;
+  width: 232px;
+  min-width: 210px;
+  max-width: 360px;
   background: var(--tree-bg);
   display: flex;
   flex-direction: column;
@@ -14,6 +16,14 @@
   overflow: hidden;
   transition: width 0.3s ease, min-width 0.3s ease;
 }
+
+.dark-mode #chat-history-container {
+  /* 统一为深色模式下的文件树/搜索区域浅灰背景 */
+  background: var(--tree-bg);
+}
+
+
+
 
 #chat-history-container.collapsed {
   width: 0;
@@ -115,9 +125,9 @@
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 9px 12px;
-  margin: 2px 8px;
+  gap: 4px;
+  padding: 8px 12px;
+  margin: 0 6px;
   border-bottom: none;
   border-radius: 6px;
   background: transparent;
@@ -126,8 +136,12 @@
   border: 1px solid transparent;
 }
 
+.chat-history-item + .chat-history-item {
+  margin-top: 0;
+}
+
 .chat-history-item:hover {
-  background: rgba(148, 163, 184, 0.12);
+  background: rgba(0, 0, 0, 0.06);
 }
 
 .chat-history-item + .chat-history-item {
@@ -159,7 +173,7 @@
 
 .chat-history-item.active {
   border-color: transparent;
-  background: rgba(148, 163, 184, 0.16); /* 更柔和的选中背景 */
+  background: rgba(0, 0, 0, 0.08); /* 浅色模式下的浅灰选中效果 */
 }
 
 .chat-history-title {
@@ -283,64 +297,17 @@
 
 .chat-model-button {
   appearance: none;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(255, 255, 255, 0.88);
+  border: none;
+  background: transparent;
   color: var(--text-color);
   font-size: 13px;
   font-weight: 500;
-  padding: 6px 28px 6px 14px;
-  border-radius: 999px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   cursor: pointer;
   position: relative;
-  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
-  backdrop-filter: saturate(180%) blur(6px);
-}
-
-.chat-model-button:hover {
-  background: rgba(255, 255, 255, 0.96);
-  border-color: rgba(148, 163, 184, 0.5);
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.1);
-}
-
-.chat-model-button:active {
-  background: rgba(248, 250, 252, 0.98);
-  border-color: rgba(148, 163, 184, 0.55);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
-}
-
-.chat-model-button[disabled] {
-  cursor: not-allowed;
-  opacity: 0.7;
-  box-shadow: none;
-  background: rgba(255, 255, 255, 0.6);
-}
-
-.dark-mode .chat-model-button {
-  background: rgba(30, 41, 59, 0.78);
-  border-color: rgba(148, 163, 184, 0.25);
-  color: rgba(226, 232, 240, 0.88);
-  backdrop-filter: none;
-}
-
-.dark-mode .chat-model-button:hover {
-  background: rgba(30, 41, 59, 0.92);
-  border-color: rgba(148, 163, 184, 0.4);
-  box-shadow: 0 12px 36px rgba(8, 11, 18, 0.45);
-}
-
-.dark-mode .chat-model-button:active {
-  background: rgba(17, 24, 39, 0.92);
-  border-color: rgba(148, 163, 184, 0.45);
-  box-shadow: 0 6px 20px rgba(8, 11, 18, 0.5);
-}
-
-.dark-mode .chat-model-button[disabled] {
-  background: rgba(30, 41, 59, 0.55);
-  border-color: rgba(148, 163, 184, 0.18);
-  color: rgba(148, 163, 184, 0.65);
 }
 
 .chat-model-button-text {
@@ -351,25 +318,19 @@
 }
 
 .chat-model-button-icon {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 8px;
-  height: 8px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform-origin: center;
-  transform: translateY(-60%) rotate(45deg);
+  width: 7px;
+  height: 7px;
+  border-right: 1.4px solid currentColor;
+  border-bottom: 1.4px solid currentColor;
+  transform: rotate(45deg);
+  opacity: 0.6;
   transition: transform 0.2s ease, opacity 0.2s ease;
-  opacity: 0.5;
 }
 
 .chat-model-button[aria-expanded="true"] .chat-model-button-icon {
-  transform: translateY(-20%) rotate(-135deg);
-  opacity: 0.7;
+  transform: rotate(-135deg);
+  opacity: 0.85;
 }
-
 
 .chat-model-dropdown {
   position: absolute;
@@ -562,7 +523,7 @@
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid var(--border-light);
-  background: rgba(248, 250, 252, 0.94);
+  background: rgba(245, 245, 245, 0.94);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
   display: flex;
   flex-direction: column;
@@ -589,7 +550,7 @@
 
 .chat-reference-item {
   border: 1px solid rgba(148, 163, 184, 0.28);
-  background: rgba(255, 255, 255, 0.96);
+  background: rgba(248, 250, 252, 0.96);
   color: var(--text-color);
   border-radius: 10px;
   padding: 10px 12px;
@@ -624,10 +585,11 @@
 }
 
 .chat-reference-name {
-  font-size: 13px;
-  font-weight: 400;
+  font-size: 14px;
+  font-weight: 500;
   color: var(--text-color);
-  line-height: 1.35;
+  line-height: 1.6;
+  font-family: inherit;
 }
 
 .chat-reference-meta {
@@ -637,7 +599,7 @@
 }
 
 .dark-mode .chat-reference-section {
-  background: rgba(30, 41, 59, 0.76);
+  background: var(--tree-bg);
   border-color: rgba(94, 113, 151, 0.42);
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.55);
 }
@@ -648,7 +610,7 @@
 
 .dark-mode .chat-reference-item {
   border-color: rgba(94, 113, 151, 0.38);
-  background: rgba(30, 41, 59, 0.9);
+  background: var(--tree-bg);
   color: rgba(226, 232, 240, 0.92);
 }
 
@@ -715,6 +677,10 @@
   min-width: 30px;
   min-height: 30px;
   flex-shrink: 0;
+}
+
+.dark-mode .chat-avatar.is-assistant {
+  background-image: url('../../dist/assets/gpt-dark.png');
 }
 
 /* 绝对定位头像以避免影响气泡左右对齐 */
@@ -922,7 +888,7 @@
 #chat-input-area {
   border-top: none;
   padding: 12px 24px 18px;
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(248, 250, 252, 1));
+  background: var(--bg-color);
   position: sticky;
   bottom: 0;
   display: flex;
@@ -933,6 +899,14 @@
   flex: 0 0 auto;
   z-index: 5;
 }
+
+.dark-mode #chat-input-area {
+  background: var(--bg-color);
+}
+
+
+
+
 
 #chat-status-text {
   margin: 0;
@@ -968,7 +942,7 @@
   box-sizing: border-box; /* 使最大宽度包含边框和内边距，保证与消息列对齐 */
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 12px;
-  background: #ffffff;
+  background: var(--bg-color);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
   padding: 12px 50px 12px 16px; /* 略增上下内边距，稳定整体高度 */
   min-height: 56px; /* 稍增最小高度，确保按钮始终可居中 */
@@ -977,7 +951,7 @@
 
 .dark-mode .chat-input-wrapper {
   border-color: rgba(148, 163, 184, 0.25);
-  background: rgba(15, 23, 42, 0.92);
+  background: var(--bg-color);
   box-shadow: 0 18px 40px rgba(8, 47, 73, 0.4);
 }
 
@@ -1007,12 +981,12 @@
 }
 
 .chat-input-wrapper:focus-within {
-  border-color: rgba(3, 102, 214, 0.55);
+  border-color: rgba(148, 163, 184, 0.35);
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
 }
 
 .dark-mode .chat-input-wrapper:focus-within {
-  border-color: rgba(96, 165, 250, 0.55);
+  border-color: rgba(148, 163, 184, 0.25);
   box-shadow: 0 20px 48px rgba(8, 47, 73, 0.58);
 }
 
@@ -1065,7 +1039,7 @@
 }
 
 .dark-mode #chat-history-container {
-  background: var(--sidebar-bg);
+  background: var(--tree-bg);
 }
 
 .dark-mode .chat-history-item.active {
@@ -1073,17 +1047,17 @@
 }
 
 .dark-mode .chat-bubble {
-  background: rgba(51, 65, 85, 0.85);
+  background: var(--tree-bg);
   color: rgba(226, 232, 240, 0.92);
 }
 
 .dark-mode .chat-message.user .chat-bubble {
-  background: rgba(71, 85, 105, 0.85);
+  background: var(--tree-bg);
   color: rgba(226, 232, 240, 0.92);
 }
 
 .dark-mode .chat-message.assistant .chat-bubble {
-  background: rgba(30, 41, 59, 0.86);
+  background: var(--tree-bg);
   border: 1px solid rgba(148, 163, 184, 0.28);
   box-shadow: 0 12px 28px rgba(8, 11, 18, 0.5);
 }
@@ -1117,11 +1091,25 @@
 }
 
 .dark-mode #chat-input {
-  color: rgba(226, 232, 240, 0.9);
+  color: var(--text-color);
 }
 
 .dark-mode #chat-input::placeholder {
-  color: rgba(148, 163, 184, 0.65);
+  color: var(--text-muted);
+}
+
+
+.dark-mode #chat-messages-container::-webkit-scrollbar {
+  width: 1px;
+}
+
+.dark-mode #chat-messages-container::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+.dark-mode #chat-messages-container::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
 }
 
 .dark-mode #chat-status-text {
