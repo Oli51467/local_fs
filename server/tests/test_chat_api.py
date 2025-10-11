@@ -16,8 +16,9 @@ class FakeEmbeddingService:
 
 
 class FakeFaissManager:
-    def __init__(self, results=None):
+    def __init__(self, results=None, metadata=None):
         self._results = results or [[]]
+        self.metadata = metadata or []
 
     def search_vectors(self, query_vectors, k=10):
         return self._results
@@ -134,6 +135,28 @@ class FakeBM25Service:
     def score_documents(self, query, documents):
         return list(self._scores[: len(documents)])
 
+    def retrieve(self, query, top_k=50):
+        results = []
+        for idx, score in enumerate(self._scores[:top_k]):
+            results.append({
+                'doc_id': str(idx),
+                'score': score,
+                'rank': idx + 1,
+                'content': f"doc-{idx}"
+            })
+        return results
+
+    def is_available(self):
+        return True
+
+
+class FakeRerankerService:
+    def __init__(self, score: float = 0.9):
+        self.score = score
+
+    def rerank_results(self, query, passages, normalize=True):
+        return [self.score for _ in passages]
+
 
 class FakeLLMClient:
     def __init__(self, content: str = "测试回答"):
@@ -180,9 +203,16 @@ class FakeLLMClient:
         }
 
 
-def create_test_client(fake_faiss, fake_sqlite, fake_embedding, fake_bm25=None, fake_llm=None):
+def create_test_client(fake_faiss, fake_sqlite, fake_embedding, fake_bm25=None, fake_reranker=None, fake_llm=None):
     app = FastAPI()
-    init_chat_api(fake_faiss, fake_sqlite, fake_embedding, fake_bm25, fake_llm or FakeLLMClient())
+    init_chat_api(
+        fake_faiss,
+        fake_sqlite,
+        fake_embedding,
+        fake_bm25,
+        fake_reranker or FakeRerankerService(),
+        fake_llm or FakeLLMClient()
+    )
     app.include_router(chat_router)
     client = TestClient(app)
     return client
@@ -192,6 +222,7 @@ def create_test_client(fake_faiss, fake_sqlite, fake_embedding, fake_bm25=None, 
 def reset_bm25():
     from server.api import chat_api
     chat_api.bm25s_service = None
+    chat_api.reranker_service = None
 
 
 def test_chat_creates_new_conversation_without_results():
@@ -252,6 +283,14 @@ def test_chat_returns_retrieved_chunks():
             'chunk_index': 0
         }
     ]])
+    fake_faiss.metadata = [
+        {
+            'vector_id': 42,
+            'filename': 'demo.txt',
+            'file_path': 'docs/demo.txt',
+            'chunk_index': 0
+        }
+    ]
     fake_embedding = FakeEmbeddingService()
     fake_llm = FakeLLMClient(content='资料表明：这是演示答案。')
     client = create_test_client(fake_faiss, fake_sqlite, fake_embedding, FakeBM25Service([1.5]), fake_llm=fake_llm)
@@ -276,6 +315,8 @@ def test_chat_returns_retrieved_chunks():
     assert chunk['content'].startswith('示例内容')
     assert chunk['score'] > 0
     assert chunk['bm25_score'] is not None
+    assert chunk['rerank_score_normalized'] is not None
+    assert set(chunk['sources']) == {'dense', 'lexical', 'reranker'}
 
     assert payload['assistant_message']['content'] == '资料表明：这是演示答案。'
     assistant_chunks = payload['assistant_message']['metadata']['chunks']

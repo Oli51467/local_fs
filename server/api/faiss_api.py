@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set, Tuple
 from pathlib import Path
 import numpy as np
 import statistics
@@ -22,6 +22,26 @@ image_faiss_manager = None
 embedding_service = None
 reranker_service = None
 bm25s_service = None
+
+TEXT_DENSE_RECALL_MULTIPLIER = 10
+TEXT_DENSE_RECALL_MIN = 120
+TEXT_DENSE_RECALL_MAX = 400
+
+TEXT_LEXICAL_RECALL_MULTIPLIER = 5
+TEXT_LEXICAL_RECALL_MIN = 80
+TEXT_LEXICAL_RECALL_MAX = 250
+
+TEXT_RERANK_MULTIPLIER = 6
+TEXT_RERANK_MIN = 60
+TEXT_RERANK_MAX = 150
+
+TEXT_MIN_COMPONENT_SCORE = 0.4
+TEXT_MIN_FINAL_SCORE = 0.45
+IMAGE_MIN_FINAL_SCORE = 0.45
+
+FUSION_RERANK_WEIGHT = 0.6
+FUSION_DENSE_WEIGHT = 0.25
+FUSION_LEXICAL_WEIGHT = 0.15
 
 
 def clamp_unit(value: Optional[float]) -> float:
@@ -49,6 +69,18 @@ def normalize_embedding_score(value: Optional[float]) -> Optional[float]:
         return None
     normalized = (val + 1.0) / 2.0
     return clamp_unit(normalized)
+
+
+def normalize_bm25_score(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return None
+    if val <= 0.0 or np.isnan(val):
+        return 0.0
+    return clamp_unit(val / (val + 1.0))
 
 
 def normalize_rerank_score(value: Optional[float]) -> Optional[float]:
@@ -131,6 +163,29 @@ def filter_semantic_candidates(
         filtered.append(item)
 
     return filtered
+
+
+def get_candidate_content(meta: Dict[str, Any]) -> str:
+    content = meta.get('chunk_text') or meta.get('text') or meta.get('content') or ''
+    return str(content)
+
+
+def build_chunk_key(meta: Dict[str, Any]) -> Tuple:
+    vector_id = meta.get('vector_id')
+    if vector_id is not None:
+        try:
+            return ('vector', int(vector_id))
+        except (TypeError, ValueError):
+            pass
+    file_path = meta.get('file_path') or meta.get('path') or ''
+    chunk_index = meta.get('chunk_index')
+    if file_path and chunk_index is not None:
+        return ('chunk_index', file_path, int(chunk_index))
+    chunk_id = meta.get('chunk_id') or meta.get('id')
+    if file_path and chunk_id is not None:
+        return ('chunk_id', file_path, chunk_id)
+    content = get_candidate_content(meta)
+    return ('chunk_text', file_path, content[:64])
 
 
 def search_image_vectors(
@@ -271,6 +326,10 @@ def search_image_vectors(
         record['confidence'] = normalized_confidence
         record['image_score'] = combined_cosine
         record['final_score'] = normalized_confidence
+        record['mixed_score'] = normalized_confidence
+        record['quality_score'] = normalized_confidence
+        record['score_breakdown'] = {'image': normalized_confidence}
+        record['score_weights'] = {'image': 1.0}
         record['rank'] = len(matches) + 1
         record['metrics'] = {
             'image': {
@@ -283,6 +342,8 @@ def search_image_vectors(
         }
         record.setdefault('filename', record.get('image_name'))
         record.setdefault('display_name', record.get('image_name'))
+        if record['final_score'] < IMAGE_MIN_FINAL_SCORE:
+            continue
         matches.append(record)
         if len(matches) >= top_k:
             break
@@ -431,7 +492,7 @@ async def get_all_vectors(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
 
 @router.post("/search")
 async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
-    """综合字符匹配与语义检索的搜索接口"""
+    """综合字符匹配与语义检索的搜索接口，融合稀疏、稠密与重排序信号。"""
     try:
         if faiss_manager is None:
             raise HTTPException(status_code=500, detail="Faiss manager not initialized")
@@ -444,7 +505,17 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
         if not query_text:
             raise HTTPException(status_code=400, detail="查询内容不能为空")
 
-        query_lower = query_text.lower()
+        bm25_weight_input = (
+            request.bm25s_weight if request.bm25s_weight is not None else ServerConfig.BM25S_WEIGHT
+        )
+        embedding_weight_input = (
+            request.embedding_weight if request.embedding_weight is not None else ServerConfig.EMBEDDING_WEIGHT
+        )
+
+        bm25_service = (
+            bm25s_service if bm25s_service is not None and bm25s_service.is_available() else None
+        )
+        reranker = reranker_service if reranker_service is not None else None
 
         def build_result(meta: Dict[str, Any], source: str, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             data = dict(meta) if isinstance(meta, dict) else {}
@@ -482,43 +553,33 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
             suffix = '…' if end < len(source_text) else ''
             return f"{prefix}{snippet}{suffix}".strip()
 
-        def build_chunk_key(meta: Dict[str, Any]) -> tuple:
-            vector_id = meta.get('vector_id')
-            if vector_id is not None:
-                return ('vector', vector_id)
-            file_path = meta.get('file_path') or meta.get('path') or ''
-            chunk_index = meta.get('chunk_index')
-            if file_path and chunk_index is not None:
-                return ('chunk_index', file_path, chunk_index)
-            chunk_id = meta.get('chunk_id') or meta.get('id')
-            if file_path and chunk_id is not None:
-                return ('chunk_id', file_path, chunk_id)
-            return ('chunk_text', file_path, (meta.get('chunk_text') or meta.get('text') or '')[:64])
+        def perform_exact_match() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+            exact_results: List[Dict[str, Any]] = []
+            perfect_matches: List[Dict[str, Any]] = []
+            seen_exact: Set[Tuple] = set()
+            lowered = query_text.lower()
 
-        exact_results: List[Dict[str, Any]] = []
-        seen_exact = set()
+            for meta in faiss_manager.metadata or []:
+                chunk_text = str(meta.get('chunk_text') or meta.get('text') or '')
+                filename = str(meta.get('filename') or '')
+                file_path = str(meta.get('file_path') or meta.get('path') or '')
 
-        for meta in faiss_manager.metadata or []:
-            chunk_text = (meta.get('chunk_text') or meta.get('text') or '')
-            filename = meta.get('filename') or ''
-            file_path = meta.get('file_path') or meta.get('path') or ''
-
-            best_match: Optional[Dict[str, Any]] = None
-            for field_name, candidate in (
-                ('chunk_text', chunk_text),
-                ('filename', filename),
-                ('file_path', file_path)
-            ):
-                if not candidate:
-                    continue
-                text = str(candidate)
-                candidate_lower = text.lower()
-                pos = candidate_lower.find(query_lower)
-                if pos != -1:
+                best_match: Optional[Dict[str, Any]] = None
+                for field_name, candidate in (
+                    ('chunk_text', chunk_text),
+                    ('filename', filename),
+                    ('file_path', file_path),
+                ):
+                    if not candidate:
+                        continue
+                    candidate_text = str(candidate)
+                    position = candidate_text.lower().find(lowered)
+                    if position == -1:
+                        continue
                     match_info = {
                         'field': field_name,
-                        'position': pos,
-                        'text': text
+                        'position': position,
+                        'text': candidate_text,
                     }
                     if best_match is None:
                         best_match = match_info
@@ -527,27 +588,27 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                         candidate_priority = field_priorities.get(field_name, 99)
                         if candidate_priority < current_priority:
                             best_match = match_info
-                        elif candidate_priority == current_priority and pos < best_match['position']:
+                        elif candidate_priority == current_priority and position < best_match['position']:
                             best_match = match_info
-                        elif candidate_priority == current_priority and pos == best_match['position'] and len(text) < len(best_match['text']):
+                        elif (
+                            candidate_priority == current_priority
+                            and position == best_match['position']
+                            and len(candidate_text) < len(best_match['text'])
+                        ):
                             best_match = match_info
 
-            if best_match is None:
-                continue
+                if best_match is None or best_match['field'] == 'filename':
+                    continue
 
-            if best_match['field'] == 'filename':
-                continue
+                key = build_chunk_key(meta)
+                if key in seen_exact:
+                    continue
+                seen_exact.add(key)
 
-            key = build_chunk_key(meta)
-            if key in seen_exact:
-                continue
-            seen_exact.add(key)
-
-            rank = len(exact_results) + 1
-            match_length = len(query_text)
-            match_preview = build_match_preview(best_match['text'], best_match['position'], match_length)
-            exact_results.append(
-                build_result(
+                match_length = len(query_text)
+                match_preview = build_match_preview(best_match['text'], best_match['position'], match_length)
+                rank = len(exact_results) + 1
+                result = build_result(
                     meta,
                     'exact',
                     {
@@ -557,267 +618,375 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                         'match_length': match_length,
                         'match_preview': match_preview,
                         'match_score': 1.0,
-                    }
+                    },
                 )
-            )
+                exact_results.append(result)
 
-        logger.info("字符匹配完成，查询: '%s'，匹配数量: %d", query_text, len(exact_results))
+                if chunk_text.strip().lower() == lowered:
+                    perfect_matches.append(result)
 
-        perfect_exact_matches = [
-            item for item in exact_results
-            if (item.get('chunk_text') or item.get('text') or '').strip().lower() == query_text.lower()
-        ]
+            return exact_results, perfect_matches
 
-        semantic_candidates: List[Dict[str, Any]] = []
-        bm25s_used = False
-        rerank_used = False
-
+        exact_results, perfect_exact_matches = perform_exact_match()
         if perfect_exact_matches:
             exact_results = perfect_exact_matches[:top_k]
-        else:
-            query_vector = embedding_service.encode_text(query_text)
-            recall_k = max(top_k * 8, 80)
-            recall_results = faiss_manager.search_vectors([query_vector], k=recall_k)
-            raw_candidates = recall_results[0] if recall_results else []
-
-            if raw_candidates:
-                for candidate in raw_candidates:
-                    semantic_candidates.append(
-                        build_result(
-                            candidate,
-                            'semantic',
-                            {
-                                'embedding_score': float(candidate.get('score', 0.0))
-                            }
-                        )
-                    )
-
-                bm25s_scores: List[float] = [0.0] * len(semantic_candidates)
-                if bm25s_service is not None and bm25s_service.is_available():
-                    corpus_contents = [item.get('chunk_text') or item.get('text') or '' for item in semantic_candidates]
-                    if any(corpus_contents):
-                        bm25s_scores = bm25s_service.score_documents(query_text, corpus_contents)
-                        bm25s_used = True
-
-                bm25s_weight = request.bm25s_weight if request.bm25s_weight is not None else ServerConfig.BM25S_WEIGHT
-                embedding_weight = request.embedding_weight if request.embedding_weight is not None else ServerConfig.EMBEDDING_WEIGHT
-                total_weight = bm25s_weight + embedding_weight
-                if total_weight <= 0:
-                    bm25s_weight = embedding_weight = 0.5
-                else:
-                    bm25s_weight /= total_weight
-                    embedding_weight /= total_weight
-
-                for idx, item in enumerate(semantic_candidates):
-                    embedding_score = float(item.get('embedding_score', 0.0))
-                    bm25_raw = float(bm25s_scores[idx]) if idx < len(bm25s_scores) else 0.0
-                    bm25_norm = float(bm25_raw / (bm25_raw + 1.0)) if bm25_raw > 0 else 0.0
-                    item['bm25s_raw_score'] = bm25_raw if bm25s_used else None
-                    item['bm25s_score'] = bm25_norm if bm25s_used else None
-                    item['mixed_score'] = (
-                        bm25_norm * bm25s_weight + embedding_score * embedding_weight
-                        if bm25s_used
-                        else embedding_score
-                    )
-
-                semantic_candidates = filter_semantic_candidates(semantic_candidates, bm25s_weight, embedding_weight)
-
-                if reranker_service is not None and reranker_service.is_available() and semantic_candidates:
-                    rerank_texts: List[str] = []
-                    rerank_indices: List[int] = []
-                    for idx, item in enumerate(semantic_candidates):
-                        content = item.get('chunk_text') or item.get('text') or ''
-                        if content:
-                            rerank_texts.append(content)
-                            rerank_indices.append(idx)
-                    if rerank_texts:
-                        rerank_scores = reranker_service.rerank_results(query_text, rerank_texts)
-                        if not isinstance(rerank_scores, list):
-                            if isinstance(rerank_scores, (int, float)):
-                                rerank_scores = [float(rerank_scores)] * len(rerank_texts)
-                            else:
-                                rerank_scores = [0.0] * len(rerank_texts)
-                        rerank_used = True
-                        for local_idx, score in enumerate(rerank_scores):
-                            global_idx = rerank_indices[local_idx]
-                            semantic_candidates[global_idx]['rerank_score'] = float(score)
-                        semantic_candidates.sort(
-                            key=lambda x: (
-                                x.get('rerank_score', float('-inf')),
-                                x.get('mixed_score', float('-inf'))
-                            ),
-                            reverse=True
-                        )
-                    else:
-                        semantic_candidates.sort(key=lambda x: x.get('mixed_score', 0.0), reverse=True)
-                else:
-                    semantic_candidates.sort(key=lambda x: x.get('mixed_score', 0.0), reverse=True)
-
-        MIN_TEXT_SCORE = 0.55
 
         semantic_results: List[Dict[str, Any]] = []
-        if semantic_candidates:
-            ranked_candidates = semantic_candidates[:top_k]
-            for idx, item in enumerate(ranked_candidates, start=1):
-                mixed_score = item.get('mixed_score')
-                bm25s_score = item.get('bm25s_score')
-                if (
-                    (mixed_score is not None and float(mixed_score) < MIN_TEXT_SCORE)
-                    or (bm25s_score is not None and float(bm25s_score) < MIN_TEXT_SCORE)
-                ):
-                    continue
-                semantic_entry = build_result(
-                    item,
-                    'semantic',
-                    {
-                        'rank': idx,
-                        'embedding_score': float(item.get('embedding_score', 0.0)),
-                        'bm25s_score': item.get('bm25s_score'),
-                        'bm25s_raw_score': item.get('bm25s_raw_score'),
-                        'mixed_score': float(item.get('mixed_score', 0.0)),
-                        'rerank_score': float(item.get('rerank_score', 0.0)) if 'rerank_score' in item else None,
-                        'quality_score': item.get('quality_score')
-                    }
-                )
-                confidence = compute_final_confidence(semantic_entry)
-                semantic_entry['final_score'] = confidence
-                if confidence < 0.3:
-                    continue
-                semantic_results.append(semantic_entry)
+        text_candidates: List[Dict[str, Any]] = []
+        bm25_used = False
+        rerank_used = False
 
-        combined_map: Dict[tuple, Dict[str, Any]] = {}
+        def collect_text_candidates() -> Tuple[List[Dict[str, Any]], bool, bool]:
+            candidate_map: Dict[Tuple, Dict[str, Any]] = {}
 
-        def metrics_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
-            return {
-                'rank': result.get('rank'),
-                'match_position': result.get('match_position'),
-                'match_field': result.get('match_field'),
-                'match_length': result.get('match_length'),
-                'match_score': result.get('match_score'),
-                'embedding_score': result.get('embedding_score'),
-                'bm25s_score': result.get('bm25s_score'),
-                'bm25s_raw_score': result.get('bm25s_raw_score'),
-                'mixed_score': result.get('mixed_score'),
-                'rerank_score': result.get('rerank_score')
-            }
+            def ensure_candidate(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                if not meta:
+                    return None
+                key = build_chunk_key(meta)
+                candidate = candidate_map.get(key)
+                if candidate is not None:
+                    return candidate
+                content = get_candidate_content(meta).strip()
+                if not content:
+                    return None
+                candidate_map[key] = {
+                    'key': key,
+                    'meta': dict(meta),
+                    'content': content,
+                    'sources': set(),
+                    'embedding_score': None,
+                    'embedding_norm': None,
+                    'bm25_raw': None,
+                    'bm25_norm': None,
+                    'rerank_raw': None,
+                    'rerank_norm': None,
+                    'dense_rank': None,
+                    'lexical_rank': None,
+                    'rerank_rank': None,
+                }
+                return candidate_map[key]
 
-        def merge_result(result: Dict[str, Any]) -> None:
-            key = build_chunk_key(result)
-            stored = combined_map.get(key)
-            result_copy = dict(result)
-            metrics = metrics_from_result(result_copy)
-            if stored:
-                if result_copy['source'] not in stored['sources']:
-                    stored['sources'].append(result_copy['source'])
-                stored['metrics'][result_copy['source']] = metrics
-                stored['source'] = '+'.join(sorted(stored['sources']))
-                for field in (
-                    'rank',
-                    'match_position',
-                    'match_field',
-                    'match_length',
-                    'match_preview',
-                    'match_score',
-                    'embedding_score',
-                    'bm25s_score',
-                    'bm25s_raw_score',
-                    'mixed_score',
-                    'rerank_score',
-                    'quality_score'
-                ):
-                    value = result_copy.get(field)
-                    if value is not None and stored.get(field) is None:
-                        stored[field] = value
-            else:
-                result_copy['sources'] = [result_copy['source']]
-                result_copy['metrics'] = {result_copy['source']: metrics}
-                combined_map[key] = result_copy
-
-        for item in exact_results:
-            item['final_score'] = compute_final_confidence(item)
-            merge_result(item)
-        for item in semantic_results:
-            merge_result(item)
-
-        combined_results = list(combined_map.values())
-        combined_results.sort(
-            key=lambda x: (
-                0 if 'exact' in x.get('sources', []) else 1,
-                x.get('metrics', {}).get('exact', {}).get('rank', float('inf')),
-                x.get('metrics', {}).get('semantic', {}).get('rank', float('inf'))
+            query_vector = embedding_service.encode_text(query_text)
+            dense_limit = min(
+                max(top_k * TEXT_DENSE_RECALL_MULTIPLIER, TEXT_DENSE_RECALL_MIN),
+                TEXT_DENSE_RECALL_MAX,
             )
-        )
-        filtered_combined = []
-        rank_counter = 1
-        for item in combined_results:
-            if 'exact' not in (item.get('sources') or []) and item.get('source') != 'exact':
-                item_mixed = item.get('mixed_score')
-                if item_mixed is None:
-                    item_mixed = item.get('metrics', {}).get('semantic', {}).get('mixed_score')
-                item_bm25 = item.get('bm25s_score')
-                if item_bm25 is None:
-                    item_bm25 = item.get('metrics', {}).get('semantic', {}).get('bm25s_score')
-                if (
-                    (item_mixed is not None and float(item_mixed) < MIN_TEXT_SCORE)
-                    or (item_bm25 is not None and float(item_bm25) < MIN_TEXT_SCORE)
-                ):
-                    continue
-            confidence = compute_final_confidence(item)
-            item['final_score'] = confidence
-            if confidence >= 0.3 or 'exact' in (item.get('sources') or []) or item.get('source') == 'exact':
-                item['combined_rank'] = rank_counter
-                filtered_combined.append(item)
-                rank_counter += 1
+            dense_results: List[Dict[str, Any]] = []
+            try:
+                search_results = faiss_manager.search_vectors([query_vector], k=dense_limit)
+                dense_results = search_results[0] if search_results else []
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.error("文本向量检索失败: %s", exc)
 
-        text_combined_results = filtered_combined
+            for idx, item in enumerate(dense_results[:dense_limit]):
+                candidate = ensure_candidate(item)
+                if not candidate:
+                    continue
+                candidate['sources'].add('dense')
+                candidate['dense_rank'] = (
+                    idx + 1 if candidate['dense_rank'] is None else min(candidate['dense_rank'], idx + 1)
+                )
+                score = item.get('score')
+                if score is not None:
+                    try:
+                        raw_score = float(score)
+                    except (TypeError, ValueError):
+                        raw_score = None
+                    if raw_score is not None:
+                        candidate['embedding_score'] = raw_score
+                        candidate['embedding_norm'] = normalize_embedding_score(raw_score)
+
+            bm25_used_local = False
+            if bm25_service is not None:
+                lexical_limit = min(
+                    max(top_k * TEXT_LEXICAL_RECALL_MULTIPLIER, TEXT_LEXICAL_RECALL_MIN),
+                    TEXT_LEXICAL_RECALL_MAX,
+                )
+                try:
+                    lexical_results = bm25_service.retrieve(query_text, top_k=lexical_limit)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("BM25检索失败: %s", exc)
+                    lexical_results = []
+                if lexical_results:
+                    bm25_used_local = True
+                for item in lexical_results:
+                    doc_id = item.get('doc_id')
+                    try:
+                        doc_index = int(doc_id)
+                    except (TypeError, ValueError):
+                        continue
+                    if doc_index < 0 or doc_index >= len(faiss_manager.metadata):
+                        continue
+                    meta = dict(faiss_manager.metadata[doc_index])
+                    if meta.get('vector_id') is None:
+                        meta['vector_id'] = meta.get('id') or doc_index
+                    candidate = ensure_candidate(meta)
+                    if not candidate:
+                        continue
+                    candidate['sources'].add('lexical')
+                    rank_val = item.get('rank')
+                    if isinstance(rank_val, int):
+                        candidate['lexical_rank'] = (
+                            rank_val if candidate['lexical_rank'] is None else min(candidate['lexical_rank'], rank_val)
+                        )
+                    raw_score = item.get('score')
+                    if raw_score is not None:
+                        try:
+                            raw_val = float(raw_score)
+                        except (TypeError, ValueError):
+                            raw_val = None
+                        if raw_val is not None:
+                            candidate['bm25_raw'] = raw_val
+                            candidate['bm25_norm'] = normalize_bm25_score(raw_val)
+
+            candidates = list(candidate_map.values())
+            if not candidates:
+                return [], bm25_used_local, False
+
+            if bm25_service is not None:
+                corpus = [candidate['content'] for candidate in candidates]
+                if any(text.strip() for text in corpus):
+                    try:
+                        bm25_scores = bm25_service.score_documents(query_text, corpus)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning("BM25评分失败: %s", exc)
+                        bm25_scores = []
+                    else:
+                        if bm25_scores:
+                            bm25_used_local = True
+                        for candidate, score in zip(candidates, bm25_scores):
+                            try:
+                                raw_val = float(score)
+                            except (TypeError, ValueError):
+                                continue
+                            candidate['bm25_raw'] = raw_val
+                            candidate['bm25_norm'] = normalize_bm25_score(raw_val)
+
+            for candidate in candidates:
+                emb_norm = candidate.get('embedding_norm') or 0.0
+                bm_norm = candidate.get('bm25_norm') or 0.0
+                candidate['pre_score'] = emb_norm + bm_norm
+
+            rerank_used_local = False
+            if reranker is not None and candidates:
+                rerank_candidates = [cand for cand in candidates if cand.get('content')]
+                rerank_candidates.sort(
+                    key=lambda c: (
+                        c.get('pre_score', 0.0),
+                        c.get('embedding_norm') or 0.0,
+                        c.get('bm25_norm') or 0.0,
+                    ),
+                    reverse=True,
+                )
+                rerank_limit = min(
+                    max(top_k * TEXT_RERANK_MULTIPLIER, TEXT_RERANK_MIN),
+                    TEXT_RERANK_MAX,
+                    len(rerank_candidates),
+                )
+                if rerank_limit > 0:
+                    try:
+                        rerank_scores = reranker.rerank_results(
+                            query_text,
+                            [cand['content'] for cand in rerank_candidates[:rerank_limit]],
+                            normalize=True,
+                        )
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning("重排序模型评分失败: %s", exc)
+                        rerank_scores = []
+                    if rerank_scores:
+                        rerank_used_local = True
+                        for idx, (cand, score) in enumerate(zip(rerank_candidates[:rerank_limit], rerank_scores)):
+                            try:
+                                raw_val = float(score)
+                            except (TypeError, ValueError):
+                                raw_val = 0.0
+                            normalized = clamp_unit(raw_val)
+                            cand['sources'].add('reranker')
+                            cand['rerank_raw'] = raw_val
+                            cand['rerank_norm'] = normalized
+                            cand['rerank_rank'] = idx + 1
+
+            try:
+                bm25_weight = max(0.0, float(bm25_weight_input))
+            except (TypeError, ValueError):
+                bm25_weight = ServerConfig.BM25S_WEIGHT
+            try:
+                embedding_weight = max(0.0, float(embedding_weight_input))
+            except (TypeError, ValueError):
+                embedding_weight = ServerConfig.EMBEDDING_WEIGHT
+            rerank_weight = FUSION_RERANK_WEIGHT if rerank_used_local else 0.0
+
+            for candidate in candidates:
+                breakdown: Dict[str, float] = {}
+                emb_norm = candidate.get('embedding_norm')
+                bm_norm = candidate.get('bm25_norm')
+                rerank_norm = candidate.get('rerank_norm')
+                if emb_norm is not None:
+                    breakdown['dense'] = emb_norm
+                    candidate['sources'].add('dense')
+                if bm_norm is not None:
+                    breakdown['lexical'] = bm_norm
+                if rerank_norm is not None:
+                    breakdown['reranker'] = rerank_norm
+
+                weights: Dict[str, float] = {}
+                if 'dense' in breakdown and embedding_weight > 0:
+                    weights['dense'] = embedding_weight
+                if 'lexical' in breakdown and bm25_weight > 0:
+                    weights['lexical'] = bm25_weight
+                if 'reranker' in breakdown and rerank_weight > 0:
+                    weights['reranker'] = rerank_weight
+
+                if not weights:
+                    final_score = breakdown.get('dense')
+                    if final_score is None:
+                        final_score = breakdown.get('lexical', 0.0)
+                    score_weights = None
+                else:
+                    total_weight = sum(weights.values())
+                    if total_weight <= 0:
+                        total_weight = float(len(weights))
+                        weights = {key: 1.0 for key in weights}
+                    score_weights = {key: value / total_weight for key, value in weights.items()}
+                    final_score = 0.0
+                    for key, weight in score_weights.items():
+                        component = breakdown.get(key)
+                        if component is not None:
+                            final_score += component * weight
+
+                candidate['score_breakdown'] = breakdown or None
+                candidate['score_weights'] = score_weights or None
+                candidate['final_score'] = float(final_score or 0.0)
+
+            candidates.sort(
+                key=lambda c: (
+                    c.get('final_score', 0.0),
+                    c.get('rerank_norm') or 0.0,
+                    c.get('embedding_norm') or 0.0,
+                    c.get('bm25_norm') or 0.0,
+                ),
+                reverse=True,
+            )
+            return candidates, bm25_used_local, rerank_used_local
+
+        if not perfect_exact_matches:
+            text_candidates, bm25_used, rerank_used = collect_text_candidates()
+
+        def serialize_candidate(candidate: Dict[str, Any], rank: int) -> Dict[str, Any]:
+            sources = sorted(candidate.get('sources') or [])
+            breakdown = candidate.get('score_breakdown') or {}
+            weights = candidate.get('score_weights') or {}
+            result = build_result(
+                candidate.get('meta', {}),
+                'semantic',
+                {
+                    'rank': rank,
+                    'embedding_score': candidate.get('embedding_score'),
+                    'embedding_score_normalized': candidate.get('embedding_norm'),
+                    'bm25s_raw_score': candidate.get('bm25_raw'),
+                    'bm25s_score': candidate.get('bm25_norm'),
+                    'rerank_score': candidate.get('rerank_raw'),
+                    'rerank_score_normalized': candidate.get('rerank_norm'),
+                    'mixed_score': candidate.get('final_score'),
+                    'quality_score': candidate.get('final_score'),
+                    'final_score': candidate.get('final_score'),
+                    'dense_rank': candidate.get('dense_rank'),
+                    'lexical_rank': candidate.get('lexical_rank'),
+                    'rerank_rank': candidate.get('rerank_rank'),
+                    'score_breakdown': breakdown or None,
+                    'score_weights': weights or None,
+                    'sources': sources,
+                },
+            )
+            metrics = {
+                'rank': rank,
+                'embedding_score': candidate.get('embedding_score'),
+                'embedding_score_normalized': candidate.get('embedding_norm'),
+                'bm25s_score': candidate.get('bm25_norm'),
+                'bm25s_raw_score': candidate.get('bm25_raw'),
+                'mixed_score': candidate.get('final_score'),
+                'rerank_score': candidate.get('rerank_raw'),
+                'rerank_score_normalized': candidate.get('rerank_norm'),
+                'dense_rank': candidate.get('dense_rank'),
+                'lexical_rank': candidate.get('lexical_rank'),
+                'rerank_rank': candidate.get('rerank_rank'),
+            }
+            result.setdefault('metrics', {})
+            result['metrics']['semantic'] = metrics
+            return result
+
+        def _candidate_passes(candidate: Dict[str, Any]) -> bool:
+            components = [
+                candidate.get('embedding_norm'),
+                candidate.get('bm25_norm'),
+                candidate.get('rerank_norm'),
+            ]
+            for comp in components:
+                if comp is not None and comp < TEXT_MIN_COMPONENT_SCORE:
+                    return False
+            return (candidate.get('final_score') or 0.0) >= TEXT_MIN_FINAL_SCORE
+
+        filtered_candidates = [candidate for candidate in text_candidates if _candidate_passes(candidate)]
+
+        for idx, candidate in enumerate(filtered_candidates[:top_k], start=1):
+            semantic_results.append(serialize_candidate(candidate, idx))
+
+        combined_results: List[Dict[str, Any]] = []
+        for item in exact_results:
+            entry = dict(item)
+            entry.setdefault('sources', ['exact'])
+            entry['final_score'] = compute_final_confidence(entry)
+            combined_results.append(entry)
+        for item in semantic_results:
+            combined_entry = dict(item)
+            combined_results.append(combined_entry)
 
         image_threshold = 0.3
         image_results = search_image_vectors(query_text, top_k, threshold=image_threshold)
-
-        combined_results: List[Dict[str, Any]] = []
-        for entry in text_combined_results:
-            combined_results.append(entry)
         for image_entry in image_results:
             combined_results.append(image_entry)
 
+        combined_results.sort(
+            key=lambda entry: entry.get('final_score', 0.0),
+            reverse=True,
+        )
+
         for idx, entry in enumerate(combined_results, start=1):
             entry['combined_rank'] = idx
+            entry.setdefault('final_score', compute_final_confidence(entry))
 
         response = {
-            "status": "success",
-            "query": query_text,
-            "exact_match": {
-                "total": len(exact_results),
-                "results": exact_results
+            'status': 'success',
+            'query': query_text,
+            'exact_match': {
+                'total': len(exact_results),
+                'results': exact_results,
             },
-            "semantic_match": {
-                "total": len(semantic_results),
-                "results": semantic_results,
-                "bm25s_performed": bm25s_used,
-                "rerank_performed": rerank_used
+            'semantic_match': {
+                'total': len(semantic_results),
+                'results': semantic_results,
+                'bm25s_performed': bm25_used,
+                'rerank_performed': rerank_used,
             },
-            "combined": {
-                "total": len(combined_results),
-                "results": combined_results
+            'combined': {
+                'total': len(combined_results),
+                'results': combined_results,
             },
-            "image_match": {
-                "total": len(image_results),
-                "results": image_results,
-                "confidence_threshold": image_threshold
+            'image_match': {
+                'total': len(image_results),
+                'results': image_results,
             },
-            "bm25s_performed": bm25s_used,
-            "rerank_performed": rerank_used
         }
-
         return response
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Failed to search vectors with reranker: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error(f"Failed to search vectors with reranker: {str(exc)}")
+        raise HTTPException(status_code=500, detail=f"搜索失败: {str(exc)}")
 
 
+@router.post("/search-images")
 @router.post("/search-images")
 async def search_images(request: SearchRequest) -> Dict[str, Any]:
     try:

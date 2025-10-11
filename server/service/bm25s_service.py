@@ -115,6 +115,67 @@ class BM25SService:
             logger.error(f"BM25S文档打分失败: {e}")
             return [0.0] * len(documents)
     
+    def retrieve(self, query: str, top_k: int = 50) -> List[Dict[str, Any]]:
+        """
+        使用已构建的语料索引检索匹配的文档/片段
+
+        Args:
+            query: 查询文本
+            top_k: 返回的候选数量
+
+        Returns:
+            包含 doc_id、score、rank、content 的结果列表
+        """
+        if not self.is_available():
+            logger.debug("BM25S服务未准备就绪，跳过稀疏检索")
+            return []
+
+        if not query:
+            return []
+
+        try:
+            query_tokens = jieba.lcut(query)
+            available_docs = len(self.corpus)
+            if available_docs == 0:
+                return []
+
+            k = min(max(top_k, 1), available_docs)
+            indices, scores = self.retriever.retrieve([query_tokens], k=k)
+
+            indices_array = np.asarray(indices)
+            scores_array = np.asarray(scores)
+
+            if indices_array.ndim > 1:
+                indices_array = indices_array[0]
+            if scores_array.ndim > 1:
+                scores_array = scores_array[0]
+
+            results: List[Dict[str, Any]] = []
+            for rank, (idx, raw_score) in enumerate(zip(indices_array.tolist(), scores_array.tolist()), start=1):
+                if idx is None:
+                    continue
+                try:
+                    idx_int = int(idx)
+                except (TypeError, ValueError):
+                    logger.debug("BM25S retrieve: unexpected index type %s (%s)", idx, type(idx))
+                    continue
+                if idx_int < 0 or idx_int >= available_docs:
+                    continue
+
+                doc_id = self.doc_ids[idx_int] if idx_int < len(self.doc_ids) else str(idx_int)
+                content = self.corpus[idx_int] if idx_int < len(self.corpus) else ''
+                results.append({
+                    'doc_id': doc_id,
+                    'score': float(raw_score),
+                    'rank': rank,
+                    'content': content
+                })
+            return results
+
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("BM25S检索失败: %s", exc)
+            return []
+    
     def is_available(self) -> bool:
         """
         检查服务是否可用
@@ -122,7 +183,7 @@ class BM25SService:
         Returns:
             服务是否已初始化
         """
-        return self.is_loaded and self.retriever is not None
+        return self.is_loaded and self.retriever is not None and bool(self.corpus)
     
     def cleanup_all(self):
         """清理所有BM25S数据"""

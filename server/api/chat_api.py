@@ -1,7 +1,7 @@
 import json
 import logging
 import textwrap
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -12,6 +12,7 @@ from service.bm25s_service import BM25SService
 from service.embedding_service import EmbeddingService
 from service.faiss_service import FaissManager
 from service.llm_client import LLMClientError, SiliconFlowClient
+from service.reranker_service import RerankerService
 from service.sqlite_service import SQLiteManager
 
 
@@ -23,11 +24,29 @@ faiss_manager: Optional[FaissManager] = None
 sqlite_manager: Optional[SQLiteManager] = None
 embedding_service: Optional[EmbeddingService] = None
 bm25s_service: Optional[BM25SService] = None
+reranker_service: Optional[RerankerService] = None
 llm_client: Optional[SiliconFlowClient] = None
 
-MIN_CHUNK_SCORE = 0.3
 MAX_HISTORY_MESSAGES = 8
 MAX_CHUNK_CHARS = 800
+
+DENSE_RECALL_MULTIPLIER = 10
+DENSE_RECALL_MIN = 120
+DENSE_RECALL_MAX = 400
+
+LEXICAL_RECALL_MULTIPLIER = 5
+LEXICAL_RECALL_MIN = 80
+LEXICAL_RECALL_MAX = 250
+
+MERGED_CANDIDATE_LIMIT = 500
+RERANK_CANDIDATE_LIMIT = 150
+
+RERANK_FUSION_WEIGHT = 0.6
+DENSE_FUSION_WEIGHT = 0.25
+LEXICAL_FUSION_WEIGHT = 0.15
+
+MIN_COMPONENT_SCORE = 0.4
+MIN_FINAL_SCORE = 0.45
 
 
 class RetrievedChunk(BaseModel):
@@ -37,10 +56,19 @@ class RetrievedChunk(BaseModel):
     chunk_index: int
     content: str
     score: float
-    embedding_score: float
+    embedding_score: Optional[float] = None
+    embedding_score_normalized: Optional[float] = None
     bm25_score: Optional[float] = None
     bm25_raw_score: Optional[float] = None
+    rerank_score: Optional[float] = None
+    rerank_score_normalized: Optional[float] = None
     vector_id: Optional[int] = None
+    sources: List[str] = Field(default_factory=list)
+    score_breakdown: Optional[Dict[str, float]] = None
+    score_weights: Optional[Dict[str, float]] = None
+    dense_rank: Optional[int] = None
+    lexical_rank: Optional[int] = None
+    rerank_rank: Optional[int] = None
 
 
 class ChatMessageModel(BaseModel):
@@ -99,13 +127,15 @@ def init_chat_api(
     sqlite_mgr: SQLiteManager,
     embedding_srv: EmbeddingService,
     bm25s_srv: Optional[BM25SService] = None,
+    reranker_srv: Optional[RerankerService] = None,
     llm_client_instance: Optional[SiliconFlowClient] = None,
 ) -> None:
-    global faiss_manager, sqlite_manager, embedding_service, bm25s_service, llm_client
+    global faiss_manager, sqlite_manager, embedding_service, bm25s_service, reranker_service, llm_client
     faiss_manager = faiss_mgr
     sqlite_manager = sqlite_mgr
     embedding_service = embedding_srv
     bm25s_service = bm25s_srv
+    reranker_service = reranker_srv
     llm_client = llm_client_instance
 
 
@@ -128,111 +158,283 @@ def _generate_conversation_title(question: str) -> str:
 def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
     assert embedding_service is not None and faiss_manager is not None and sqlite_manager is not None
 
-    query_vector = embedding_service.encode_text(question)
-    recall_k = max(top_k * 4, 40)
+    bm25_service = bm25s_service if bm25s_service and bm25s_service.is_available() else None
+    reranker = reranker_service
 
-    try:
-        search_results = faiss_manager.search_vectors([query_vector], k=recall_k)
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.error("Failed to search vectors: %s", exc)
-        return []
+    def _normalize_embedding(raw: Optional[float]) -> Optional[float]:
+        if raw is None:
+            return None
+        try:
+            normalized = (float(raw) + 1.0) / 2.0
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(1.0, normalized))
 
-    if not search_results:
-        return []
+    def _normalize_bm25(raw: Optional[float]) -> Optional[float]:
+        if raw is None:
+            return None
+        try:
+            raw_val = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if raw_val <= 0.0:
+            return 0.0
+        return float(raw_val / (raw_val + 1.0))
 
-    raw_candidates = search_results[0] if search_results else []
-    if not raw_candidates:
-        return []
+    candidate_map: Dict[int, Dict[str, Any]] = {}
+    chunk_cache: Dict[int, Optional[Dict[str, Any]]] = {}
 
-    candidate_records: List[Dict[str, Any]] = []
-    seen_keys = set()
+    def _fetch_chunk(vector_id: int, fallback: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if vector_id in chunk_cache:
+            return chunk_cache[vector_id]
+        try:
+            record = sqlite_manager.get_chunk_by_vector_id(int(vector_id))
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("Failed to fetch chunk by vector id %s: %s", vector_id, exc)
+            record = None
+        if not record and fallback:
+            # Fallback to metadata when sqlite missing (legacy indices)
+            fallback_content = fallback.get('chunk_text') or fallback.get('text') or fallback.get('content') or ''
+            if fallback_content:
+                record = {
+                    'document_id': fallback.get('document_id'),
+                    'filename': fallback.get('filename') or '',
+                    'file_path': fallback.get('file_path') or fallback.get('path') or '',
+                    'chunk_index': fallback.get('chunk_index', 0),
+                    'content': fallback_content,
+                }
+        chunk_cache[vector_id] = record
+        return record
 
-    for item in raw_candidates:
-        vector_id = item.get('vector_id')
-        chunk_key = vector_id if vector_id is not None else (
-            item.get('document_id'), item.get('chunk_index')
-        )
-        if chunk_key in seen_keys:
-            continue
-        seen_keys.add(chunk_key)
+    def _get_candidate(vector_id: int, source_payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if vector_id is None or vector_id < 0:
+            return None
+        if vector_id in candidate_map:
+            return candidate_map[vector_id]
 
-        chunk_record = None
-        if vector_id is not None:
-            try:
-                chunk_record = sqlite_manager.get_chunk_by_vector_id(int(vector_id))
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.warning("Failed to fetch chunk by vector id %s: %s", vector_id, exc)
-                chunk_record = None
-
+        chunk_record = _fetch_chunk(vector_id, source_payload)
         if not chunk_record:
-            continue
+            return None
 
-        content = chunk_record.get('content') or item.get('chunk_text') or ''
-        if not content.strip():
-            continue
+        content = (chunk_record.get('content') or '').strip()
+        if not content:
+            return None
 
-        candidate_records.append({
-            'vector_id': int(vector_id) if vector_id is not None else None,
+        candidate = {
+            'vector_id': int(vector_id),
             'document_id': chunk_record.get('document_id'),
-            'filename': chunk_record.get('filename') or item.get('filename') or '',
-            'file_path': chunk_record.get('file_path') or item.get('file_path') or '',
+            'filename': chunk_record.get('filename') or (source_payload or {}).get('filename') or '',
+            'file_path': chunk_record.get('file_path') or (source_payload or {}).get('file_path') or '',
             'chunk_index': chunk_record.get('chunk_index', 0),
             'content': content,
-            'embedding_score': float(item.get('score', 0.0))
-        })
+            'embedding_score': None,
+            'embedding_norm': None,
+            'bm25_raw': None,
+            'bm25_norm': None,
+            'rerank_score': None,
+            'rerank_norm': None,
+            'dense_rank': None,
+            'lexical_rank': None,
+            'sources': set(),  # type: Set[str]
+        }
+        candidate_map[vector_id] = candidate
+        return candidate
 
-    if not candidate_records:
+    query_vector = embedding_service.encode_text(question)
+    dense_limit = min(max(top_k * DENSE_RECALL_MULTIPLIER, DENSE_RECALL_MIN), DENSE_RECALL_MAX)
+
+    try:
+        dense_results = faiss_manager.search_vectors([query_vector], k=dense_limit)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Failed to search vectors: %s", exc)
+        dense_results = []
+
+    if dense_results:
+        for idx, item in enumerate(dense_results[0][:dense_limit]):
+            vector_id = item.get('vector_id')
+            candidate = _get_candidate(int(vector_id) if vector_id is not None else -1, item)
+            if not candidate:
+                continue
+            candidate['sources'].add('dense')
+            candidate['dense_rank'] = idx + 1 if candidate.get('dense_rank') is None else min(candidate['dense_rank'], idx + 1)
+            score = item.get('score')
+            if score is not None:
+                embedding_score = float(score)
+                candidate['embedding_score'] = embedding_score
+                candidate['embedding_norm'] = _normalize_embedding(embedding_score)
+
+    lexical_limit = min(max(top_k * LEXICAL_RECALL_MULTIPLIER, LEXICAL_RECALL_MIN), LEXICAL_RECALL_MAX)
+    if bm25_service and lexical_limit > 0:
+        try:
+            lexical_results = bm25_service.retrieve(question, top_k=lexical_limit)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("BM25 retrieval failed: %s", exc)
+            lexical_results = []
+
+        for item in lexical_results:
+            doc_id = item.get('doc_id')
+            try:
+                doc_index = int(doc_id)
+            except (TypeError, ValueError):
+                doc_index = None
+
+            meta: Optional[Dict[str, Any]] = None
+            vector_id_meta: Optional[int] = None
+            if doc_index is not None and 0 <= doc_index < len(faiss_manager.metadata):
+                meta = faiss_manager.metadata[doc_index]
+                vector_id_meta = meta.get('vector_id')
+            if vector_id_meta is None:
+                # 兼容旧数据，尝试使用doc_index作为vector id
+                vector_id_meta = doc_index
+
+            if vector_id_meta is None:
+                continue
+
+            candidate = _get_candidate(int(vector_id_meta), meta)
+            if not candidate:
+                continue
+
+            candidate['sources'].add('lexical')
+            rank = item.get('rank')
+            if isinstance(rank, int):
+                candidate['lexical_rank'] = rank if candidate.get('lexical_rank') is None else min(candidate['lexical_rank'], rank)
+            bm25_raw = item.get('score')
+            if bm25_raw is not None:
+                raw_val = float(bm25_raw)
+                candidate['bm25_raw'] = raw_val
+                candidate['bm25_norm'] = _normalize_bm25(raw_val)
+
+    candidates: List[Dict[str, Any]] = list(candidate_map.values())
+    if not candidates:
         return []
 
-    bm25_scores: List[float] = [0.0] * len(candidate_records)
-    bm25_service = bm25s_service
-    if bm25_service is not None:
-        try:
-            corpus = [candidate['content'] for candidate in candidate_records]
-            bm25_scores = bm25_service.score_documents(question, corpus)
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("BM25 scoring failed: %s", exc)
-            bm25_scores = [0.0] * len(candidate_records)
+    for candidate in candidates:
+        emb_norm = candidate.get('embedding_norm')
+        bm_norm = candidate.get('bm25_norm')
+        candidate['pre_score'] = (emb_norm or 0.0) + (bm_norm or 0.0)
 
-    bm25_weight = ServerConfig.BM25S_WEIGHT
-    embedding_weight = ServerConfig.EMBEDDING_WEIGHT
-    total_weight = bm25_weight + embedding_weight
-    if total_weight <= 0:
-        bm25_weight = embedding_weight = 0.5
-    else:
-        bm25_weight /= total_weight
-        embedding_weight /= total_weight
+    candidates.sort(
+        key=lambda item: (
+            item.get('pre_score', 0.0),
+            item.get('embedding_norm', 0.0),
+            item.get('bm25_norm', 0.0)
+        ),
+        reverse=True
+    )
+
+    if len(candidates) > MERGED_CANDIDATE_LIMIT:
+        candidates = candidates[:MERGED_CANDIDATE_LIMIT]
+
+    rerank_input = [candidate for candidate in candidates if candidate.get('content')]
+    rerank_limit = min(max(top_k * 6, 60), RERANK_CANDIDATE_LIMIT)
+    rerank_limit = min(rerank_limit, len(rerank_input))
+
+    if reranker is not None and rerank_limit > 0:
+        try:
+            rerank_scores = reranker.rerank_results(
+                question,
+                [candidate['content'] for candidate in rerank_input[:rerank_limit]],
+                normalize=True
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("Reranker scoring failed: %s", exc)
+            rerank_scores = []
+
+        for idx, (candidate, score) in enumerate(zip(rerank_input[:rerank_limit], rerank_scores)):
+            try:
+                normalized_score = max(0.0, min(1.0, float(score)))
+            except (TypeError, ValueError):
+                normalized_score = 0.0
+            candidate['sources'].add('reranker')
+            candidate['rerank_score'] = float(score)
+            candidate['rerank_norm'] = normalized_score
+            candidate['rerank_rank'] = idx + 1
 
     ranked: List[RetrievedChunk] = []
-    for idx, candidate in enumerate(candidate_records):
-        bm25_raw = float(bm25_scores[idx]) if idx < len(bm25_scores) else 0.0
-        bm25_norm = float(bm25_raw / (bm25_raw + 1.0)) if bm25_raw > 0 else 0.0
-        final_score = candidate['embedding_score'] * embedding_weight
-        if bm25_service is not None:
-            final_score += bm25_norm * bm25_weight
+    for candidate in candidates:
+        emb_norm = candidate.get('embedding_norm')
+        bm_norm = candidate.get('bm25_norm')
+        rr_norm = candidate.get('rerank_norm')
+
+        weight_rerank = RERANK_FUSION_WEIGHT if rr_norm is not None else 0.0
+        weight_dense = DENSE_FUSION_WEIGHT if emb_norm is not None else 0.0
+        weight_lex = LEXICAL_FUSION_WEIGHT if bm_norm is not None else 0.0
+
+        weight_sum = weight_rerank + weight_dense + weight_lex
+        if weight_sum <= 0.0:
+            final_score = emb_norm or bm_norm or 0.0
+        else:
+            final_score = (
+                (rr_norm or 0.0) * weight_rerank +
+                (emb_norm or 0.0) * weight_dense +
+                (bm_norm or 0.0) * weight_lex
+            ) / weight_sum
+
+        candidate['final_score'] = final_score
+
+        score_breakdown = {}
+        if rr_norm is not None:
+            score_breakdown['reranker'] = rr_norm
+        if emb_norm is not None:
+            score_breakdown['dense'] = emb_norm
+        if bm_norm is not None:
+            score_breakdown['lexical'] = bm_norm
+
+        score_weights = {}
+        if weight_sum > 0:
+            if weight_rerank > 0:
+                score_weights['reranker'] = weight_rerank / weight_sum
+            if weight_dense > 0:
+                score_weights['dense'] = weight_dense / weight_sum
+            if weight_lex > 0:
+                score_weights['lexical'] = weight_lex / weight_sum
 
         ranked.append(
             RetrievedChunk(
-                document_id=int(candidate['document_id']) if candidate['document_id'] is not None else -1,
-                filename=candidate['filename'],
-                file_path=candidate['file_path'],
-                chunk_index=int(candidate['chunk_index'] or 0),
-                content=candidate['content'],
-                score=final_score,
-                embedding_score=candidate['embedding_score'],
-                bm25_score=bm25_norm if bm25_service is not None else None,
-                bm25_raw_score=bm25_raw if bm25_service is not None else None,
-                vector_id=candidate['vector_id']
+                document_id=int(candidate.get('document_id')) if candidate.get('document_id') is not None else -1,
+                filename=candidate.get('filename') or '',
+                file_path=candidate.get('file_path') or '',
+                chunk_index=int(candidate.get('chunk_index') or 0),
+                content=candidate.get('content') or '',
+                score=float(final_score),
+                embedding_score=candidate.get('embedding_score'),
+                embedding_score_normalized=emb_norm,
+                bm25_score=bm_norm,
+                bm25_raw_score=candidate.get('bm25_raw'),
+                rerank_score=candidate.get('rerank_score'),
+                rerank_score_normalized=rr_norm,
+                vector_id=candidate.get('vector_id'),
+                sources=sorted(candidate.get('sources', [])),
+                score_breakdown=score_breakdown or None,
+                score_weights=score_weights or None,
+                dense_rank=candidate.get('dense_rank'),
+                lexical_rank=candidate.get('lexical_rank'),
+                rerank_rank=candidate.get('rerank_rank')
             )
         )
 
-    ranked.sort(key=lambda chunk: (chunk.score, chunk.embedding_score), reverse=True)
-    filtered = [
-        chunk for chunk in ranked
-        if chunk.score >= MIN_CHUNK_SCORE or (chunk.bm25_score is not None and chunk.bm25_score >= MIN_CHUNK_SCORE)
-    ]
-    if not filtered:
-        filtered = ranked[:top_k]
+    ranked.sort(
+        key=lambda chunk: (
+            chunk.score,
+            chunk.rerank_score_normalized or 0.0,
+            chunk.embedding_score_normalized or 0.0,
+            chunk.bm25_score or 0.0
+        ),
+        reverse=True
+    )
+
+    def _passes_threshold(chunk: RetrievedChunk) -> bool:
+        components = [
+            chunk.embedding_score_normalized,
+            chunk.bm25_score,
+            chunk.rerank_score_normalized
+        ]
+        for comp in components:
+            if comp is not None and comp < MIN_COMPONENT_SCORE:
+                return False
+        return chunk.score >= MIN_FINAL_SCORE
+
+    filtered = [chunk for chunk in ranked if _passes_threshold(chunk)]
     return filtered[:top_k]
 
 
@@ -286,7 +488,9 @@ def _build_llm_messages(
     if knowledge_block:
         knowledge_text = f"以下资料可供参考：\n{knowledge_block}\n\n"
     else:
-        knowledge_text = "未检索到相关资料。请谨慎作答，必要时直接说明无法回答。\n\n"
+        knowledge_text = (
+            "未检索到足够的相关资料。请谨慎作答，必要时明确说明，同时可以发挥自身知识完成回答。\n\n"
+        )
 
     user_prompt = (
         f"{knowledge_text}"

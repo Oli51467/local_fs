@@ -87,6 +87,7 @@ async def lifespan(app: FastAPI):
         sqlite_instance,
         embedding_instance,
         bm25s_service_instance,
+        reranker_service_instance,
         llm_client_instance,
     )
     
