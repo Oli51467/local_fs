@@ -184,12 +184,15 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: white-space 0.2s ease;
 }
 
 .model-card-tags {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .model-tag {
@@ -200,7 +203,9 @@
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.3px;
-  text-transform: uppercase;
+  text-transform: none;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .model-placeholder {
@@ -268,9 +273,12 @@
   color: var(--text-muted);
 }
 
-.model-add-modal__field select {
+.model-add-modal__field select,
+.model-add-modal__field input,
+.model-add-modal__field textarea {
   appearance: none;
   width: 100%;
+  box-sizing: border-box;
   padding: 9px 12px;
   border-radius: 10px;
   border: 1px solid var(--border-light);
@@ -280,9 +288,16 @@
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.model-add-modal__field select:focus {
+.model-add-modal__field select:focus,
+.model-add-modal__field input:focus,
+.model-add-modal__field textarea:focus {
   border-color: var(--accent-color);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+.model-add-modal__field textarea {
+  min-height: 96px;
+  resize: vertical;
 }
 
 .model-add-modal__status {
@@ -358,7 +373,9 @@
   box-shadow: 0 22px 60px rgba(15, 23, 42, 0.5);
 }
 
-.dark-mode .model-add-modal__field select {
+.dark-mode .model-add-modal__field select,
+.dark-mode .model-add-modal__field input,
+.dark-mode .model-add-modal__field textarea {
   background-color: #111827;
   border-color: rgba(148, 163, 184, 0.35);
   color: #e2e8f0;

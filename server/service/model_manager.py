@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from threading import Lock
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, Tuple, Union
 
 from config.config import ServerConfig
 
 
 logger = logging.getLogger(__name__)
+
+RequiredFile = Union[str, Tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -21,10 +24,12 @@ class ModelSpec:
     key: str
     repo_id: str
     local_subdir: Path
-    required_files: Iterable[str] = field(default_factory=tuple)
+    required_files: Iterable[RequiredFile] = field(default_factory=tuple)
     revision: Optional[str] = None
     allow_patterns: Optional[Iterable[str]] = None
     ignore_patterns: Optional[Iterable[str]] = None
+    endpoint: Optional[str] = None
+    mirror_endpoints: Iterable[str] = field(default_factory=tuple)
     download_on_startup: bool = False
 
     def local_path(self, root: Path) -> Path:
@@ -93,8 +98,12 @@ class ModelManager:
         except FileNotFoundError:
             return False
 
-        for relative_name in spec.required_files:
-            if not (local_path / relative_name).exists():
+        for requirement in spec.required_files:
+            if isinstance(requirement, tuple):
+                if not any((local_path / candidate).exists() for candidate in requirement):
+                    return False
+                continue
+            if not (local_path / requirement).exists():
                 return False
         return True
 
@@ -104,6 +113,26 @@ class ModelManager:
             from huggingface_hub import snapshot_download
         except ImportError as exc:  # pragma: no cover - dependency declared in requirements
             raise RuntimeError("huggingface_hub is required to download models") from exc
+
+        def _trimmed(value: Optional[str]) -> Optional[str]:
+            if value is None:
+                return None
+            return value.rstrip("/")
+
+        candidate_endpoints: list[Optional[str]] = []
+
+        def _add_endpoint(value: Optional[str]) -> None:
+            value = _trimmed(value)
+            if value in candidate_endpoints:
+                return
+            candidate_endpoints.append(value)
+
+        _add_endpoint(spec.endpoint)
+        for env_name in ("FS_HF_ENDPOINT", "HF_ENDPOINT", "HF_HUB_BASE_URL"):
+            _add_endpoint(os.environ.get(env_name))
+        for mirror in spec.mirror_endpoints:
+            _add_endpoint(mirror)
+        _add_endpoint(None)  # default huggingface endpoint
 
         kwargs = {
             "repo_id": spec.repo_id,
@@ -118,13 +147,29 @@ class ModelManager:
         if spec.ignore_patterns is not None:
             kwargs["ignore_patterns"] = list(spec.ignore_patterns)
 
-        try:
-            snapshot_download(**kwargs)
-        except Exception as error:  # pragma: no cover - upstream errors are logged
-            logger.exception("Failed to download model '%s': %s", spec.key, error)
-            raise
+        last_error: Optional[Exception] = None
+        for endpoint in candidate_endpoints:
+            endpoint_label = endpoint or "https://huggingface.co"
+            try:
+                if endpoint:
+                    snapshot_download(endpoint=endpoint, **kwargs)
+                else:
+                    snapshot_download(**kwargs)
+                logger.info("Model '%s' downloaded via %s", spec.key, endpoint_label)
+                break
+            except Exception as error:  # pragma: no cover - upstream errors are logged
+                last_error = error
+                logger.warning(
+                    "Downloading model '%s' via %s failed: %s",
+                    spec.key,
+                    endpoint_label,
+                    error,
+                )
         else:
-            logger.info("Model '%s' is ready at %s", spec.key, local_path)
+            assert last_error is not None  # for type checkers
+            logger.exception("Failed to download model '%s'", spec.key)
+            raise last_error
+        logger.info("Model '%s' is ready at %s", spec.key, local_path)
 
     def _lock_for(self, key: str) -> Lock:
         lock = self._locks.get(key)
@@ -140,20 +185,32 @@ def _build_registry() -> Dict[str, ModelSpec]:
             key="bge_m3",
             repo_id="BAAI/bge-m3",
             local_subdir=Path("embedding") / "bge-m3",
-            required_files=("config.json", "pytorch_model.bin"),
+            required_files=(
+                "config.json",
+                ("pytorch_model.bin", "model.safetensors", "onnx/model.onnx"),
+            ),
+            mirror_endpoints=("https://hf-mirror.com",),
             download_on_startup=True,
         ),
         "bge_reranker_v2_m3": ModelSpec(
             key="bge_reranker_v2_m3",
             repo_id="BAAI/bge-reranker-v2-m3",
             local_subdir=Path("reranker") / "bge-reranker-v3-m3",
-            required_files=("config.json", "pytorch_model.bin"),
+            required_files=(
+                "config.json",
+                ("pytorch_model.bin", "model.safetensors", "onnx/model.onnx"),
+            ),
+            mirror_endpoints=("https://hf-mirror.com",),
         ),
         "clip_vit_b_32": ModelSpec(
             key="clip_vit_b_32",
             repo_id="sentence-transformers/clip-ViT-B-32",
             local_subdir=Path("embedding") / "clip",
-            required_files=("modules.json",),
+            required_files=(
+                "modules.json",
+                ("pytorch_model.bin", "model.safetensors", "onnx/model.onnx"),
+            ),
+            mirror_endpoints=("https://hf-mirror.com",),
         ),
         "pdf_extract_kit": ModelSpec(
             key="pdf_extract_kit",

@@ -1350,11 +1350,19 @@
       inputWrapper.remove();
       element.style.display = '';
       if (!applyChange || !explorer) {
+        if (explorer && typeof explorer.onRenameFinished === 'function') {
+          explorer.onRenameFinished();
+        }
         return;
       }
       const newName = input.value.trim() + fileExtension;
       if (newName && newName !== currentName && typeof explorer.applyRename === 'function') {
         explorer.applyRename(itemPath, newName, isFolder);
+      } else {
+        // 未发生变化也需要重置状态
+        if (explorer && typeof explorer.onRenameFinished === 'function') {
+          explorer.onRenameFinished();
+        }
       }
     }
     input.addEventListener('keydown', (event) => {

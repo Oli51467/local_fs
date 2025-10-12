@@ -545,7 +545,9 @@ class ExplorerModule {
     this.isRenaming = true;
     
     const isFolder = element.classList.contains('folder-item');
-    const currentName = element.textContent.trim();
+    // 仅提取纯文件名文本，避免包含文件夹箭头或图标字符串
+    const nameEl = element.querySelector('.file-name-text');
+    const currentName = nameEl ? nameEl.textContent.trim() : element.textContent.trim();
     
     this.createRenameInput(element, targetPath, currentName, isFolder);
   }
@@ -559,6 +561,62 @@ class ExplorerModule {
       console.error('createRenameInput 函数未找到');
       showAlert('重命名功能初始化失败', 'error');
     }
+  }
+
+  // 提交重命名并同步UI
+  async applyRename(itemPath, newName, isFolder) {
+    try {
+      const parentDir = itemPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+      const newPath = parentDir ? `${parentDir}/${newName}` : newName;
+
+      const result = await window.fsAPI.renameItem(itemPath, newName);
+      if (!result || result.success !== true) {
+        const errorMsg = (result && result.error) ? result.error : '重命名失败';
+        showAlert(errorMsg, 'error');
+        this.isRenaming = false;
+        return;
+      }
+
+      // 刷新文件树
+      await this.loadFileTree();
+
+      // 更新选中项路径为新路径
+      this.setSelectedItemPath(newPath);
+
+      // 同步标签页：更新打开文件的标题或路径
+      if (this.fileViewer && this.fileViewer.tabManager) {
+        // 如果是文件，尝试更新对应tab标题与路径
+        const tabManager = this.fileViewer.tabManager;
+        const allTabs = tabManager.getAllTabs();
+        allTabs.forEach(tab => {
+          if (!tab.filePath) return;
+          const oldPathNorm = tab.filePath.replace(/\\/g, '/');
+          const isSameFile = oldPathNorm === itemPath.replace(/\\/g, '/');
+          if (isSameFile) {
+            // 更新tab内部记录的文件名
+            const newTitle = newName;
+            tabManager.updateTabTitle(tab.filePath, newTitle);
+            // 由于tabId等于文件路径，重命名后无法简单变更id；关闭旧tab以避免状态错乱
+            tabManager.closeTabByFilePath(itemPath);
+          }
+        });
+      }
+
+      // 如果是重命名文件夹，关闭该文件夹内所有打开的文件tab
+      if (isFolder) {
+        this.closeTabsInFolder(itemPath);
+      }
+      this.isRenaming = false;
+    } catch (error) {
+      console.error('重命名失败:', error);
+      showAlert(`重命名失败: ${error.message}`, 'error');
+      this.isRenaming = false;
+    }
+  }
+
+  // 重命名流程结束时的清理（在未实际提交变更或取消时也应调用）
+  onRenameFinished() {
+    this.isRenaming = false;
   }
 
   // 删除项目（公开接口）

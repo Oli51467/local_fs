@@ -75,29 +75,12 @@ class ModelModule {
   }
 
   populateModelOptionsForSource(sourceId) {
-    if (!this.modelSelectEl) {
+    if (!this.modelInputEl) {
       return;
     }
-
     const source = this.getSourceById(sourceId);
-    this.modelSelectEl.innerHTML = '';
 
-    if (!source || !Array.isArray(source.models) || source.models.length === 0) {
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent = '暂无模型';
-      this.modelSelectEl.appendChild(option);
-      this.modelSelectEl.disabled = true;
-      return;
-    }
-
-    this.modelSelectEl.disabled = false;
-    source.models.forEach((model) => {
-      const option = document.createElement('option');
-      option.value = model.modelId;
-      option.textContent = model.name;
-      this.modelSelectEl.appendChild(option);
-    });
+    this.modelInputEl.value = '';
   }
 
   setupAddModal() {
@@ -116,7 +99,11 @@ class ModelModule {
         </div>
         <div class="model-add-modal__field">
           <label for="model-add-model">模型名称</label>
-          <select id="model-add-model" data-role="model"></select>
+          <input id="model-add-model" data-role="model" type="text" />
+        </div>
+        <div class="model-add-modal__field">
+          <label for="model-add-description">模型描述</label>
+          <textarea id="model-add-description" data-role="model-description" rows="3"></textarea>
         </div>
         <div class="model-add-modal__status" data-role="status"></div>
         <div class="model-add-modal__actions">
@@ -128,7 +115,8 @@ class ModelModule {
 
     this.addModalEl = overlay;
     this.sourceSelectEl = overlay.querySelector('[data-role="source"]');
-    this.modelSelectEl = overlay.querySelector('[data-role="model"]');
+    this.modelInputEl = overlay.querySelector('[data-role="model"]');
+    this.modelDescriptionEl = overlay.querySelector('[data-role="model-description"]');
     this.modalStatusEl = overlay.querySelector('[data-role="status"]');
     this.modalConfirmBtn = overlay.querySelector('[data-action="confirm"]');
     this.modalCancelBtn = overlay.querySelector('[data-action="cancel"]');
@@ -179,8 +167,17 @@ class ModelModule {
       return;
     }
     this.clearModalStatus();
+    if (this.modelInputEl) {
+      this.modelInputEl.value = '';
+    }
+    if (this.modelDescriptionEl) {
+      this.modelDescriptionEl.value = '';
+    }
     this.setModalLoading(false);
     this.addModalEl.classList.add('visible');
+    if (this.modelInputEl) {
+      this.modelInputEl.focus();
+    }
     document.addEventListener('keydown', this.handleModalKeydown);
   }
 
@@ -200,27 +197,27 @@ class ModelModule {
     }
 
     const sourceId = this.sourceSelectEl?.value;
-    const modelId = this.modelSelectEl?.value;
+    const modelName = this.modelInputEl?.value?.trim();
+    const modelDescription = this.modelDescriptionEl?.value?.trim() || '';
 
     const source = this.getSourceById(sourceId);
-    const model = this.getModelById(sourceId, modelId);
 
     if (!source) {
       this.setModalStatus('请选择模型来源。', 'error');
       return;
     }
 
-    if (!model) {
-      this.setModalStatus('请选择模型名称。', 'error');
+    if (!modelName) {
+      this.setModalStatus('请输入模型名称。', 'error');
       return;
     }
 
-    if (this.userModels.some((item) => item.sourceId === source.sourceId && item.modelId === model.modelId)) {
+    if (this.userModels.some((item) => item.sourceId === source.sourceId && item.modelId === modelName)) {
       this.setModalStatus('该模型已在列表中，无需重复添加。', 'warning');
       return;
     }
 
-    const apiKeySetting = model.apiKeySetting || source.apiKeySetting || 'siliconflwApiKey';
+    const apiKeySetting = source.apiKeySetting || 'siliconflwApiKey';
     const settingsModule = this.dependencies.getSettingsModule ? this.dependencies.getSettingsModule() : null;
     const apiKey = settingsModule && typeof settingsModule.getApiKey === 'function'
       ? settingsModule.getApiKey(apiKeySetting)
@@ -235,19 +232,26 @@ class ModelModule {
     this.setModalStatus('正在测试连接，请稍候...', 'info');
 
     try {
-      await this.testSiliconflowConnection(apiKey, model.apiModel);
+      await this.testSiliconflowConnection(apiKey, modelName);
       this.setModalStatus('测试通过，模型已添加。', 'success');
       this.appendModelCard({
         sourceId: source.sourceId,
-        modelId: model.modelId,
-        apiModel: model.apiModel,
+        modelId: modelName,
+        apiModel: modelName,
         apiKeySetting,
-        name: model.name,
+        name: modelName,
         providerName: source.name,
-        providerIcon: model.icon || source.icon || null,
-        description: model.description,
-        tags: model.tags || []
+        providerIcon: source.icon || null,
+        description: modelDescription,
+        parameterSize: this.extractParameterSize(modelName)
       });
+
+      if (this.modelInputEl) {
+        this.modelInputEl.value = '';
+      }
+      if (this.modelDescriptionEl) {
+        this.modelDescriptionEl.value = '';
+      }
 
       setTimeout(() => {
         this.hideAddModal();
@@ -268,29 +272,6 @@ class ModelModule {
           role: 'user',
           content: 'What opportunities and challenges will the Chinese large model industry face in 2025?'
         }
-      ],
-      stream: false,
-      max_tokens: 4096,
-      enable_thinking: false,
-      thinking_budget: 4096,
-      min_p: 0.05,
-      stop: null,
-      temperature: 0.7,
-      top_p: 0.7,
-      top_k: 50,
-      frequency_penalty: 0.5,
-      n: 1,
-      response_format: { type: 'text' },
-      tools: [
-        {
-          type: 'function',
-          function: {
-            description: '<string>',
-            name: '<string>',
-            parameters: {},
-            strict: false
-          }
-        }
       ]
     };
 
@@ -306,7 +287,15 @@ class ModelModule {
     let data = null;
     try {
       data = await response.json();
-      console.log('SiliconFlow test response:', data);
+      if (data && data.id) {
+        console.debug('SiliconFlow 测试响应已接收', {
+          status: response.status,
+          id: data.id,
+          usage: data.usage || null
+        });
+      } else {
+        console.debug('SiliconFlow 测试响应已接收');
+      }
     } catch (parseError) {
       console.warn('解析 SiliconFlow 响应失败:', parseError);
     }
@@ -339,8 +328,11 @@ class ModelModule {
     if (this.sourceSelectEl) {
       this.sourceSelectEl.disabled = this.addModalLoading;
     }
-    if (this.modelSelectEl) {
-      this.modelSelectEl.disabled = this.addModalLoading || this.modelSelectEl.options.length === 0;
+    if (this.modelInputEl) {
+      this.modelInputEl.disabled = this.addModalLoading;
+    }
+    if (this.modelDescriptionEl) {
+      this.modelDescriptionEl.disabled = this.addModalLoading;
     }
   }
 
@@ -476,6 +468,7 @@ class ModelModule {
     const description = document.createElement('p');
     description.className = 'model-card-description';
     description.textContent = model.description || '暂无简介。';
+    // 取消悬浮显示所有描述的功能，不设置 title 提示
 
     const tagsWrapper = document.createElement('div');
     tagsWrapper.className = 'model-card-tags';
@@ -598,6 +591,9 @@ class ModelModule {
       }
     }
     enriched.apiKeySetting = enriched.apiKeySetting || 'siliconflwApiKey';
+    enriched.description = typeof enriched.description === 'string' ? enriched.description : '';
+    enriched.parameterSize = enriched.parameterSize || this.extractParameterSize(enriched.apiModel || enriched.name || enriched.modelId);
+    enriched.tags = this.buildModelTags(enriched, source);
     return enriched;
   }
 
@@ -615,6 +611,26 @@ class ModelModule {
     }
     const initials = parts.slice(0, 2).map((part) => part.charAt(0)).join('');
     return initials.toUpperCase();
+  }
+
+  buildModelTags(model, source) {
+    const providerName = model.providerName || source?.name || '未知来源';
+    const parameterSize = model.parameterSize || '未知';
+    const displayName = model.name || model.apiModel || model.modelId || '未命名模型';
+    return [providerName, parameterSize, displayName].filter((item) => typeof item === 'string' && item.trim().length > 0);
+  }
+
+  extractParameterSize(identifier) {
+    if (!identifier || typeof identifier !== 'string') {
+      return '未知';
+    }
+    const match = identifier.match(/(\d+(?:\.\d+)?)(?:\s*)([kKmMgGtTpP]?)[bB](?![a-zA-Z])/);
+    if (match) {
+      const value = match[1];
+      const unit = match[2] ? match[2].toUpperCase() : '';
+      return `${value}${unit}B`;
+    }
+    return '未知';
   }
 }
 
