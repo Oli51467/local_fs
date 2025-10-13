@@ -10,10 +10,7 @@ class ModelModule {
     this.systemFetchPending = false;
     this.systemPollingHandle = null;
     this.systemPollingInterval = null;
-    this.systemPollingIntervals = {
-      fast: 1000,
-      slow: 10000
-    };
+    this.systemPollingDelayMs = 30000;
     this.systemDownloadRequests = new Set();
 
     this.dependencies = {
@@ -288,17 +285,23 @@ class ModelModule {
     this.systemModels[index] = merged;
   }
 
+  areAllSystemModelsReady() {
+    if (!Array.isArray(this.systemModels) || this.systemModels.length === 0) {
+      return false;
+    }
+    return this.systemModels.every((model) => model.status === 'downloaded');
+  }
+
   updateSystemPollingState(options = {}) {
     const forceFast = Boolean(options.forceFast);
-    const hasDownloading = this.systemModels.some((model) => model.status === 'downloading');
-    if (hasDownloading || forceFast) {
-      this.startSystemPolling(this.systemPollingIntervals.fast);
+    const hasActiveModel =
+      this.systemModels.some((model) => model.status === 'downloading' || model.status === 'pending');
+
+    if (hasActiveModel || !this.areAllSystemModelsReady() || forceFast) {
+      this.startSystemPolling(this.systemPollingDelayMs);
       return;
     }
-    if (this.systemModels.length > 0) {
-      this.startSystemPolling(this.systemPollingIntervals.slow);
-      return;
-    }
+
     this.stopSystemPolling();
   }
 

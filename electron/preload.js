@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('fsAPI', {
   resolveProjectPathSync: (targetPath) => ipcRenderer.sendSync('fs-app:resolve-project-path-sync', targetPath),
   toProjectRelativePath: (targetPath) => ipcRenderer.invoke('fs-app:project-relative-path', targetPath),
   toProjectRelativePathSync: (targetPath) => ipcRenderer.sendSync('fs-app:project-relative-path-sync', targetPath),
+  resolveMarkdownAssetPathSync: (filePath, assetPath) => ipcRenderer.sendSync('resolve-markdown-asset-sync', { filePath, assetPath }),
   
   // PPTX相关
   readPptxFile: (filePath) => ipcRenderer.invoke('read-pptx-file', filePath),

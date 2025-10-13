@@ -8,6 +8,44 @@ const STATIC_DEV_ROOT = path.join(ELECTRON_ROOT, 'static');
 
 const toFileUrl = (absolutePath) => 'file://' + absolutePath.replace(/\\/g, '/');
 
+const decodeFileUrl = (input) => {
+  if (typeof input !== 'string') {
+    return input;
+  }
+  if (!input.startsWith('file://')) {
+    return input;
+  }
+  try {
+    const url = new URL(input);
+    let pathname = url.pathname || '';
+    if (process.platform === 'win32' && pathname.startsWith('/')) {
+      pathname = pathname.slice(1);
+    }
+    return decodeURIComponent(pathname);
+  } catch (error) {
+    return input.replace(/^file:\/\//i, '');
+  }
+};
+
+const normalizePathString = (input) => {
+  if (typeof input !== 'string') {
+    return '';
+  }
+  return input.replace(/\\/g, '/');
+};
+
+const uniquePush = (collection, value, seen) => {
+  if (!value) {
+    return;
+  }
+  const normalized = path.normalize(value);
+  if (seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  collection.push(normalized);
+};
+
 const isWindows = process.platform === 'win32';
 
 const ensureWithinBase = (targetPath, basePath) => {
@@ -49,7 +87,125 @@ const resolveDistAsset = (relativePath) => {
 
 class FileViewerModule {
   constructor() {
+    this.runtimePaths = this.loadRuntimePaths();
     this.initializeIpcHandlers();
+  }
+
+  loadRuntimePaths() {
+    const resolveEnvPath = (key) => {
+      const value = process.env[key];
+      if (!value) {
+        return null;
+      }
+      try {
+        return path.resolve(value);
+      } catch (error) {
+        return null;
+      }
+    };
+
+    return {
+      externalRoot: resolveEnvPath('FS_APP_EXTERNAL_ROOT'),
+      dataRoot: resolveEnvPath('FS_APP_DATA_DIR'),
+      metaRoot: resolveEnvPath('FS_APP_META_DIR')
+    };
+  }
+
+  resolveMarkdownAssetPath(baseFilePath, rawAssetPath) {
+    if (!rawAssetPath || typeof rawAssetPath !== 'string') {
+      return null;
+    }
+
+    let asset = normalizePathString(rawAssetPath.trim());
+    if (!asset) {
+      return null;
+    }
+
+    if (/^(https?:|data:|blob:|mailto:|javascript:)/i.test(asset)) {
+      return asset;
+    }
+
+    asset = normalizePathString(decodeFileUrl(asset));
+    if (!asset) {
+      return null;
+    }
+    const candidates = [];
+    const seen = new Set();
+
+    const pushCandidate = (candidate) => uniquePush(candidates, candidate, seen);
+
+    const pushRuntimeRelative = (relativePath) => {
+      if (!relativePath) {
+        return;
+      }
+      const trimmed = normalizePathString(relativePath).replace(/^([/\\])+/, '');
+      if (!trimmed) {
+        return;
+      }
+      const { externalRoot, dataRoot, metaRoot } = this.runtimePaths || {};
+      if (externalRoot) {
+        pushCandidate(path.resolve(externalRoot, trimmed));
+      }
+      if (dataRoot) {
+        pushCandidate(path.resolve(dataRoot, trimmed));
+      }
+      if (metaRoot) {
+        pushCandidate(path.resolve(metaRoot, trimmed));
+      }
+    };
+
+    const isAbsoluteAsset = path.isAbsolute(asset);
+    if (isAbsoluteAsset) {
+      pushCandidate(asset);
+    } else if (asset.startsWith('/')) {
+      pushRuntimeRelative(asset);
+    }
+
+    const resolvedBaseDir = typeof baseFilePath === 'string' && baseFilePath
+      ? path.resolve(path.dirname(baseFilePath))
+      : null;
+
+    if (resolvedBaseDir) {
+      pushCandidate(path.resolve(resolvedBaseDir, asset));
+    }
+
+    if (!isAbsoluteAsset && !asset.startsWith('/')) {
+      pushRuntimeRelative(asset);
+    }
+
+    const assetFileName = path.basename(asset);
+    if (assetFileName && assetFileName !== asset) {
+      if (resolvedBaseDir) {
+        pushCandidate(path.resolve(resolvedBaseDir, assetFileName));
+      }
+      const { externalRoot, dataRoot } = this.runtimePaths || {};
+      if (dataRoot) {
+        pushCandidate(path.resolve(dataRoot, assetFileName));
+      }
+      if (externalRoot) {
+        pushCandidate(path.resolve(externalRoot, assetFileName));
+      }
+    }
+
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      } catch (error) {
+        // ignore access errors for individual candidates
+      }
+    }
+
+    if (candidates.length > 0) {
+      return candidates[0];
+    }
+
+    if (isAbsoluteAsset) {
+      return asset;
+    }
+
+    return resolvedBaseDir ? path.resolve(resolvedBaseDir, asset) : asset;
   }
 
   // 初始化IPC处理器
@@ -205,6 +361,16 @@ class FileViewerModule {
     ipcMain.handle('get-pptx-lib-path', () => {
       const libPath = resolveStaticAsset('libs', 'pptx-preview.umd.js');
       return toFileUrl(libPath);
+    });
+
+    ipcMain.on('resolve-markdown-asset-sync', (event, payload) => {
+      try {
+        const { filePath, assetPath } = payload || {};
+        event.returnValue = this.resolveMarkdownAssetPath(filePath, assetPath);
+      } catch (error) {
+        console.error('解析Markdown资源路径失败:', error);
+        event.returnValue = null;
+      }
     });
 
     ipcMain.handle('get-dist-asset-path', (event, relativePath) => {

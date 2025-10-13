@@ -373,11 +373,94 @@ class MarkdownViewer {
   }
 
   composeMarkdownHtml(bodyHtml) {
+    const resolveStylesheetHref = (candidates = []) => {
+      if (!Array.isArray(candidates) || candidates.length === 0 || typeof window === 'undefined') {
+        return null;
+      }
+
+      const api = window.fsAPI;
+      if (!api) {
+        return null;
+      }
+
+      const sanitize = (value) => String(value || '').replace(/^([./\\])+/, '').trim();
+      const toHref = (absoluteOrHref) => {
+        if (!absoluteOrHref) {
+          return null;
+        }
+        const normalized = String(absoluteOrHref).trim();
+        if (/^(file|https?):/i.test(normalized)) {
+          return normalized;
+        }
+        return this.convertPathToFileUrl(normalized);
+      };
+
+      const attemptResolve = (target) => {
+        if (!target) {
+          return null;
+        }
+
+        if (typeof api.resolveMarkdownAssetPathSync === 'function') {
+          try {
+            const resolved = api.resolveMarkdownAssetPathSync(null, target);
+            const href = toHref(resolved);
+            if (href) {
+              return href;
+            }
+          } catch (error) {
+            console.warn('解析Markdown资源路径失败:', target, error);
+          }
+        }
+
+        if (typeof api.getAssetPathSync === 'function') {
+          try {
+            const assetHref = api.getAssetPathSync(target);
+            const href = toHref(assetHref);
+            if (href) {
+              return href;
+            }
+          } catch (error) {
+            console.warn('获取Markdown静态资源失败:', target, error);
+          }
+        }
+
+        return null;
+      };
+
+      for (const candidate of candidates) {
+        const sanitized = sanitize(candidate);
+        if (!sanitized) {
+          continue;
+        }
+        const href = attemptResolve(sanitized);
+        if (href) {
+          return href;
+        }
+      }
+
+      return null;
+    };
+
+    const markdownCssHref = resolveStylesheetHref([
+      'dist/assets/github-markdown.css',
+      'node_modules/github-markdown-css/github-markdown.css'
+    ]);
+    const highlightCssHref = resolveStylesheetHref([
+      'dist/assets/highlight-github.css',
+      'node_modules/highlight.js/styles/github.min.css'
+    ]);
+
+    const stylesheetLinks = [];
+    if (markdownCssHref) {
+      stylesheetLinks.push('<!-- GitHub Markdown 样式 -->', `<link rel="stylesheet" href="${markdownCssHref}">`);
+    }
+    if (highlightCssHref) {
+      stylesheetLinks.push('<!-- highlight.js 样式 -->', `<link rel="stylesheet" href="${highlightCssHref}">`);
+    }
+    const externalStylesMarkup = stylesheetLinks.join('\n');
+
     return `
-      <!-- GitHub Markdown 样式 -->
-      <link rel="stylesheet" href="./node_modules/github-markdown-css/github-markdown.css">
-      <!-- highlight.js 样式 -->
-      <link rel="stylesheet" href="./node_modules/highlight.js/styles/github.min.css">
+      ${externalStylesMarkup}
 
       <style>
         .markdown-body {
@@ -514,6 +597,10 @@ class MarkdownViewer {
       return '';
     }
 
+    if (typeof document === 'undefined') {
+      return html;
+    }
+
     const baseDir = this.getBaseDirectory(filePath);
     if (!baseDir) {
       return html;
@@ -522,36 +609,206 @@ class MarkdownViewer {
     const container = document.createElement('div');
     container.innerHTML = html;
 
+    const rewriteAssetAttribute = (element, attribute) => {
+      const rawValue = (element.getAttribute(attribute) || '').trim();
+      if (!rawValue) {
+        return null;
+      }
+
+      if (/^(https?:|data:|file:|blob:)/i.test(rawValue)) {
+        return rawValue;
+      }
+
+      const absolutePath = this.resolveRelativePath(baseDir, rawValue, filePath);
+      if (!absolutePath) {
+        return null;
+      }
+
+      const fileUrl = this.convertPathToFileUrl(absolutePath);
+      if (fileUrl) {
+        element.setAttribute(attribute, fileUrl);
+        return { fileUrl, absolutePath };
+      }
+      return null;
+    };
+
     container.querySelectorAll('img').forEach((img) => {
-      const rawSrc = (img.getAttribute('src') || '').trim();
-      if (!rawSrc) {
+      const result = rewriteAssetAttribute(img, 'src');
+      if (result) {
+        img.dataset.internalPath = result.absolutePath;
+      }
+
+      const rawSrcset = img.getAttribute('srcset');
+      if (!rawSrcset) {
         return;
       }
 
-      if (/^(https?:|data:|file:|blob:)/i.test(rawSrc)) {
+      const rewrittenSrcset = rawSrcset
+        .split(',')
+        .map((item) => {
+          const trimmed = item.trim();
+          if (!trimmed) {
+            return trimmed;
+          }
+          const [urlPart, ...rest] = trimmed.split(/\s+/);
+          if (!urlPart || /^(https?:|data:|file:|blob:)/i.test(urlPart)) {
+            return trimmed;
+          }
+          const absolutePath = this.resolveRelativePath(baseDir, urlPart, filePath);
+          const fileUrl = this.convertPathToFileUrl(absolutePath);
+          if (!fileUrl) {
+            return trimmed;
+          }
+          return [fileUrl, ...rest].join(' ').trim();
+        })
+        .join(', ');
+
+      img.setAttribute('srcset', rewrittenSrcset);
+    });
+
+    container.querySelectorAll('a[href]').forEach((link) => {
+      const rawHref = (link.getAttribute('href') || '').trim();
+      if (!rawHref || rawHref.startsWith('#') || /^mailto:/i.test(rawHref) || /^javascript:/i.test(rawHref)) {
         return;
       }
 
-      const absolutePath = this.resolveRelativePath(baseDir, rawSrc);
+      if (/^(https?:|data:|file:|blob:)/i.test(rawHref)) {
+        return;
+      }
+
+      const absolutePath = this.resolveRelativePath(baseDir, rawHref, filePath);
       if (!absolutePath) {
         return;
       }
 
       const fileUrl = this.convertPathToFileUrl(absolutePath);
-      if (fileUrl) {
-        img.setAttribute('src', fileUrl);
-        img.dataset.internalPath = absolutePath;
+      if (!fileUrl) {
+        return;
       }
+
+      link.setAttribute('href', fileUrl);
+      if (!link.getAttribute('target')) {
+        link.setAttribute('target', '_blank');
+      }
+      if (!link.getAttribute('rel')) {
+        link.setAttribute('rel', 'noopener noreferrer');
+      }
+      link.dataset.internalHref = absolutePath;
     });
 
     return container.innerHTML;
+  }
+
+  normalizeInputPath(input) {
+    if (input == null) {
+      return '';
+    }
+    let normalized = String(input).trim();
+    if (!normalized) {
+      return '';
+    }
+    normalized = this.stripFileProtocol(normalized);
+    return normalized.replace(/\\/g, '/');
+  }
+
+  stripFileProtocol(target) {
+    if (typeof target !== 'string' || !target.startsWith('file://')) {
+      return target;
+    }
+    try {
+      const url = new URL(target);
+      let pathname = decodeURIComponent(url.pathname || '');
+      if (/^\/[a-zA-Z]:/.test(pathname)) {
+        pathname = pathname.slice(1);
+      }
+      return pathname || '';
+    } catch (error) {
+      return target.replace(/^file:\/\//i, '');
+    }
+  }
+
+  isAbsolutePath(path) {
+    if (typeof path !== 'string') {
+      return false;
+    }
+    return path.startsWith('/') || /^[a-zA-Z]:/.test(path);
+  }
+
+  resolveAgainstProjectRoot(candidate) {
+    const normalized = this.normalizeInputPath(candidate);
+    if (!normalized) {
+      return normalized;
+    }
+
+    const attempts = [normalized];
+    if (normalized.startsWith('/')) {
+      attempts.push(normalized.replace(/^\/+/, ''));
+    }
+
+    const api = typeof window !== 'undefined' ? window.fsAPI : null;
+    if (api) {
+      const tryResolve = (value) => {
+        if (!value) {
+          return null;
+        }
+        if (/^(https?:|data:|file:|blob:)/i.test(value)) {
+          return value;
+        }
+
+        if (typeof api.resolveProjectPathSync === 'function') {
+          try {
+            const resolved = api.resolveProjectPathSync(value);
+            if (resolved) {
+              return this.normalizeInputPath(resolved);
+            }
+          } catch (error) {
+            // ignore resolution errors
+          }
+        }
+
+        if (this.isAbsolutePath(value)) {
+          return this.normalizeInputPath(value);
+        }
+
+        if (typeof api.getRuntimePathsSync === 'function') {
+          try {
+            const runtimePaths = api.getRuntimePathsSync();
+            const base = runtimePaths?.externalRoot || runtimePaths?.dataRoot;
+            if (base) {
+              const sanitizedBase = this.normalizeInputPath(base).replace(/\/+$/, '');
+              const sanitizedValue = this.normalizeInputPath(value).replace(/^\/+/, '');
+              if (!sanitizedValue) {
+                return sanitizedBase;
+              }
+              return `${sanitizedBase}/${sanitizedValue}`;
+            }
+          } catch (error) {
+            // ignore runtime path errors
+          }
+        }
+
+        return null;
+      };
+
+      for (const option of attempts) {
+        const resolved = tryResolve(option);
+        if (resolved) {
+          return resolved;
+        }
+      }
+    }
+
+    return normalized;
   }
 
   getBaseDirectory(filePath) {
     if (!filePath) {
       return null;
     }
-    const normalized = String(filePath).replace(/\\/g, '/');
+    const normalized = this.normalizeInputPath(filePath);
+    if (!normalized) {
+      return null;
+    }
     const lastSlash = normalized.lastIndexOf('/');
     if (lastSlash === -1) {
       return normalized;
@@ -559,42 +816,79 @@ class MarkdownViewer {
     return normalized.slice(0, lastSlash);
   }
 
-  resolveRelativePath(baseDir, relativePath) {
+  resolveRelativePath(baseDir, relativePath, originalFilePath = null) {
     if (!relativePath) {
       return null;
     }
 
-    let normalizedRelative = String(relativePath).trim().replace(/\\/g, '/');
+    let normalizedRelative = this.normalizeInputPath(relativePath);
+    if (!normalizedRelative) {
+      return null;
+    }
+
     if (/^(https?:|data:|file:|blob:)/i.test(normalizedRelative)) {
       return normalizedRelative;
     }
 
-    const base = String(baseDir || '').replace(/\\/g, '/');
-
-    if (normalizedRelative.startsWith('/')) {
-      if (/^[a-zA-Z]:/.test(base)) {
-        const drive = base.split('/')[0];
-        return `${drive}${normalizedRelative}`;
-      }
+    if (normalizedRelative.startsWith('#') || /^mailto:/i.test(normalizedRelative) || /^javascript:/i.test(normalizedRelative)) {
       return normalizedRelative;
     }
 
-    const segments = base ? base.split('/') : [];
+    if (typeof window !== 'undefined' && window.fsAPI && typeof window.fsAPI.resolveMarkdownAssetPathSync === 'function') {
+      try {
+        const resolvedByMain = window.fsAPI.resolveMarkdownAssetPathSync(originalFilePath || baseDir, normalizedRelative);
+        if (resolvedByMain) {
+          const normalized = this.normalizeInputPath(resolvedByMain);
+          if (normalized) {
+            return normalized;
+          }
+        }
+      } catch (error) {
+        // ignore IPC resolution errors and continue with local logic
+      }
+    }
 
+    if (this.isAbsolutePath(normalizedRelative)) {
+      return this.resolveAgainstProjectRoot(normalizedRelative);
+    }
+
+    const base = this.normalizeInputPath(baseDir);
+
+    if (!base) {
+      return this.resolveAgainstProjectRoot(normalizedRelative);
+    }
+
+    if (normalizedRelative.startsWith('/')) {
+      return this.resolveAgainstProjectRoot(normalizedRelative);
+    }
+
+    const baseSegments = base
+      .split('/')
+      .filter((segment, index, arr) => !(segment === '' && index === arr.length - 1 && arr.length > 1));
+
+    const stack = baseSegments.slice();
     normalizedRelative.split('/').forEach((part) => {
       if (!part || part === '.') {
         return;
       }
       if (part === '..') {
-        if (segments.length) {
-          segments.pop();
+        if (stack.length > 1 || (stack.length === 1 && stack[0] !== '')) {
+          stack.pop();
         }
-      } else {
-        segments.push(part);
+        return;
       }
+      stack.push(part);
     });
 
-    return segments.join('/');
+    let resolved = stack.join('/');
+    if (base.startsWith('/') && !resolved.startsWith('/')) {
+      resolved = `/${resolved}`;
+    }
+    if (!resolved && base.startsWith('/')) {
+      resolved = '/';
+    }
+
+    return this.resolveAgainstProjectRoot(resolved);
   }
 
   convertPathToFileUrl(absPath) {
@@ -602,14 +896,42 @@ class MarkdownViewer {
       return null;
     }
 
-    if (/^(https?:|data:|file:|blob:)/i.test(absPath)) {
-      return absPath;
+    const normalizedPath = this.resolveAgainstProjectRoot(absPath);
+    if (!normalizedPath) {
+      return null;
     }
 
-    let normalized = String(absPath).replace(/\\/g, '/');
+    if (/^(https?:|data:|blob:)/i.test(normalizedPath)) {
+      return normalizedPath;
+    }
+
+    let workingPath = normalizedPath;
+    if (/^file:/i.test(workingPath)) {
+      try {
+        workingPath = decodeURI(workingPath);
+      } catch (error) {
+        // ignore decoding errors and fall back to original value
+      }
+      workingPath = this.normalizeInputPath(workingPath);
+    }
+
+    let normalized = this.normalizeInputPath(workingPath);
+
+    try {
+      normalized = this.normalizeInputPath(decodeURI(normalized));
+    } catch (error) {
+      // Ignore decoding errors; use the best-effort normalized path
+    }
+
+    const isWindowsPath = /^[a-zA-Z]:/.test(normalized);
+    if (isWindowsPath) {
+      return encodeURI(`file:///${normalized}`);
+    }
+
     if (!normalized.startsWith('/')) {
       normalized = `/${normalized}`;
     }
+
     return encodeURI(`file://${normalized}`);
   }
 
