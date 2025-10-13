@@ -2,28 +2,52 @@
 
 **English** ｜ [中文](README.md)
 
-LoFS (Load once Fast Search) is a desktop-oriented knowledge base manager for local files. Load a folder once and enjoy millisecond semantic and keyword search thereafter.
+LoFS (Load once Fast Search) is a desktop-first knowledge base manager for local files. Mount a folder a single time and enjoy millisecond hybrid search from then on.
 
-## ✨ Core Highlights
-- 🔍 **Mount once, search fast**: parse Markdown, TXT, Word, PDF (and more), then vectorize both text and images for instant recall.
-- 📁 **Modern explorer UX**: context menus for mount/remount/unmount, PDF-specific parsing, and real-time progress indicators.
-- 🧠 **Hybrid retrieval engine**: Faiss for semantic vectors, BM25s for keyword recall, plus reranking transformers for precision.
-- 🔒 **Local-first**: SQLite + Faiss live entirely on disk; no network connection is required after setup.
-- 🛠️ **Ready-to-ship desktop app**: Electron front end + FastAPI backend with multi-platform packaging scripts.
+## 1. Project Overview
+LoFS fuses local file organization with semantic retrieval to deliver an “always up to date” knowledge workspace:
+- 🔍 **Multimodal ingestion**: parses `.md`, `.txt`, `.docx`, `.pdf`, `.pptx`, `.json`, and extracts both text and images.
+- 📁 **Explorer-style UX**: mount/remount flows, PDF-only parsing, and live progress indicators keep operations transparent.
+- 🧠 **Hybrid retrieval**: combines Faiss vector search, BM25s keyword recall, and transformer-based reranking.
+- 🔒 **Local-first by design**: SQLite and Faiss stay on disk, ensuring data never leaves your machine.
+- 🛠️ **Shipping-ready app**: Electron desktop shell plus FastAPI backend, complete with cross-platform packaging scripts.
 
-## 🎨 UI Glimpse
-| Welcome | PDF Parsing | Search View |
+| PDF Deep Extraction & Markdown Preview | 📑 PDF Viewer | 🔎 PPTX Viewer |
 |:--:|:--:|:--:|
-| ![Welcome](img/welcome_page.png) | ![PDF](img/pdf_viewer.png) | ![PPT](img/ppt_viewer.png) |
+| ![extract](img/pdf_extract.png) | ![PDF](img/pdf_viewer.png) | ![PPT](img/ppt_viewer.png) |
 
-## 🧭 Project Overview
-LoFS blends classic file management with modern semantic retrieval. Key innovations include:
-- **Single-pass mounting + persistent embeddings**: eliminates repetitive parsing and re-embedding overhead.
-- **Multimodal awareness**: extracts images from Markdown/Word/PDF and vectorizes them via CLIP for text+image search.
-- **Transparent workflows**: progress bars and completion notices for mounting, parsing, and remounting keep users informed.
+## 2. Technical Architecture
+- **Electron desktop**: renders the file tree, orchestration panels, and search UI.
+- **FastAPI backend**: exposes REST endpoints for mounting, parsing, indexing, and retrieval orchestration.
+- **Retrieval pipeline**: Faiss + BM25s + FlagEmbedding (BGE family) power fast semantic and keyword blending, including CLIP embeddings for images.
+- **Storage layer**: SQLite for metadata, Faiss for vector indices, and the local filesystem for model caches.
 
-## 🚀 Quick Start
-### ✅ Requirements
+```text
+┌─────────────┐      IPC/HTTP      ┌───────────────┐
+│ Electron UI │ ─────────────────▶ │ FastAPI Server│
+└─────────────┘                   └──────┬────────┘
+          │                               │
+          ▼                               ▼
+   File system watch               Task queue / Model manager
+                                        │
+                                        ▼
+                              SQLite · Faiss · Meta models
+```
+
+## 3. Core Workflow
+1. 🗂️ **Mount**: select a local folder to register it and trigger first-pass parsing.
+2. 📄 **Multimodal parsing**: extract text chunks, capture images, and build CLIP vectors while streaming progress to the UI.
+3. 🧮 **Index build**: persist embeddings to Faiss, keyword metadata to BM25s, and structured info to SQLite.
+4. 🔎 **Hybrid search**: issue semantic and keyword queries in parallel, then rerank the merged result set for relevance.
+
+Model assets download lazily the first time a capability is invoked. Prefetch them to warm the cache:
+
+```bash
+python -c "from service.model_manager import get_model_manager; manager = get_model_manager(); [manager.get_model_path(key) for key in ('bge_m3', 'bge_reranker_v2_m3', 'clip_vit_b_32', 'pdf_extract_kit')]"
+```
+
+## 4. Deployment & Usage
+### 4.1 Requirements
 | Component | Minimum | Recommended |
 | --- | --- | --- |
 | Python | 3.8 | 3.10+ |
@@ -31,15 +55,17 @@ LoFS blends classic file management with modern semantic retrieval. Key innovati
 | npm | 8 | Latest LTS |
 | OS | Windows / macOS / Linux | — |
 
-### ⚙️ Installation
+### 4.2 Installation
 ```bash
 # Clone the repository
-git clone <repository-url>
+git@github.com:Oli51467/local_fs.git
 cd LocalFS
 
 # Backend dependencies
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
+
+cd server
 pip install -r server/requirements.txt
 
 # Frontend dependencies
@@ -47,41 +73,20 @@ cd electron
 npm install
 ```
 
-### ▶️ Run in Development
+### 4.3 Run the App
 ```bash
-# Terminal 1 — FastAPI backend
-python server/main.py
-
-# Terminal 2 — Electron frontend
 cd electron
 npm run dev
 ```
 
-### 📦 Package the Desktop App
+### 4.4 Packaging & Model Assets
 ```bash
-python package.py        # all-in-one packaging
-./build.sh               # macOS / Linux helper
-build.bat                # Windows helper
+python package.py        # cross-platform one-click packaging
 ```
 
-## 📦 Model Asset Management
-- On startup the app creates placeholder directories under `meta`:
-  - `embedding/bge-m3`
-  - `reranker/bge-reranker-v3-m3`
-  - `embedding/clip`
-  - `pdf-extract-kit`
-- The first time each feature is used (embeddings, reranking, CLIP, PDF parsing) the required weights are fetched via `huggingface_hub`.
-- Pre-download everything with:
-  ```bash
-  python -c "from service.model_manager import get_model_manager; manager = get_model_manager(); [manager.get_model_path(key) for key in ('bge_m3', 'bge_reranker_v2_m3', 'clip_vit_b_32', 'pdf_extract_kit')]"
-  ```
-- Removing the `meta` directory is safe; it will be recreated automatically on startup.
-
-## 🧱 Tech Stack
-- **Frontend**: Electron · vanilla HTML/CSS/JavaScript · Axios
-- **Backend**: FastAPI · Pydantic · Uvicorn
-- **Search**: Faiss · BM25s · FlagEmbedding (BGE family) · CLIP
-- **Storage**: SQLite plus the local filesystem
+- On startup LoFS creates model directories under `meta` (`embedding/bge-m3`, `embedding/clip`, `reranker/bge-reranker-v3-m3`, `pdf-extract-kit`).
+- The first invocation of embeddings, reranking, CLIP, or PDF parsing auto-downloads weights via `huggingface_hub`.
+- Deleting `meta` is safe—the app will recreate the structure during the next boot.
 
 ---
-LoFS = Local File System + Load once Fast Search — delivering a “load once, search fast” experience for local knowledge bases.
+LoFS = Local File System + Load once Fast Search — bringing “mount once, search fast” to your local knowledge base.
