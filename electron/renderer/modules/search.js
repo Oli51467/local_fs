@@ -377,12 +377,28 @@
     clearBtn.setAttribute('aria-label', '清空历史搜索');
     clearBtn.innerHTML = window.icons?.trash || '×';
     clearBtn.addEventListener('click', () => {
-      if (!confirm('确定要删除所有历史搜索记录吗？')) {
+      const performClear = () => {
+        searchHistory = [];
+        saveSearchHistory();
+        renderSearchHistory();
+      };
+
+      if (typeof window.showModal === 'function') {
+        window.showModal({
+          type: 'warning',
+          title: '清空历史搜索',
+          message: '确定要删除所有历史搜索记录吗？',
+          confirmText: '删除',
+          cancelText: '取消',
+          showCancel: true,
+          onConfirm: performClear
+        });
         return;
       }
-      searchHistory = [];
-      saveSearchHistory();
-      renderSearchHistory();
+
+      if (confirm('确定要删除所有历史搜索记录吗？')) {
+        performClear();
+      }
     });
 
     header.appendChild(title);
