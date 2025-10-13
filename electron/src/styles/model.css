@@ -81,13 +81,25 @@
 .model-card-container {
   flex: 1;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-bottom: 12px;
+}
+
+.model-card-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
-  padding-bottom: 12px;
   align-content: start;
   align-items: start;
-  grid-auto-rows: auto;
+}
+
+.model-section__title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-muted);
 }
 
 .model-card {
@@ -102,6 +114,7 @@
   transition: box-shadow 0.2s ease;
   align-self: start;
   cursor: pointer;
+  position: relative;
 }
 
 .model-card-provider {
@@ -124,6 +137,75 @@
 
 .dark-mode .model-card {
   background-color: rgba(30, 30, 30, 0.9);
+}
+
+.system-model-card {
+  overflow: hidden;
+}
+
+.system-model-card__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  flex-wrap: nowrap;
+}
+
+.system-model-card__header .model-card-title {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+}
+
+.system-model-card__header .model-card-provider {
+  flex-shrink: 0;
+}
+
+.system-model-card__header .system-model-card__status-badge {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.system-model-card__status-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  background-color: rgba(107, 114, 128, 0.12);
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.system-model-card--downloaded .system-model-card__status-badge {
+  color: #047857;
+  background-color: rgba(16, 185, 129, 0.18);
+}
+
+.system-model-card--downloading .system-model-card__status-badge {
+  color: var(--accent-color);
+  background-color: rgba(3, 102, 214, 0.12);
+}
+
+.system-model-card--failed .system-model-card__status-badge {
+  color: #b91c1c;
+  background-color: rgba(248, 113, 113, 0.4);
+}
+
+.system-model-card__message {
+  font-size: 12px;
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+.dark-mode .system-model-card__message {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.system-model-card__meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .model-card-header {

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import fnmatch
 import logging
-from dataclasses import dataclass, field
 import os
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock
-from typing import Dict, Iterable, Optional, Tuple, Union
+from threading import Event, Lock, Thread
+from typing import Callable, Dict, Iterable, Literal, Optional, Sequence, Tuple, Union
 
 from config.config import ServerConfig
 
@@ -31,9 +33,35 @@ class ModelSpec:
     endpoint: Optional[str] = None
     mirror_endpoints: Iterable[str] = field(default_factory=tuple)
     download_on_startup: bool = False
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Sequence[str] = field(default_factory=tuple)
+    repo_type: str = "model"
 
     def local_path(self, root: Path) -> Path:
         return root / self.local_subdir
+
+
+@dataclass(frozen=True)
+class DownloadProgress:
+    """Structured progress information emitted during model downloads."""
+
+    key: str
+    status: Literal["pending", "downloading", "completed", "failed"]
+    progress: float
+    downloaded_bytes: int
+    total_bytes: Optional[int]
+    message: Optional[str] = None
+    endpoint: Optional[str] = None
+
+
+ProgressCallback = Callable[[DownloadProgress], None]
+
+
+@dataclass(frozen=True)
+class _RepoFileEntry:
+    path: str
+    size: Optional[int]
 
 
 class ModelManager:
@@ -55,6 +83,25 @@ class ModelManager:
             path = spec.local_path(self._meta_root)
             path.mkdir(parents=True, exist_ok=True)
 
+    def get_spec(self, key: str) -> ModelSpec:
+        """Return the registered specification for a model key."""
+
+        try:
+            return self._registry[key]
+        except KeyError as exc:  # pragma: no cover - defensive branch
+            raise KeyError(f"Unknown model key: {key}") from exc
+
+    def list_specs(self) -> Sequence[ModelSpec]:
+        """Return an immutable snapshot of all registered model specs."""
+
+        return tuple(self._registry.values())
+
+    def is_model_ready(self, key: str) -> bool:
+        """Check whether the model assets for the given key are present."""
+
+        spec = self.get_spec(key)
+        return self._is_ready(spec.local_path(self._meta_root), spec)
+
     def download_eager_models(self) -> None:
         """Download models marked for startup download."""
 
@@ -66,13 +113,16 @@ class ModelManager:
             except Exception:  # pragma: no cover - failures logged inside
                 logger.exception("Failed to preload model '%s'", spec.key)
 
-    def get_model_path(self, key: str, *, download: bool = True) -> Path:
+    def get_model_path(
+        self,
+        key: str,
+        *,
+        download: bool = True,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> Path:
         """Return the local path for the given model, downloading if necessary."""
 
-        spec = self._registry.get(key)
-        if spec is None:
-            raise KeyError(f"Unknown model key: {key}")
-
+        spec = self.get_spec(key)
         local_path = spec.local_path(self._meta_root)
         local_path.mkdir(parents=True, exist_ok=True)
 
@@ -85,7 +135,7 @@ class ModelManager:
         with self._lock_for(key):
             if self._is_ready(local_path, spec):
                 return local_path
-            self._download_model(local_path, spec)
+            self._download_model(local_path, spec, progress_callback=progress_callback)
         return local_path
 
     def _is_ready(self, local_path: Path, spec: ModelSpec) -> bool:
@@ -107,69 +157,165 @@ class ModelManager:
                 return False
         return True
 
-    def _download_model(self, local_path: Path, spec: ModelSpec) -> None:
+    def _download_model(
+        self,
+        local_path: Path,
+        spec: ModelSpec,
+        *,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> None:
         logger.info("Downloading model '%s' from %s", spec.key, spec.repo_id)
         try:
-            from huggingface_hub import snapshot_download
+            from huggingface_hub import HfApi, snapshot_download
         except ImportError as exc:  # pragma: no cover - dependency declared in requirements
             raise RuntimeError("huggingface_hub is required to download models") from exc
 
-        def _trimmed(value: Optional[str]) -> Optional[str]:
-            if value is None:
-                return None
-            return value.rstrip("/")
+        candidate_endpoints = self._candidate_endpoints(spec)
 
-        candidate_endpoints: list[Optional[str]] = []
-
-        def _add_endpoint(value: Optional[str]) -> None:
-            value = _trimmed(value)
-            if value in candidate_endpoints:
-                return
-            candidate_endpoints.append(value)
-
-        _add_endpoint(spec.endpoint)
-        for env_name in ("FS_HF_ENDPOINT", "HF_ENDPOINT", "HF_HUB_BASE_URL"):
-            _add_endpoint(os.environ.get(env_name))
-        for mirror in spec.mirror_endpoints:
-            _add_endpoint(mirror)
-        _add_endpoint(None)  # default huggingface endpoint
-
-        kwargs = {
-            "repo_id": spec.repo_id,
-            "local_dir": str(local_path),
-            "local_dir_use_symlinks": False,
-            "resume_download": True,
-        }
-        if spec.revision:
-            kwargs["revision"] = spec.revision
-        if spec.allow_patterns is not None:
-            kwargs["allow_patterns"] = list(spec.allow_patterns)
-        if spec.ignore_patterns is not None:
-            kwargs["ignore_patterns"] = list(spec.ignore_patterns)
+        allow_patterns = self._to_pattern_list(spec.allow_patterns)
+        ignore_patterns = self._to_pattern_list(spec.ignore_patterns)
 
         last_error: Optional[Exception] = None
         for endpoint in candidate_endpoints:
             endpoint_label = endpoint or "https://huggingface.co"
             try:
-                if endpoint:
-                    snapshot_download(endpoint=endpoint, **kwargs)
-                else:
-                    snapshot_download(**kwargs)
-                logger.info("Model '%s' downloaded via %s", spec.key, endpoint_label)
-                break
-            except Exception as error:  # pragma: no cover - upstream errors are logged
+                repo_info = self._fetch_repo_info(HfApi, spec, endpoint)
+            except Exception as error:  # pragma: no cover - metadata fetch failures are logged
                 last_error = error
                 logger.warning(
-                    "Downloading model '%s' via %s failed: %s",
+                    "Fetching metadata for model '%s' via %s failed: %s",
                     spec.key,
                     endpoint_label,
                     error,
                 )
-        else:
-            assert last_error is not None  # for type checkers
-            logger.exception("Failed to download model '%s'", spec.key)
-            raise last_error
-        logger.info("Model '%s' is ready at %s", spec.key, local_path)
+                continue
+
+            files = self._filter_repo_files(repo_info, allow_patterns, ignore_patterns)
+            total_bytes = self._calculate_total_bytes(files)
+            initial_downloaded = self._compute_downloaded_bytes(local_path, files)
+
+            if progress_callback:
+                progress_callback(
+                    DownloadProgress(
+                        key=spec.key,
+                        status="downloading",
+                        progress=self._calculate_progress(initial_downloaded, total_bytes),
+                        downloaded_bytes=initial_downloaded,
+                        total_bytes=total_bytes,
+                        message=f"准备从 {endpoint_label} 下载",
+                        endpoint=endpoint,
+                    )
+                )
+
+            stop_event = Event()
+            monitor_thread: Optional[Thread] = None
+
+            if progress_callback:
+                def _progress_worker() -> None:
+                    last_progress = -1.0
+                    last_bytes = -1
+                    while not stop_event.wait(0.5):
+                        downloaded = self._compute_downloaded_bytes(local_path, files)
+                        progress = self._calculate_progress(downloaded, total_bytes)
+                        if (
+                            downloaded == last_bytes
+                            and abs(progress - last_progress) < 0.001
+                        ):
+                            continue
+                        progress_callback(
+                            DownloadProgress(
+                                key=spec.key,
+                                status="downloading",
+                                progress=progress,
+                                downloaded_bytes=downloaded,
+                                total_bytes=total_bytes,
+                                message=f"正在从 {endpoint_label} 下载",
+                                endpoint=endpoint,
+                            )
+                        )
+                        last_bytes = downloaded
+                        last_progress = progress
+
+                monitor_thread = Thread(target=_progress_worker, daemon=True)
+                monitor_thread.start()
+
+            kwargs = {
+                "repo_id": spec.repo_id,
+                "repo_type": spec.repo_type,
+                "local_dir": str(local_path),
+                "local_dir_use_symlinks": False,
+                "resume_download": True,
+            }
+            if spec.revision:
+                kwargs["revision"] = spec.revision
+            if allow_patterns is not None:
+                kwargs["allow_patterns"] = allow_patterns
+            if ignore_patterns is not None:
+                kwargs["ignore_patterns"] = ignore_patterns
+
+            success = False
+            error: Optional[Exception] = None
+            try:
+                if endpoint:
+                    snapshot_download(endpoint=endpoint, **kwargs)
+                else:
+                    snapshot_download(**kwargs)
+                success = True
+            except Exception as download_error:  # pragma: no cover - upstream errors are logged
+                error = download_error
+                logger.warning(
+                    "Downloading model '%s' via %s failed: %s",
+                    spec.key,
+                    endpoint_label,
+                    download_error,
+                )
+                downloaded = self._compute_downloaded_bytes(local_path, files)
+                if progress_callback:
+                    progress_callback(
+                        DownloadProgress(
+                            key=spec.key,
+                            status="failed",
+                            progress=self._calculate_progress(downloaded, total_bytes),
+                            downloaded_bytes=downloaded,
+                            total_bytes=total_bytes,
+                            message=str(download_error),
+                            endpoint=endpoint,
+                        )
+                    )
+            finally:
+                stop_event.set()
+                if monitor_thread is not None:
+                    monitor_thread.join(timeout=2.0)
+
+            if success:
+                downloaded = self._compute_downloaded_bytes(local_path, files)
+                if total_bytes is not None:
+                    downloaded = max(downloaded, total_bytes)
+                if progress_callback:
+                    progress_callback(
+                        DownloadProgress(
+                            key=spec.key,
+                            status="completed",
+                            progress=1.0,
+                            downloaded_bytes=downloaded,
+                            total_bytes=total_bytes,
+                            message="模型下载完成",
+                            endpoint=endpoint,
+                        )
+                    )
+                logger.info("Model '%s' downloaded via %s", spec.key, endpoint_label)
+                logger.info("Model '%s' is ready at %s", spec.key, local_path)
+                return
+
+            if error is None:  # pragma: no cover - defensive guard
+                error = RuntimeError(
+                    f"Unknown error downloading model '{spec.key}' via {endpoint_label}"
+                )
+            last_error = error
+
+        assert last_error is not None  # for type checkers
+        logger.exception("Failed to download model '%s'", spec.key)
+        raise last_error
 
     def _lock_for(self, key: str) -> Lock:
         lock = self._locks.get(key)
@@ -177,6 +323,130 @@ class ModelManager:
             lock = Lock()
             self._locks[key] = lock
         return lock
+
+    def _candidate_endpoints(self, spec: ModelSpec) -> list[Optional[str]]:
+        def _trimmed(value: Optional[str]) -> Optional[str]:
+            if value is None:
+                return None
+            stripped = value.rstrip("/")
+            return stripped or None
+
+        candidates: list[Optional[str]] = []
+
+        def _add(value: Optional[str]) -> None:
+            candidate = _trimmed(value)
+            if candidate in candidates:
+                return
+            candidates.append(candidate)
+
+        _add(spec.endpoint)
+        for env_name in ("FS_HF_ENDPOINT", "HF_ENDPOINT", "HF_HUB_BASE_URL"):
+            _add(os.environ.get(env_name))
+        for mirror in spec.mirror_endpoints:
+            _add(mirror)
+        _add(None)
+        return candidates
+
+    @staticmethod
+    def _to_pattern_list(patterns: Optional[Iterable[str]]) -> Optional[list[str]]:
+        if patterns is None:
+            return None
+        if isinstance(patterns, str):
+            normalized = [patterns]
+        else:
+            normalized = [str(item) for item in patterns if str(item)]
+        return normalized or None
+
+    @staticmethod
+    def _fetch_repo_info(
+        api_cls: Callable[..., object],
+        spec: ModelSpec,
+        endpoint: Optional[str],
+    ) -> object:
+        api = api_cls(endpoint=endpoint) if endpoint else api_cls()
+        kwargs = {"repo_id": spec.repo_id, "repo_type": spec.repo_type}
+        if spec.revision:
+            kwargs["revision"] = spec.revision
+        return api.repo_info(**kwargs)
+
+    def _filter_repo_files(
+        self,
+        repo_info: object,
+        allow_patterns: Optional[Sequence[str]],
+        ignore_patterns: Optional[Sequence[str]],
+    ) -> list[_RepoFileEntry]:
+        siblings = getattr(repo_info, "siblings", []) or []
+        entries: list[_RepoFileEntry] = []
+
+        for sibling in siblings:
+            path = getattr(sibling, "rfilename", None) or getattr(sibling, "path", None)
+            if not path:
+                continue
+            if allow_patterns and not any(
+                fnmatch.fnmatch(path, pattern) for pattern in allow_patterns
+            ):
+                continue
+            if ignore_patterns and any(
+                fnmatch.fnmatch(path, pattern) for pattern in ignore_patterns
+            ):
+                continue
+            size = getattr(sibling, "size", None)
+            entries.append(_RepoFileEntry(path=path, size=size))
+        return entries
+
+    @staticmethod
+    def _calculate_total_bytes(files: Sequence[_RepoFileEntry]) -> Optional[int]:
+        sizes = [entry.size for entry in files if entry.size is not None]
+        if not sizes:
+            return None
+        return sum(int(size) for size in sizes)
+
+    def _compute_downloaded_bytes(
+        self,
+        root: Path,
+        files: Sequence[_RepoFileEntry],
+    ) -> int:
+        total = 0
+        for entry in files:
+            if entry.size is None:
+                continue
+            target = root / entry.path
+            try:
+                if target.exists():
+                    total += target.stat().st_size
+            except OSError:
+                continue
+        total += self._sum_incomplete_bytes(root)
+        return total
+
+    @staticmethod
+    def _sum_incomplete_bytes(root: Path) -> int:
+        if not root.exists():
+            return 0
+        total = 0
+        try:
+            for pending in root.rglob("*.incomplete"):
+                try:
+                    total += pending.stat().st_size
+                except OSError:
+                    continue
+        except OSError:
+            return total
+        return total
+
+    @staticmethod
+    def _calculate_progress(
+        downloaded: int,
+        total: Optional[int],
+    ) -> float:
+        if not total or total <= 0:
+            return 0.0
+        ratio = downloaded / total
+        if ratio >= 1:
+            return 1.0
+        if ratio <= 0:
+            return 0.0
+        return float(min(max(ratio, 0.0), 1.0))
 
 
 def _build_registry() -> Dict[str, ModelSpec]:
@@ -190,7 +460,10 @@ def _build_registry() -> Dict[str, ModelSpec]:
                 ("pytorch_model.bin", "model.safetensors", "onnx/model.onnx"),
             ),
             mirror_endpoints=("https://hf-mirror.com",),
-            download_on_startup=True,
+            download_on_startup=False,
+            display_name="bge-m3",
+            description="用于文本向量化与相似度检索的通用嵌入模型。",
+            tags=("文本嵌入", "检索"),
         ),
         "bge_reranker_v2_m3": ModelSpec(
             key="bge_reranker_v2_m3",
@@ -201,6 +474,10 @@ def _build_registry() -> Dict[str, ModelSpec]:
                 ("pytorch_model.bin", "model.safetensors", "onnx/model.onnx"),
             ),
             mirror_endpoints=("https://hf-mirror.com",),
+            download_on_startup=False,
+            display_name="bge-reranker-v3-m3",
+            description="用于提升检索结果相关性的重排序模型。",
+            tags=("重排序", "检索"),
         ),
         "clip_vit_b_32": ModelSpec(
             key="clip_vit_b_32",
@@ -208,15 +485,29 @@ def _build_registry() -> Dict[str, ModelSpec]:
             local_subdir=Path("embedding") / "clip",
             required_files=(
                 "modules.json",
-                ("pytorch_model.bin", "model.safetensors", "onnx/model.onnx"),
+                (
+                    "0_CLIPModel/pytorch_model.bin",
+                    "0_CLIPModel/model.safetensors",
+                    "pytorch_model.bin",
+                    "model.safetensors",
+                    "onnx/model.onnx",
+                ),
             ),
             mirror_endpoints=("https://hf-mirror.com",),
+            download_on_startup=False,
+            display_name="CLIP ViT-B",
+            description="支持图文向量化的 CLIP 模型，用于图片检索与比对。",
+            tags=("图像嵌入", "多模态"),
         ),
         "pdf_extract_kit": ModelSpec(
             key="pdf_extract_kit",
             repo_id="opendatalab/PDF-Extract-Kit-1.0",
             local_subdir=Path("pdf-extract-kit"),
             required_files=("README.md", "models"),
+            download_on_startup=False,
+            display_name="PDF Extract Kit",
+            description="用于PDF解析的离线模型资源。",
+            tags=("PDF解析", "OCR"),
         ),
     }
 
@@ -234,7 +525,10 @@ def get_model_manager() -> ModelManager:
 def ensure_model_downloaded(key: str) -> Path:
     """Ensure the requested model is available locally and return its path."""
 
-    return get_model_manager().get_model_path(key, download=True)
+    from service.model_download_service import get_model_download_service
+
+    service = get_model_download_service()
+    return service.ensure_download_and_get_path(key)
 
 
 def get_model_path_if_available(key: str) -> Optional[Path]:

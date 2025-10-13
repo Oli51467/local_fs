@@ -4,6 +4,17 @@ class ModelModule {
     this.userModels = [];
     this.initialized = false;
     this.addModalLoading = false;
+    this.baseApiUrl = 'http://localhost:8000';
+    this.systemModels = this.buildDefaultSystemModels();
+    this.systemFetchInFlight = false;
+    this.systemFetchPending = false;
+    this.systemPollingHandle = null;
+    this.systemPollingInterval = null;
+    this.systemPollingIntervals = {
+      fast: 1000,
+      slow: 10000
+    };
+    this.systemDownloadRequests = new Set();
 
     this.dependencies = {
       getSettingsModule: () => null
@@ -32,6 +43,68 @@ class ModelModule {
     ];
   }
 
+  buildDefaultSystemModels() {
+    const now = Date.now();
+    return [
+      {
+        key: 'bge_m3',
+        name: 'BGE-M3 向量模型',
+        description: '用于文本向量化与相似度检索的通用嵌入模型。',
+        tags: ['文本嵌入', '检索'],
+        status: 'not_downloaded',
+        progress: 0,
+        downloadedBytes: 0,
+        totalBytes: null,
+        message: '点击卡片开始下载模型。',
+        error: null,
+        endpoint: null,
+        updatedAt: now
+      },
+      {
+        key: 'bge_reranker_v2_m3',
+        name: 'BGE-Reranker V3 M3 模型',
+        description: '用于提升检索结果相关性的重排序模型。',
+        tags: ['重排序', '检索'],
+        status: 'not_downloaded',
+        progress: 0,
+        downloadedBytes: 0,
+        totalBytes: null,
+        message: '点击卡片开始下载模型。',
+        error: null,
+        endpoint: null,
+        updatedAt: now
+      },
+      {
+        key: 'clip_vit_b_32',
+        name: 'CLIP ViT-B',
+        description: '支持图文向量化的 CLIP 模型，用于图片检索与比对。',
+        tags: ['图像嵌入', '多模态'],
+        status: 'not_downloaded',
+        progress: 0,
+        downloadedBytes: 0,
+        totalBytes: null,
+        message: '点击卡片开始下载模型。',
+        error: null,
+        endpoint: null,
+        updatedAt: now
+      },
+      {
+        key: 'pdf_extract_kit',
+        name: 'PDF Extract Kit 套件',
+        description: '用于PDF解析的离线模型资源。',
+        tags: ['PDF解析', 'OCR'],
+        status: 'not_downloaded',
+        progress: 0,
+        downloadedBytes: 0,
+        totalBytes: null,
+        message: '点击卡片开始下载模型。',
+        error: null,
+        endpoint: null,
+        updatedAt: now
+      }
+    ];
+  }
+
   cacheElements() {
     this.modelPageEl = document.getElementById('model-page');
     this.cardContainerEl = document.getElementById('model-card-container');
@@ -51,6 +124,10 @@ class ModelModule {
     this.renderAllModels();
 
     this.initialized = true;
+
+    this.fetchSystemModels({ initial: true }).catch((error) => {
+      console.error('获取系统模型状态失败:', error);
+    });
   }
 
   bindEvents() {
@@ -81,6 +158,362 @@ class ModelModule {
     const source = this.getSourceById(sourceId);
 
     this.modelInputEl.value = '';
+  }
+
+  async fetchSystemModels(options = {}) {
+    const { silent = false } = options || {};
+    if (this.systemFetchInFlight) {
+      this.systemFetchPending = true;
+      return;
+    }
+    this.systemFetchInFlight = true;
+    try {
+      const response = await fetch(`${this.baseApiUrl}/api/models`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      this.mergeSystemModelList(data);
+      this.renderAllModels();
+      this.updateSystemPollingState();
+    } catch (error) {
+      if (!silent) {
+        console.error('获取系统模型状态失败:', error);
+      }
+    } finally {
+      this.systemFetchInFlight = false;
+      if (this.systemFetchPending) {
+        this.systemFetchPending = false;
+        this.fetchSystemModels({ silent: true });
+      }
+    }
+  }
+
+  normalizeSystemModel(raw = {}) {
+    const key = typeof raw.key === 'string' ? raw.key.trim() : '';
+    if (!key) {
+      return null;
+    }
+    const progressValue = typeof raw.progress === 'number' ? raw.progress : 0;
+    const progress = Math.max(0, Math.min(1, progressValue));
+    const downloadedBytes = typeof raw.downloaded_bytes === 'number'
+      ? raw.downloaded_bytes
+      : (typeof raw.downloadedBytes === 'number' ? raw.downloadedBytes : 0);
+    const totalBytes = typeof raw.total_bytes === 'number'
+      ? raw.total_bytes
+      : (typeof raw.totalBytes === 'number' ? raw.totalBytes : null);
+    const tags = Array.isArray(raw.tags) ? raw.tags.map((tag) => String(tag)) : [];
+
+    return {
+      key,
+      name: raw.name || key,
+      description: raw.description || '',
+      tags,
+      status: raw.status || 'not_downloaded',
+      progress,
+      downloadedBytes,
+      totalBytes,
+      message: raw.message || '',
+      error: raw.error || null,
+      endpoint: raw.endpoint || null,
+      updatedAt: typeof raw.updated_at === 'number' ? raw.updated_at : Date.now()
+    };
+  }
+
+  mergeSystemModelStatus(rawModel) {
+    const normalized = this.normalizeSystemModel(rawModel);
+    if (!normalized) {
+      return;
+    }
+    const index = this.systemModels.findIndex((item) => item.key === normalized.key);
+    if (index === -1) {
+      this.systemModels.push(normalized);
+    } else {
+      const current = this.systemModels[index];
+      this.systemModels[index] = {
+        ...current,
+        ...normalized
+      };
+    }
+  }
+
+  mergeSystemModelList(items) {
+    if (!Array.isArray(items)) {
+      return;
+    }
+    const order = new Map();
+    items.forEach((item, idx) => {
+      const normalized = this.normalizeSystemModel(item);
+      if (!normalized) {
+        return;
+      }
+      order.set(normalized.key, idx);
+      this.mergeSystemModelStatus(normalized);
+    });
+    if (order.size) {
+      this.systemModels.sort((a, b) => {
+        const aOrder = order.has(a.key) ? order.get(a.key) : Number.MAX_SAFE_INTEGER;
+        const bOrder = order.has(b.key) ? order.get(b.key) : Number.MAX_SAFE_INTEGER;
+        return aOrder - bOrder;
+      });
+    }
+  }
+
+  updateSystemModelPartial(key, updates = {}) {
+    if (!key) {
+      return;
+    }
+    const index = this.systemModels.findIndex((item) => item.key === key);
+    if (index === -1) {
+      const normalized = this.normalizeSystemModel({ key, ...updates });
+      if (normalized) {
+        this.systemModels.push(normalized);
+      }
+      return;
+    }
+    const current = this.systemModels[index];
+    const merged = {
+      ...current,
+      ...updates
+    };
+    if (typeof merged.progress === 'number') {
+      merged.progress = Math.max(0, Math.min(1, merged.progress));
+    }
+    merged.updatedAt = Date.now();
+    this.systemModels[index] = merged;
+  }
+
+  updateSystemPollingState(options = {}) {
+    const forceFast = Boolean(options.forceFast);
+    const hasDownloading = this.systemModels.some((model) => model.status === 'downloading');
+    if (hasDownloading || forceFast) {
+      this.startSystemPolling(this.systemPollingIntervals.fast);
+      return;
+    }
+    if (this.systemModels.length > 0) {
+      this.startSystemPolling(this.systemPollingIntervals.slow);
+      return;
+    }
+    this.stopSystemPolling();
+  }
+
+  startSystemPolling(interval) {
+    if (!interval) {
+      return;
+    }
+    if (this.systemPollingHandle && this.systemPollingInterval === interval) {
+      return;
+    }
+    this.stopSystemPolling();
+    this.systemPollingInterval = interval;
+    this.systemPollingHandle = setInterval(() => {
+      this.fetchSystemModels({ silent: true }).catch((error) => {
+        console.error('轮询系统模型状态失败:', error);
+      });
+    }, interval);
+  }
+
+  stopSystemPolling() {
+    if (this.systemPollingHandle) {
+      clearInterval(this.systemPollingHandle);
+    }
+    this.systemPollingHandle = null;
+    this.systemPollingInterval = null;
+  }
+
+  handleSystemModelClick(model) {
+    if (!model || !model.key) {
+      return;
+    }
+    if (model.status === 'downloaded') {
+      return;
+    }
+    if (this.systemDownloadRequests.has(model.key) || model.status === 'downloading') {
+      return;
+    }
+    this.triggerSystemModelDownload(model.key);
+  }
+
+  async triggerSystemModelDownload(key) {
+    if (!key || this.systemDownloadRequests.has(key)) {
+      return;
+    }
+    this.systemDownloadRequests.add(key);
+    this.updateSystemModelPartial(key, {
+      status: 'downloading',
+      progress: 0,
+      message: '正在请求下载...',
+      error: null
+    });
+    this.renderAllModels();
+    this.updateSystemPollingState({ forceFast: true });
+
+    try {
+      const response = await fetch(`${this.baseApiUrl}/api/models/${encodeURIComponent(key)}/download`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      this.mergeSystemModelStatus(data);
+      this.renderAllModels();
+      this.updateSystemPollingState({ forceFast: true });
+    } catch (error) {
+      console.error('启动模型下载失败:', error);
+      this.updateSystemModelPartial(key, {
+        status: 'failed',
+        message: '下载请求失败，请稍后重试。',
+        error: error?.message || '下载请求失败'
+      });
+      this.renderAllModels();
+      this.updateSystemPollingState();
+    } finally {
+      this.systemDownloadRequests.delete(key);
+      this.updateSystemPollingState();
+    }
+  }
+
+  buildSystemModelCard(model) {
+    const card = document.createElement('article');
+    card.className = 'model-card system-model-card';
+    card.classList.add(`system-model-card--${model.status || 'not_downloaded'}`);
+    card.dataset.key = model.key;
+    const progressPercent = Math.max(0, Math.min(100, Math.round((model.progress || 0) * 100)));
+    card.style.setProperty('--download-progress', `${progressPercent}%`);
+
+    const title = document.createElement('h3');
+    title.className = 'model-card-title';
+    title.textContent = model.name;
+
+    const providerLabel = document.createElement('span');
+    providerLabel.className = 'model-card-provider';
+    providerLabel.textContent = this.getVendorLabel(model);
+
+    const statusBadge = document.createElement('span');
+    statusBadge.className = 'system-model-card__status-badge';
+    statusBadge.textContent = this.describeSystemModelStatus(model);
+
+    const header = document.createElement('div');
+    header.className = 'system-model-card__header';
+    header.appendChild(title);
+    header.appendChild(providerLabel);
+    header.appendChild(statusBadge);
+
+    const description = document.createElement('p');
+    description.className = 'model-card-description';
+    description.textContent = model.description || '暂无简介。';
+
+    const tagsWrapper = document.createElement('div');
+    tagsWrapper.className = 'model-card-tags';
+    if (Array.isArray(model.tags) && model.tags.length > 0) {
+      model.tags.forEach((tag) => {
+        const tagEl = document.createElement('span');
+        tagEl.className = 'model-tag';
+        tagEl.textContent = tag;
+        tagsWrapper.appendChild(tagEl);
+      });
+    }
+
+    card.appendChild(header);
+    card.appendChild(description);
+    if (tagsWrapper.children.length > 0) {
+      card.appendChild(tagsWrapper);
+    }
+
+    const messageText = this.buildSystemModelMessage(model);
+    if (messageText) {
+      const message = document.createElement('div');
+      message.className = 'system-model-card__message';
+      message.textContent = messageText;
+      card.appendChild(message);
+    }
+
+    card.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.handleSystemModelClick(model);
+    });
+
+    return card;
+  }
+
+  describeSystemModelStatus(model) {
+    if (!model) {
+      return '未知状态';
+    }
+    if (model.status === 'downloaded') {
+      return '已下载';
+    }
+    if (model.status === 'downloading') {
+      const percent = Math.max(0, Math.min(100, Math.round((model.progress || 0) * 100)));
+      return `下载中 ${percent}%`;
+    }
+    if (model.status === 'failed') {
+      return '下载失败';
+    }
+    return '点击下载';
+  }
+
+  buildSystemModelMessage(model) {
+    if (!model) {
+      return '';
+    }
+    if (model.status === 'downloaded') {
+      return '';
+    }
+    if (model.status === 'downloading') {
+      const percent = Math.max(0, Math.min(100, Math.round((model.progress || 0) * 100)));
+      const base = model.message || '正在下载...';
+      return `${base} (${percent}%)`;
+    }
+    if (model.status === 'failed') {
+      const reason = model.error || model.message || '请稍后重试。';
+      return `下载失败：${this.truncateText(reason, 60)}`;
+    }
+    return model.message || '点击卡片开始下载模型。';
+  }
+
+  truncateText(text, limit = 80) {
+    if (!text || typeof text !== 'string') {
+      return '';
+    }
+    if (text.length <= limit) {
+      return text;
+    }
+    return `${text.slice(0, limit - 1)}…`;
+  }
+
+  getVendorLabel(model) {
+    if (!model) {
+      return '';
+    }
+    const key = model.key || '';
+    switch (key) {
+      case 'bge_m3':
+      case 'bge_reranker_v2_m3':
+        return 'AAAI';
+      case 'clip_vit_b_32':
+        return 'SentenceTransformer';
+      case 'pdf_extract_kit':
+        return 'opendatalab';
+      default:
+        if (Array.isArray(model.tags)) {
+          const vendorTag = model.tags.find((tag) => typeof tag === 'string' && tag.trim());
+          if (vendorTag) {
+            return vendorTag.trim();
+          }
+        }
+        return model.providerName || '系统模型';
+    }
   }
 
   setupAddModal() {
@@ -409,22 +842,46 @@ class ModelModule {
     if (this.providerTitleEl) {
       this.providerTitleEl.textContent = '模型库';
     }
-
-    if (!this.userModels.length) {
-      const placeholder = document.createElement('div');
-      placeholder.className = 'model-placeholder';
-      placeholder.textContent = '尚未添加模型。点击右上角的“添加”按钮开始。';
-      this.cardContainerEl.appendChild(placeholder);
-      this.notifyModelRegistryChanged();
-      return;
-    }
-
     const fragment = document.createDocumentFragment();
 
-    this.userModels.forEach((model) => {
-      const card = this.buildModelCard(model);
-      fragment.appendChild(card);
-    });
+    if (Array.isArray(this.systemModels) && this.systemModels.length > 0) {
+      const systemWrapper = document.createElement('div');
+      systemWrapper.className = 'model-section system-model-section';
+      const title = document.createElement('h4');
+      title.className = 'model-section__title';
+      title.textContent = '系统模型';
+      systemWrapper.appendChild(title);
+      const systemGrid = document.createElement('div');
+      systemGrid.className = 'model-card-grid';
+      this.systemModels.forEach((systemModel) => {
+        const card = this.buildSystemModelCard(systemModel);
+        systemGrid.appendChild(card);
+      });
+      systemWrapper.appendChild(systemGrid);
+      fragment.appendChild(systemWrapper);
+    }
+
+    if (this.userModels.length > 0) {
+      const userWrapper = document.createElement('div');
+      userWrapper.className = 'model-section user-model-section';
+      const title = document.createElement('h4');
+      title.className = 'model-section__title';
+      title.textContent = '我的模型';
+      userWrapper.appendChild(title);
+      const userGrid = document.createElement('div');
+      userGrid.className = 'model-card-grid';
+      this.userModels.forEach((model) => {
+        const card = this.buildModelCard(model);
+        userGrid.appendChild(card);
+      });
+      userWrapper.appendChild(userGrid);
+      fragment.appendChild(userWrapper);
+    } else {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'model-placeholder';
+      placeholder.textContent = '尚未添加自定义模型。点击右上角的“添加”按钮开始。';
+      fragment.appendChild(placeholder);
+    }
 
     this.cardContainerEl.appendChild(fragment);
     this.notifyModelRegistryChanged();

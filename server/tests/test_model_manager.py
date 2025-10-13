@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 import sys
 
@@ -45,7 +46,16 @@ def test_download_triggers_when_missing(tmp_path: Path) -> None:
         (target / "config.json").write_text("{}", encoding="utf-8")
         return str(target)
 
-    with mock.patch("huggingface_hub.snapshot_download", side_effect=_fake_snapshot_download) as downloader:
+    fake_repo_info = SimpleNamespace(
+        siblings=[SimpleNamespace(rfilename="config.json", size=2)],
+    )
+
+    with mock.patch("huggingface_hub.HfApi") as api_cls, mock.patch(
+        "huggingface_hub.snapshot_download",
+        side_effect=_fake_snapshot_download,
+    ) as downloader:
+        api_instance = api_cls.return_value
+        api_instance.repo_info.return_value = fake_repo_info
         path = manager.get_model_path("demo", download=True)
 
     assert (path / "config.json").exists()

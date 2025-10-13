@@ -11,6 +11,7 @@ from api.chat_api import router as chat_router, init_chat_api
 from api.database_api import router as database_router, init_database_api
 from api.faiss_api import router as faiss_router, init_faiss_api
 from api.cleanup_api import router as cleanup_router
+from api.model_api import router as model_router
 from api.config_api import router as config_router
 from service.sqlite_service import SQLiteManager
 from service.faiss_service import FaissManager
@@ -42,7 +43,6 @@ async def lifespan(app: FastAPI):
     # Ensure model directories exist even if the meta folder was removed
     model_manager = get_model_manager()
     model_manager.ensure_base_directories()
-    model_manager.download_eager_models()
 
     # Ensure database-related directories exist before services start (idempotent)
     DatabaseConfig.ensure_directories()
@@ -126,6 +126,7 @@ app.include_router(database_router)
 app.include_router(faiss_router)
 app.include_router(document_router)
 app.include_router(cleanup_router)
+app.include_router(model_router)
 app.include_router(config_router)
 app.include_router(chat_router)
 
