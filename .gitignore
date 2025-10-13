@@ -12,5 +12,9 @@
 /meta/*
 build
 /electron/dist/mac-arm64
+/electron/dist/win-arm64-unpacked
+/electron/dist/linux-arm64-unpacked
 /electron/dist/*.dmg
+/electron/dist/*.exe
+/electron/dist/*.AppleImage
 /electron/dist/*.blockmap

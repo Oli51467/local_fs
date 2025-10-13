@@ -1,6 +1,6 @@
 {
   "name": "electron-python-app",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "Electron + Python (FastAPI) desktop app demo",
   "main": "main.js",
   "scripts": {
