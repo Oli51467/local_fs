@@ -1,5 +1,7 @@
 .vscode
 /electron/.DS_Store
+.pytest_cache
+.github/
 .DS_Store
 /data
 .venv
