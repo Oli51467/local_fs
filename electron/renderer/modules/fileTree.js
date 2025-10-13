@@ -1086,14 +1086,39 @@
     div.focus();
 
     let viewer = getFileViewer();
-    if (!viewer && global.ImageViewer) {
-      viewer = new global.ImageViewer();
-      setFileViewer(viewer);
+
+    // 如果已有的 viewer 无效（没有 openFile 方法），尝试恢复为真正的 FileViewer
+    if (!viewer || typeof viewer.openFile !== 'function') {
+      const explorerModule = getExplorerModule();
+      if (explorerModule && typeof explorerModule.getFileViewer === 'function') {
+        const fromExplorer = explorerModule.getFileViewer();
+        if (fromExplorer && typeof fromExplorer.openFile === 'function') {
+          viewer = fromExplorer;
+          setFileViewer(viewer);
+        }
+      }
+
+      // 如果仍未获取到有效实例，则尝试实例化全局 FileViewer
+      if (!viewer || typeof viewer.openFile !== 'function') {
+        const FileViewerCtor = global.FileViewer || window.FileViewer;
+        const container = document.getElementById('file-content');
+        if (typeof FileViewerCtor === 'function' && container) {
+          try {
+            viewer = new FileViewerCtor(container);
+            setFileViewer(viewer);
+          } catch (e) {
+            console.warn('初始化 FileViewer 失败:', e);
+          }
+        }
+      }
     }
+
     if (viewer && typeof viewer.openFile === 'function') {
       viewer.openFile(node.path).catch((error) => {
         console.error('文件打开失败:', error);
       });
+    } else {
+      console.warn('未找到有效的文件查看器，无法打开文件:', node.path);
     }
   }
 

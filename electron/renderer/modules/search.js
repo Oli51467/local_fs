@@ -1281,26 +1281,23 @@
   }
 
   function ensureGlobalImageViewer() {
-    if (global.__globalImageViewer && global.__globalImageViewer !== dependencies.getFileViewer?.()) {
-      const viewer = global.__globalImageViewer;
-      setFileViewer(viewer);
-      return viewer;
+    // 始终仅维护独立的全局图片查看器，不污染全局 fileViewer
+    if (global.__globalImageViewer) {
+      return global.__globalImageViewer;
     }
 
-    let viewer = getFileViewer();
-
-    if (!viewer && global.ImageViewer) {
+    if (global.ImageViewer) {
       try {
-        viewer = new global.ImageViewer();
+        const viewer = new global.ImageViewer();
         global.__globalImageViewer = viewer;
-        setFileViewer(viewer);
+        return viewer;
       } catch (viewerError) {
         console.error('ImageViewer 初始化失败:', viewerError);
-        viewer = null;
+        return null;
       }
     }
 
-    return viewer;
+    return null;
   }
 
   function openImagePreview(result, src) {
