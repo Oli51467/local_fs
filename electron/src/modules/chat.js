@@ -28,6 +28,30 @@ const WINDOWS_1252_REVERSE = new Map([
   [0x0178, 0x9F]
 ]);
 
+// 资源路径解析（参考 fileTree.js 的 getAssetUrl）
+const __assetUrlCache = new Map();
+function getAssetUrl(relativePath) {
+  if (!relativePath) {
+    return '';
+  }
+  if (__assetUrlCache.has(relativePath)) {
+    return __assetUrlCache.get(relativePath);
+  }
+  let resolved = `./${String(relativePath).replace(/^([./\\])+/, '')}`;
+  try {
+    if (window.fsAPI && typeof window.fsAPI.getAssetPathSync === 'function') {
+      const candidate = window.fsAPI.getAssetPathSync(relativePath);
+      if (candidate) {
+        resolved = candidate;
+      }
+    }
+  } catch (error) {
+    console.warn('解析资源路径失败，使用默认相对路径:', error);
+  }
+  __assetUrlCache.set(relativePath, resolved);
+  return resolved;
+}
+
 class ChatModule {
   constructor() {
     this.baseApiUrl = 'http://localhost:8000/api/chat';
@@ -734,8 +758,18 @@ class ChatModule {
       avatar.className = 'chat-avatar';
       if (message.role === 'user') {
         avatar.classList.add('is-user');
+        // 显式设置用户头像的背景图，兼容打包后的资源路径
+        try {
+          avatar.style.backgroundImage = `url('${getAssetUrl('dist/assets/user.png')}')`;
+        } catch (_) {}
       } else {
         avatar.classList.add('is-assistant');
+        // 根据当前是否为深色模式选择助手头像，兼容打包后的资源路径
+        try {
+          const isDark = document.body && document.body.classList && document.body.classList.contains('dark-mode');
+          const assistantAsset = isDark ? 'dist/assets/gpt-dark.png' : 'dist/assets/gpt.png';
+          avatar.style.backgroundImage = `url('${getAssetUrl(assistantAsset)}')`;
+        } catch (_) {}
       }
       header.appendChild(avatar);
 

@@ -1,3 +1,27 @@
+// 资源路径解析（与 chat.js 保持一致）
+const __assetUrlCache = new Map();
+function getAssetUrl(relativePath) {
+  if (!relativePath) {
+    return '';
+  }
+  if (__assetUrlCache.has(relativePath)) {
+    return __assetUrlCache.get(relativePath);
+  }
+  let resolved = `./${String(relativePath).replace(/^([./\\])+/, '')}`;
+  try {
+    if (window.fsAPI && typeof window.fsAPI.getAssetPathSync === 'function') {
+      const candidate = window.fsAPI.getAssetPathSync(relativePath);
+      if (candidate) {
+        resolved = candidate;
+      }
+    }
+  } catch (error) {
+    console.warn('解析资源路径失败，使用默认相对路径:', error);
+  }
+  __assetUrlCache.set(relativePath, resolved);
+  return resolved;
+}
+
 class ModelModule {
   constructor(options = {}) {
     this.catalog = this.buildModelCatalog();
@@ -1049,6 +1073,10 @@ class ModelModule {
           enriched.apiModel = catalogModel.apiModel;
         }
       }
+    }
+    // 解析图标资源路径，确保打包后能正确加载
+    if (enriched.providerIcon) {
+      enriched.providerIcon = getAssetUrl(enriched.providerIcon);
     }
     enriched.apiKeySetting = enriched.apiKeySetting || 'siliconflwApiKey';
     enriched.description = typeof enriched.description === 'string' ? enriched.description : '';

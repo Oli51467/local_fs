@@ -162,7 +162,6 @@ app.on('will-quit', () => {
 
 // 所有窗口关闭时的处理
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  // 无论平台，一旦所有窗口关闭则退出应用
+  app.quit();
 });

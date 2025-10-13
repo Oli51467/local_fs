@@ -363,10 +363,31 @@
 
     searchHistoryContainer.style.display = 'block';
 
+    const header = document.createElement('div');
+    header.className = 'search-history-header';
+
     const title = document.createElement('div');
     title.className = 'search-history-title';
     title.textContent = '历史搜索';
-    searchHistoryContainer.appendChild(title);
+
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'search-history-clear-btn';
+    clearBtn.title = '清空历史搜索';
+    clearBtn.setAttribute('aria-label', '清空历史搜索');
+    clearBtn.innerHTML = window.icons?.trash || '×';
+    clearBtn.addEventListener('click', () => {
+      if (!confirm('确定要删除所有历史搜索记录吗？')) {
+        return;
+      }
+      searchHistory = [];
+      saveSearchHistory();
+      renderSearchHistory();
+    });
+
+    header.appendChild(title);
+    header.appendChild(clearBtn);
+    searchHistoryContainer.appendChild(header);
 
     const list = document.createElement('div');
     list.className = 'search-history-list';
