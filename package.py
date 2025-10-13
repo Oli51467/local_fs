@@ -24,8 +24,8 @@ HOOKS_DIR = BUILD_DIR / "pyinstaller-hooks"
 # path lookups continue to work after packaging.
 EXTRA_RESOURCE_MAPPINGS: List[Tuple[str, str]] = [
     ("python_backend", "python_backend"),
-    (str((ROOT / "meta").resolve()), "meta"),
-    (str((ROOT / "data").resolve()), "data"),
+    ("../meta", "meta"),
+    ("../data", "data"),
     ("static", "static"),
     ("dist/assets", "dist/assets"),
 ]

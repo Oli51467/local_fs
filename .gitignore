@@ -11,3 +11,6 @@
 **__pycache__
 /meta/*
 build
+/electron/dist/mac-arm64
+/electron/dist/*.dmg
+/electron/dist/*.blockmap

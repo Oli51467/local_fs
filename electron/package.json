@@ -44,17 +44,17 @@
         ]
       },
       {
-        "from": "meta",
+        "from": "../meta",
         "to": "meta",
         "filter": [
-          "**/*"
+          "!**/*"
         ]
       },
       {
-        "from": "data",
+        "from": "../data",
         "to": "data",
         "filter": [
-          "**/*"
+          "!**/*"
         ]
       },
       {

@@ -2,7 +2,7 @@ directories:
   output: dist
   buildResources: build
 appId: com.electron.python.app
-productName: Electron Python App
+productName: LoFS
 files:
   - filter:
       - '**/*'
@@ -26,14 +26,14 @@ extraResources:
     to: static
     filter:
       - '**/*'
-  - from: meta
+  - from: ../meta
     to: meta
     filter:
-      - '**/*'
-  - from: data
+      - '!**/*'
+  - from: ../data
     to: data
     filter:
-      - '**/*'
+      - '!**/*'
   - from: dist/assets
     to: dist/assets
     filter:
