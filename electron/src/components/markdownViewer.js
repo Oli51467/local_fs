@@ -221,7 +221,7 @@ class MarkdownViewer {
       /* Markdown编辑器滚动条样式 */
       .markdown-editor-textarea::-webkit-scrollbar,
       .markdown-preview::-webkit-scrollbar {
-        width: 2px;
+        width: 1px;
       }
       
       .markdown-editor-textarea::-webkit-scrollbar-track,
@@ -242,16 +242,16 @@ class MarkdownViewer {
       
       /* 调整大小手柄 */
       .resize-handle {
-        width: 4px;
-        background: var(--tree-border);
+        width: 0;
+        background: transparent;
         cursor: col-resize;
         position: relative;
         z-index: 10;
         flex-shrink: 0;
       }
-      
+
       .resize-handle:hover {
-        background: var(--accent-color);
+        background: transparent;
       }
       
       /* 保存状态指示器 */
@@ -575,10 +575,10 @@ class MarkdownViewer {
       .replace(/^\* (.*)$/gim, '<li>$1</li>')
       .replace(/^- (.*)$/gim, '<li>$1</li>')
       .replace(/^\d+\. (.*)$/gim, '<li>$1</li>');
-  
+
     html = html.replace(/(<li>.*<\/li>)/gims, '<ul>$1</ul>');
     html = html.replace(/(<ul>)(\s*<ul>)+/gims, '<ul>').replace(/<\/ul>\s*<ul>/gims, '');
-  
+
     const blocks = html
       .split(/\n{2,}/)
       .map((block) => block.trim())
@@ -589,7 +589,7 @@ class MarkdownViewer {
         }
         return `<p>${block.replace(/\n+/g, ' ')}</p>`;
       });
-  
+
     return blocks.join('\n');
   }
   enhanceMarkdownHtml(html, filePath) {
@@ -944,7 +944,7 @@ class MarkdownViewer {
    */
   createMarkdownEditor(tabId, content, filePath, contentElement) {
     if (!contentElement) return;
-    
+
     // 为Markdown内容添加特殊类名
     contentElement.classList.add('markdown-content');
 
@@ -1015,7 +1015,7 @@ class MarkdownViewer {
     editor.addEventListener('input', () => {
       const content = editor.value;
       this.updateMarkdownPreview(tabId, content);
-      
+
       // 标记为已修改
       if (content !== tabState.originalContent) {
         this.markTabAsDirty(tabId);
@@ -1044,7 +1044,7 @@ class MarkdownViewer {
         const value = editor.value;
         editor.value = value.substring(0, start) + '\t' + value.substring(end);
         editor.selectionStart = editor.selectionEnd = start + 1;
-        
+
         // 触发input事件以更新预览
         editor.dispatchEvent(new Event('input', { bubbles: true }));
       }
@@ -1064,46 +1064,46 @@ class MarkdownViewer {
     const container = document.getElementById(`container-${tabId}`);
     const editorPane = document.getElementById(`editor-pane-${tabId}`);
     const previewPane = document.getElementById(`preview-pane-${tabId}`);
-    
+
     if (!resizeHandle || !container || !editorPane || !previewPane) return;
-    
+
     let isResizing = false;
     let startX = 0;
     let startEditorWidth = 0;
-    
+
     resizeHandle.addEventListener('mousedown', (e) => {
       isResizing = true;
       startX = e.clientX;
       startEditorWidth = editorPane.offsetWidth;
-      
+
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
-      
+
       e.preventDefault();
     });
-    
+
     document.addEventListener('mousemove', (e) => {
       if (!isResizing) return;
-      
+
       const deltaX = e.clientX - startX;
       const containerWidth = container.offsetWidth;
       const newEditorWidth = startEditorWidth + deltaX;
-      
+
       // 限制最小和最大宽度
       const minWidth = 200;
       const maxWidth = containerWidth - minWidth - 4; // 4px for resize handle
-      
+
       if (newEditorWidth >= minWidth && newEditorWidth <= maxWidth) {
         const editorPercent = (newEditorWidth / containerWidth) * 100;
         const previewPercent = ((containerWidth - newEditorWidth - 4) / containerWidth) * 100;
-        
+
         editorPane.style.flex = `0 0 ${editorPercent}%`;
         previewPane.style.flex = `0 0 ${previewPercent}%`;
       }
-      
+
       e.preventDefault();
     });
-    
+
     document.addEventListener('mouseup', () => {
       if (isResizing) {
         isResizing = false;
@@ -1145,12 +1145,12 @@ class MarkdownViewer {
     try {
       const content = tabState.editor.value;
       await window.fsAPI.writeFile(tabState.filePath, content);
-      
+
       // 更新原始内容和状态
       tabState.originalContent = content;
       tabState.isDirty = false;
       this.updateTabTitle(tabId);
-      
+
       // 清除自动保存计时器
       if (tabState.autoSaveTimer) {
         clearTimeout(tabState.autoSaveTimer);

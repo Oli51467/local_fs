@@ -20,11 +20,11 @@ class TabManager {
       <div class="tabs-container" id="tabs-container" style="display: none;">
         <div class="tab-wrapper">
           <div class="tab-list" id="tab-list"></div>
-          <div class="tab-extension" id="tab-extension" style="display: none;">
+          <div class="tab-extension" id="tab-extension">
             <button class="tab-extension-btn" id="tab-extension-btn" title="更多标签页">
               <span>⋯</span>
             </button>
-            <div class="tab-dropdown" id="tab-dropdown" style="display: none;"></div>
+            <div class="tab-dropdown context-menu tab-extension-menu" id="tab-dropdown" style="display: none;"></div>
           </div>
         </div>
       </div>
@@ -44,10 +44,6 @@ class TabManager {
     
     // 添加样式
     this.addStyles();
-    
-    // 存储可见和隐藏的tab
-    this.visibleTabs = new Set();
-    this.hiddenTabs = new Set();
   }
 
   addStyles() {
@@ -71,10 +67,25 @@ class TabManager {
       .tab-list {
         display: flex;
         flex: 1;
-        overflow: hidden;
+        overflow-x: auto;
+        overflow-y: hidden;
         padding: 0;
         margin: 0;
         min-width: 0;
+        scrollbar-width: thin;
+        scrollbar-color: var(--tree-border) transparent;
+      }
+
+      .tab-list::-webkit-scrollbar {
+        height: 1px;
+      }
+
+      .tab-list::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .tab-list::-webkit-scrollbar-thumb {
+        background: var(--tree-border);
       }
       
       .tab-extension {
@@ -82,18 +93,21 @@ class TabManager {
         position: relative;
         display: flex;
         align-items: center;
+        padding: 0 4px;
+        margin-right: 6px;
       }
       
       .tab-extension-btn {
         background: none;
         border: none;
         cursor: pointer;
-        width: 24px;
-        height: 24px;
+        width: 28px;
+        height: 100%;
+        min-height: 35px;
         display: flex;
         align-items: center;
         justify-content: center;
-        margin: 0 4px;
+        margin: 0;
         border-radius: 3px;
         transition: background-color 0.2s;
         color: var(--text-color);
@@ -107,38 +121,41 @@ class TabManager {
       
       .tab-dropdown {
         position: absolute;
-        top: 100%;
+        top: calc(100% + 4px);
         right: 0;
-        background: var(--bg-color);
-        border: 1px solid var(--tree-border);
-        border-radius: 3px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        min-width: 200px;
-        max-width: 250px;
-        max-height: 300px;
+        display: none;
+        width: 200px;
+        max-height: 320px;
         overflow-y: auto;
+        overflow-x: hidden;
         z-index: 1000;
       }
       
       .tab-dropdown-item {
         display: flex;
         align-items: center;
-        padding: 8px 12px;
-        cursor: pointer;
-        font-size: 13px;
-        color: var(--text-color);
-        background: var(--bg-color);
-        transition: background-color 0.15s ease;
+        justify-content: space-between;
+        width: 100%;
+        gap: 8px;
+        padding: 6px 10px;
       }
-      
+
       .tab-dropdown-item:hover {
-        background: var(--tree-hover);
+        background-color: inherit;
       }
       
       .tab-dropdown-item.active {
-        background: var(--accent-color);
+        background-color: var(--accent-color);
         color: #ffffff;
         font-weight: 500;
+      }
+
+      .tab-dropdown-item.active:hover {
+        background-color: var(--accent-color);
+      }
+      
+      .tab-dropdown-item.active .tab-dropdown-close {
+        color: #ffffff;
       }
       
       .tab-dropdown-title {
@@ -148,6 +165,7 @@ class TabManager {
         white-space: nowrap;
         margin-right: 8px;
         text-decoration: none;
+        min-width: 0;
       }
       
       .tab-dropdown-close {
@@ -158,38 +176,41 @@ class TabManager {
         align-items: center;
         justify-content: center;
         font-size: 12px;
-        opacity: 0.7;
         transition: all 0.2s;
+        color: inherit;
+        opacity: 0.8;
+        flex-shrink: 0;
+        cursor: pointer;
       }
       
       .tab-dropdown-close:hover {
-        background: rgba(255, 255, 255, 0.2);
+        background: var(--tree-hover);
         opacity: 1;
+      }
+
+      .tab-dropdown-item.active .tab-dropdown-close:hover {
+        background: rgba(255, 255, 255, 0.2);
       }
       
       .tab-dropdown-separator {
         height: 1px;
         background: var(--tree-border);
-        margin: 0;
+        margin: 3px 0;
       }
       
       .tab-dropdown-action {
-          display: flex;
-          align-items: center;
-          padding: 8px 12px;
-          cursor: pointer;
-          font-size: 13px;
-          color: var(--text-color);
-          border: none;
-          background: var(--bg-color);
-          width: 100%;
-          text-align: left;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          transition: background-color 0.15s ease;
-        }
-      
+        width: 100%;
+        border: none;
+        background: none;
+        font: inherit;
+        color: inherit;
+        padding: 6px 10px;
+        cursor: pointer;
+        text-align: left;
+      }
+
       .tab-dropdown-action:hover {
-        background: var(--tree-hover);
+        background-color: var(--tree-hover);
       }
 
       .tab-item {
@@ -301,104 +322,28 @@ class TabManager {
   // 更新下拉菜单内容
   updateDropdownContent() {
     this.tabDropdown.innerHTML = '';
-    
-    // 添加隐藏的标签页
-    this.hiddenTabs.forEach(tabId => {
-      const tab = this.tabs.get(tabId);
-      if (!tab) return;
-      
-      const dropdownItem = document.createElement('div');
-      dropdownItem.className = 'tab-dropdown-item';
-      if (this.activeTabId === tabId) {
-        dropdownItem.classList.add('active');
-      }
-      
-      const title = document.createElement('span');
-      title.className = 'tab-dropdown-title';
-      title.textContent = tab.fileName;
-      title.title = tab.fileName;
-      
-      const closeBtn = document.createElement('span');
-      closeBtn.className = 'tab-dropdown-close';
-      closeBtn.innerHTML = '×';
-      closeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.closeTab(tabId);
-      });
-      
-      dropdownItem.appendChild(title);
-      dropdownItem.appendChild(closeBtn);
-      
-      dropdownItem.addEventListener('click', (e) => {
-        if (!e.target.classList.contains('tab-dropdown-close')) {
-          this.switchTab(tabId);
-          this.hideDropdown();
-        }
-      });
-      
-      this.tabDropdown.appendChild(dropdownItem);
+
+    if (this.tabs.size === 0) {
+      return;
+    }
+
+    const closeAllBtn = document.createElement('button');
+    closeAllBtn.type = 'button';
+    closeAllBtn.className = 'context-menu-item tab-dropdown-action';
+    closeAllBtn.textContent = '关闭全部';
+    closeAllBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeAllTabs();
+      this.hideDropdown();
     });
     
-    // 如果有隐藏的标签页，添加分隔线和关闭所有文件按钮
-    if (this.hiddenTabs.size > 0 || this.tabs.size > 0) {
-      // 添加分隔线
-      const separator = document.createElement('div');
-      separator.className = 'tab-dropdown-separator';
-      this.tabDropdown.appendChild(separator);
-      
-      // 添加关闭所有文件按钮
-       const closeAllBtn = document.createElement('button');
-       closeAllBtn.className = 'tab-dropdown-action';
-       closeAllBtn.textContent = '全部关闭';
-      closeAllBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.closeSavedTabs();
-        this.hideDropdown();
-      });
-      
-      this.tabDropdown.appendChild(closeAllBtn);
-    }
+    this.tabDropdown.appendChild(closeAllBtn);
   }
   
-  // 检查文本是否需要省略号
-  // 检查tab栏是否溢出
+  // 更新tab栏状态（滚动+扩展按钮）
   checkTabOverflow() {
-    const tabListWidth = this.tabList.clientWidth;
-    const extensionWidth = this.tabExtension.clientWidth;
-    const availableWidth = this.tabsContainer.clientWidth - extensionWidth - 10; // 留10px边距
-    
-    let totalTabWidth = 0;
-    const visibleTabIds = [];
-    const hiddenTabIds = [];
-    
-    // 计算每个tab的宽度
-    this.tabs.forEach((tab, tabId) => {
-      const tabWidth = tab.element.offsetWidth || 150; // 默认150px
-      if (totalTabWidth + tabWidth <= availableWidth) {
-        totalTabWidth += tabWidth;
-        visibleTabIds.push(tabId);
-      } else {
-        hiddenTabIds.push(tabId);
-      }
-    });
-    
-    // 更新可见和隐藏的tab集合
-    this.visibleTabs = new Set(visibleTabIds);
-    this.hiddenTabs = new Set(hiddenTabIds);
-    
-    // 显示/隐藏tab元素
-    this.tabs.forEach((tab, tabId) => {
-      if (this.visibleTabs.has(tabId)) {
-        tab.element.style.display = 'flex';
-      } else {
-        tab.element.style.display = 'none';
-      }
-    });
-    
-    // 显示/隐藏扩展按钮
-    if (this.hiddenTabs.size > 0) {
+    if (this.tabs.size > 0) {
       this.tabExtension.style.display = 'flex';
-      // 更新扩展菜单内容
       this.updateDropdownContent();
     } else {
       this.tabExtension.style.display = 'none';
@@ -482,6 +427,7 @@ class TabManager {
     if (tab) {
       tab.element.classList.add('active');
       this.activeTabId = tabId;
+      this.ensureTabInView(tab.element);
       
       // 触发切换回调
       if (this.onTabSwitch) {
@@ -492,10 +438,24 @@ class TabManager {
   
   // 将tab移动到可见区域
   moveTabToVisible(tabId) {
-    if (!this.hiddenTabs.has(tabId)) return;
-    
-    // 简单切换到该tab
-    this.switchTab(tabId);
+    const tab = this.tabs.get(tabId);
+    if (!tab) return;
+    this.ensureTabInView(tab.element);
+  }
+
+  // 确保指定tab在可视区域内
+  ensureTabInView(tabElement) {
+    if (!tabElement || !this.tabList) return;
+
+    const container = this.tabList;
+    const tabRect = tabElement.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+
+    if (tabRect.left < containerRect.left) {
+      container.scrollLeft -= (containerRect.left - tabRect.left) + 16;
+    } else if (tabRect.right > containerRect.right) {
+      container.scrollLeft += (tabRect.right - containerRect.right) + 16;
+    }
   }
 
   // 关闭标签页
@@ -513,11 +473,6 @@ class TabManager {
     
     // 从tabs中删除
     this.tabs.delete(tabId);
-    
-    // 从可见和隐藏集合中移除
-    this.visibleTabs.delete(tabId);
-    this.hiddenTabs.delete(tabId);
-
     // 如果关闭的是当前激活的tab，切换到其他tab
     if (this.activeTabId === tabId) {
       const remainingTabs = Array.from(this.tabs.keys());

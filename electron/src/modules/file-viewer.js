@@ -174,7 +174,8 @@ class FileViewerModule {
     }
 
     const assetFileName = path.basename(asset);
-    if (assetFileName && assetFileName !== asset) {
+    const assetHasSubdirectory = asset.includes('/') || asset.includes('\\');
+    if (assetFileName && !assetHasSubdirectory) {
       if (resolvedBaseDir) {
         pushCandidate(path.resolve(resolvedBaseDir, assetFileName));
       }
