@@ -673,7 +673,33 @@ class TabManager {
         this.switchToPrevTab();
         return; // 明确返回，避免继续处理
       }
-      
+
+      // Arrow navigation without modifiers
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        if (e.key === 'ArrowRight') {
+          const activeElement = document.activeElement;
+          if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || activeElement.isContentEditable)) {
+            return;
+          }
+          if (this.activeTabId) {
+            e.preventDefault();
+            this.switchToNextTab();
+          }
+          return;
+        }
+        if (e.key === 'ArrowLeft') {
+          const activeElement = document.activeElement;
+          if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || activeElement.isContentEditable)) {
+            return;
+          }
+          if (this.activeTabId) {
+            e.preventDefault();
+            this.switchToPrevTab();
+          }
+          return;
+        }
+      }
+
       // 对于其他键盘事件，不阻止传播，让其他监听器处理
     });
   }

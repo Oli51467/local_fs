@@ -8,7 +8,12 @@
     expandedFolders: new Set(),
     draggedElement: null,
     draggedPath: null,
-    dropIndicator: null
+    dropIndicator: null,
+    copyShortcutListener: null,
+    pasteShortcutListener: null,
+    arrowNavigationListener: null,
+    renameStylesInjected: false,
+    dataRootPath: null
   };
 
   const dependencies = {
@@ -665,6 +670,173 @@
     return segments.length ? segments[segments.length - 1] : normalized;
   }
 
+  function getPathSelector(pathValue) {
+    if (!pathValue) {
+      return '[data-path=""]';
+    }
+    if (window.CSS && typeof window.CSS.escape === 'function') {
+      return `[data-path="${window.CSS.escape(pathValue)}"]`;
+    }
+    return `[data-path="${String(pathValue).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
+  }
+
+  function focusItemByPath(pathValue) {
+    if (!pathValue) {
+      return;
+    }
+    const selector = `.file-item${getPathSelector(pathValue)}`;
+    const element = document.querySelector(selector);
+    if (!element) {
+      return;
+    }
+    document.querySelectorAll('.file-item.selected').forEach((el) => el.classList.remove('selected'));
+    element.classList.add('selected');
+    try {
+      element.focus({ preventScroll: true });
+    } catch (focusError) {
+      if (typeof element.focus === 'function') {
+        element.focus();
+      }
+    }
+    element.scrollIntoView({ block: 'nearest' });
+    state.selectedItemPath = pathValue;
+    const explorer = getExplorerModule();
+    if (explorer && typeof explorer.setSelectedItemPath === 'function') {
+      explorer.setSelectedItemPath(pathValue);
+    }
+  }
+
+  function getVisibleTreeItems() {
+    const candidates = document.querySelectorAll('.file-item[data-path]');
+    return Array.from(candidates).filter((element) => {
+      if (!element || !element.dataset || !element.dataset.path) {
+        return false;
+      }
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      return element.offsetParent !== null;
+    });
+  }
+
+  function ensureRenameInputStyles() {
+    if (state.renameStylesInjected) {
+      return;
+    }
+    const style = document.createElement('style');
+    style.textContent = [
+      '.rename-input-wrapper {',
+      '  display: flex;',
+      '  align-items: center;',
+      '  width: 100%;',
+      '  min-height: 24px;',
+      '}',
+      '',
+      '.rename-input-wrapper .file-item-content {',
+      '  display: flex;',
+      '  align-items: center;',
+      '  gap: 3px;',
+      '  flex: 1;',
+      '  min-width: 0;',
+      '}',
+      '',
+      '.rename-name-wrapper {',
+      '  display: flex;',
+      '  align-items: center;',
+      '  gap: 3px;',
+      '  flex: 1;',
+      '  min-width: 0;',
+      '}',
+      '',
+      '.rename-input-container {',
+      '  display: flex;',
+      '  align-items: center;',
+      '  gap: 2px;',
+      '  flex: 1;',
+      '  min-width: 0;',
+      '}',
+      '',
+      '.inline-rename-input {',
+      '  flex: 1;',
+      '  border: 1px solid var(--tree-border, #d1d5db);',
+      '  background: var(--bg-color, #ffffff);',
+      '  color: var(--text-color, #1f2933);',
+      '  font-size: 12px;',
+      '  line-height: 18px;',
+      '  padding: 1px 6px;',
+      '  height: 20px;',
+      '  border-radius: 4px;',
+      '  outline: none;',
+      '  transition: border-color 0.15s ease, box-shadow 0.15s ease;',
+      '  box-sizing: border-box;',
+      '}',
+      '',
+      '.inline-rename-input:focus {',
+      '  border-color: rgba(59, 130, 246, 0.6);',
+      '  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);',
+      '}',
+      '',
+      '.rename-extension {',
+      '  font-size: 12px;',
+      '  color: var(--text-secondary, #6b7280);',
+      '  user-select: none;',
+      '  max-width: 40%;',
+      '  overflow: hidden;',
+      '  text-overflow: ellipsis;',
+      '  white-space: nowrap;',
+      '}',
+      '',
+      '.rename-folder-arrow {',
+      '  width: 10px;',
+      '  opacity: 0;',
+      '}',
+      ''
+    ].join('\n');
+    document.head.appendChild(style);
+    state.renameStylesInjected = true;
+  }
+
+
+  function findTreeNodeByPath(node, targetPath) {
+    if (!node || !targetPath) {
+      return null;
+    }
+    const normalizedTarget = String(targetPath).replace(/\\/g, '/');
+    const stack = [node];
+    while (stack.length) {
+      const current = stack.pop();
+      if (!current) {
+        continue;
+      }
+      const currentPath = current.path ? String(current.path).replace(/\\/g, '/') : null;
+      if (currentPath === normalizedTarget) {
+        return current;
+      }
+      if (Array.isArray(current.children)) {
+        for (let i = current.children.length - 1; i >= 0; i -= 1) {
+          stack.push(current.children[i]);
+        }
+      }
+    }
+    return null;
+  }
+
+  function scheduleFocusOnPath(pathValue) {
+    if (!pathValue) {
+      return;
+    }
+    setTimeout(() => {
+      focusItemByPath(pathValue);
+    }, 60);
+  }
+
+  function getPasteTargetPath() {
+    if (state.selectedItemPath) {
+      return state.selectedItemPath;
+    }
+    return state.dataRootPath;
+  }
+
   function formatFileSize(bytes) {
     const size = Number(bytes);
     if (!Number.isFinite(size) || size < 0) {
@@ -940,104 +1112,376 @@
     return getFolderSvg();
   }
 
+  async function copyItemPathToClipboard(itemPath) {
+    if (!itemPath) {
+      return;
+    }
+    try {
+      if (global.fsAPI?.copyItemToClipboard) {
+        const result = await global.fsAPI.copyItemToClipboard(itemPath);
+        if (!result?.success) {
+          throw new Error(result?.error || '复制失败');
+        }
+      } else if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(itemPath);
+      } else {
+        throw new Error('当前环境不支持复制到剪贴板');
+      }
+    } catch (error) {
+      console.error('复制到剪贴板失败:', error);
+      dependencies.showAlert(error.message || '复制失败', 'error');
+    }
+  }
+
+  async function compressFileSystemItem(itemPath) {
+    if (!itemPath) {
+      dependencies.showAlert('未找到目标文件或文件夹', 'error');
+      return;
+    }
+    if (!global.fsAPI?.compressItem) {
+      dependencies.showAlert('当前环境不支持压缩操作', 'warning');
+      return;
+    }
+    dependencies.showLoadingOverlay('正在压缩…');
+    try {
+      const result = await global.fsAPI.compressItem(itemPath);
+      if (!result?.success) {
+        throw new Error(result?.error || '压缩失败');
+      }
+      const zipPath = result.zipPath;
+      const zipName = extractFileName(zipPath);
+      state.selectedItemPath = zipPath;
+      dependencies.showAlert(`压缩成功：${zipName}`, 'success');
+      await loadFileTree();
+      scheduleFocusOnPath(zipPath);
+    } catch (error) {
+      console.error('压缩失败:', error);
+      dependencies.showAlert(error.message || '压缩失败', 'error');
+    } finally {
+      dependencies.hideLoadingOverlay();
+    }
+  }
+
+  async function extractZipFile(zipPath) {
+    if (!zipPath) {
+      dependencies.showAlert('未找到压缩文件', 'error');
+      return;
+    }
+    if (!global.fsAPI?.extractZip) {
+      dependencies.showAlert('当前环境不支持解压操作', 'warning');
+      return;
+    }
+    dependencies.showLoadingOverlay('正在解压…');
+    try {
+      const result = await global.fsAPI.extractZip(zipPath);
+      if (!result?.success) {
+        throw new Error(result?.error || '解压失败');
+      }
+      const extractedPath = result.extractedPath;
+      if (!extractedPath) {
+        throw new Error('解压失败：缺少目标路径');
+      }
+      state.selectedItemPath = extractedPath;
+      dependencies.showAlert(`解压完成：${extractFileName(extractedPath)}`, 'success');
+      await loadFileTree();
+      scheduleFocusOnPath(extractedPath);
+    } catch (error) {
+      console.error('解压失败:', error);
+      dependencies.showAlert(error.message || '解压失败', 'error');
+    } finally {
+      dependencies.hideLoadingOverlay();
+    }
+  }
+
+  async function pasteFromClipboard(targetOverride = null) {
+    if (!global.fsAPI?.pasteFromClipboard) {
+      dependencies.showAlert('当前环境不支持粘贴操作', 'warning');
+      return;
+    }
+    const targetPath = targetOverride || getPasteTargetPath();
+    if (!targetPath) {
+      dependencies.showAlert('无法确定粘贴位置', 'warning');
+      return;
+    }
+    dependencies.showLoadingOverlay('正在粘贴…');
+    try {
+      const result = await global.fsAPI.pasteFromClipboard(targetPath);
+      if (!result?.success) {
+        throw new Error(result?.error || '粘贴失败');
+      }
+      const items = Array.isArray(result.items) ? result.items : [];
+      const focusPath = items.length ? items[items.length - 1] : targetPath;
+      state.selectedItemPath = focusPath;
+      await loadFileTree();
+      scheduleFocusOnPath(focusPath);
+    } catch (error) {
+      console.error('粘贴失败:', error);
+      dependencies.showAlert(error.message || '粘贴失败', 'error');
+    } finally {
+      dependencies.hideLoadingOverlay();
+    }
+  }
+
+  function bindClipboardShortcuts() {
+    if (!state.copyShortcutListener) {
+      state.copyShortcutListener = (event) => {
+        const key = event.key || '';
+        if (!(event.ctrlKey || event.metaKey)) {
+          return;
+        }
+        if (event.shiftKey || event.altKey) {
+          return;
+        }
+        if (key.toLowerCase() !== 'c') {
+          return;
+        }
+        const target = event.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          return;
+        }
+        if (!state.selectedItemPath) {
+          return;
+        }
+        event.preventDefault();
+        copyItemPathToClipboard(state.selectedItemPath);
+      };
+      document.addEventListener('keydown', state.copyShortcutListener);
+    }
+
+    if (!state.pasteShortcutListener) {
+      state.pasteShortcutListener = (event) => {
+        const key = event.key || '';
+        if (!(event.ctrlKey || event.metaKey)) {
+          return;
+        }
+        if (event.shiftKey || event.altKey) {
+          return;
+        }
+        if (key.toLowerCase() !== 'v') {
+          return;
+        }
+        const target = event.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          return;
+        }
+        event.preventDefault();
+        pasteFromClipboard();
+      };
+      document.addEventListener('keydown', state.pasteShortcutListener);
+    }
+
+    if (!state.arrowNavigationListener) {
+      state.arrowNavigationListener = (event) => {
+        const key = event.key || '';
+        if (key !== 'ArrowUp' && key !== 'ArrowDown') {
+          return;
+        }
+        if (event.ctrlKey || event.metaKey || event.altKey) {
+          return;
+        }
+        const target = event.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          return;
+        }
+        if (!state.selectedItemPath) {
+          return;
+        }
+
+        const items = getVisibleTreeItems();
+        if (!items.length) {
+          return;
+        }
+
+        const currentIndex = items.findIndex((element) => element.dataset.path === state.selectedItemPath);
+        if (currentIndex === -1) {
+          return;
+        }
+
+        const direction = key === 'ArrowUp' ? -1 : 1;
+        let nextIndex = currentIndex + direction;
+
+        while (nextIndex >= 0 && nextIndex < items.length) {
+          const candidate = items[nextIndex];
+          const candidatePath = candidate?.dataset?.path;
+          if (candidatePath) {
+            event.preventDefault();
+            focusItemByPath(candidatePath);
+            if (candidate && typeof global.fileTreeData === 'object') {
+              const node = findTreeNodeByPath(global.fileTreeData, candidatePath);
+              if (node && !Array.isArray(node.children)) {
+                handleFileClick(node, candidate);
+              }
+            }
+            break;
+          }
+          nextIndex += direction;
+        }
+      };
+      document.addEventListener('keydown', state.arrowNavigationListener);
+    }
+  }
+
   function createContextMenu(x, y, itemPath, isFolder) {
     hideContextMenu();
     const menu = document.createElement('div');
     menu.className = 'context-menu';
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
-    const isPdfFile = !isFolder && itemPath.toLowerCase().endsWith('.pdf');
 
-    const renameItem = document.createElement('div');
-    renameItem.className = 'context-menu-item';
-    renameItem.innerHTML = `<span class="context-menu-icon">${global.icons.newFile}</span>重命名`;
-    renameItem.addEventListener('click', () => {
-      hideContextMenu();
-      const explorer = getExplorerModule();
-      if (explorer) {
-        explorer.startRename(itemPath);
+    const isRoot = !itemPath;
+    const safePath = itemPath || '';
+    const isPdfFile = !isRoot && !isFolder && safePath.toLowerCase().endsWith('.pdf');
+
+    const addMenuItem = ({ label, icon, onClick, disabled = false }) => {
+      const item = document.createElement('div');
+      item.className = 'context-menu-item';
+      if (disabled) {
+        item.classList.add('context-menu-item-disabled');
       }
-    });
-
-    const deleteItem = document.createElement('div');
-    deleteItem.className = 'context-menu-item';
-    deleteItem.innerHTML = `<span class="context-menu-icon">${global.icons.trash}</span>删除`;
-    deleteItem.addEventListener('click', () => {
-      hideContextMenu();
-      const explorer = getExplorerModule();
-      if (explorer) {
-        explorer.deleteItem(itemPath);
-      }
-    });
-
-    const separator1 = document.createElement('div');
-    separator1.className = 'context-menu-separator';
-
-    const mountItem = document.createElement('div');
-    mountItem.className = 'context-menu-item';
-    mountItem.innerHTML = `<span class="context-menu-icon">${global.icons.import}</span>挂载`;
-    if (isFolder) {
-      mountItem.addEventListener('click', () => {
-        hideContextMenu();
-        mountFolder(itemPath);
-      });
-    } else {
-      mountItem.addEventListener('click', () => {
-        hideContextMenu();
-        uploadFile(itemPath);
-      });
-    }
-
-    let parsePdfItem = null;
-    if (isPdfFile) {
-      parsePdfItem = document.createElement('div');
-      parsePdfItem.className = 'context-menu-item';
-      parsePdfItem.innerHTML = `<span class="context-menu-icon">${global.icons.file}</span>深度解析`;
-      parsePdfItem.addEventListener('click', () => {
-        hideContextMenu();
-        parsePdfToMarkdown(itemPath);
-      });
-    }
-
-    const remountItem = document.createElement('div');
-    remountItem.className = 'context-menu-item';
-    remountItem.innerHTML = `<span class="context-menu-icon">${global.icons.import}</span>重新挂载`;
-    if (isFolder) {
-      remountItem.addEventListener('click', () => {
-        hideContextMenu();
-        remountFolder(itemPath);
-      });
-    } else {
-      remountItem.addEventListener('click', () => {
-        hideContextMenu();
-        reuploadFile(itemPath);
-      });
-    }
-
-    const unmountItem = document.createElement('div');
-    unmountItem.className = 'context-menu-item';
-    unmountItem.innerHTML = `<span class="context-menu-icon">${global.icons.trash}</span>取消挂载`;
-    unmountItem.addEventListener('click', () => {
-      hideContextMenu();
-      if (isFolder) {
-        unmountFolder(itemPath);
+      if (icon) {
+        item.innerHTML = `<span class="context-menu-icon">${icon}</span>${label}`;
       } else {
-        unmountDocument(itemPath, false);
+        item.textContent = label;
+      }
+      if (!disabled && typeof onClick === 'function') {
+        item.addEventListener('click', () => {
+          hideContextMenu();
+          onClick();
+        });
+      }
+      menu.appendChild(item);
+      return item;
+    };
+
+    const addSeparator = () => {
+      const separator = document.createElement('div');
+      separator.className = 'context-menu-separator';
+      menu.appendChild(separator);
+      return separator;
+    };
+
+    if (isRoot) {
+      addMenuItem({
+        label: '粘贴',
+        icon: global.icons.paste || global.icons.file,
+        onClick: () => pasteFromClipboard(state.dataRootPath)
+      });
+      addMenuItem({
+        label: '新建文件',
+        icon: global.icons.newFile,
+        onClick: () => {
+          const explorer = getExplorerModule();
+          if (explorer && typeof explorer.createFile === 'function') {
+            explorer.createFile();
+          }
+        }
+      });
+      addMenuItem({
+        label: '新建文件夹',
+        icon: global.icons.folder,
+        onClick: () => {
+          const explorer = getExplorerModule();
+          if (explorer && typeof explorer.createFolder === 'function') {
+            explorer.createFolder();
+          }
+        }
+      });
+      document.body.appendChild(menu);
+      setTimeout(() => {
+        document.addEventListener('click', hideContextMenu, { once: true });
+      }, 0);
+      return;
+    }
+
+    if (isFolder) {
+      addMenuItem({
+        label: '粘贴',
+        icon: global.icons.paste || global.icons.file,
+        onClick: () => pasteFromClipboard(itemPath)
+      });
+    }
+
+    addMenuItem({
+      label: '复制',
+      icon: global.icons.copy || global.icons.file,
+      onClick: () => copyItemPathToClipboard(itemPath)
+    });
+
+    addMenuItem({
+      label: '压缩',
+      icon: global.icons.archive || global.icons.folder,
+      onClick: () => compressFileSystemItem(itemPath)
+    });
+
+    addSeparator();
+
+    addMenuItem({
+      label: '重命名',
+      icon: global.icons.newFile,
+      onClick: () => {
+        const explorer = getExplorerModule();
+        if (explorer) {
+          explorer.startRename(itemPath);
+        }
       }
     });
 
-    const separator2 = document.createElement('div');
-    separator2.className = 'context-menu-separator';
+    addMenuItem({
+      label: '删除',
+      icon: global.icons.trash,
+      onClick: () => {
+        const explorer = getExplorerModule();
+        if (explorer) {
+          explorer.deleteItem(itemPath);
+        }
+      }
+    });
 
-    menu.appendChild(renameItem);
-    menu.appendChild(deleteItem);
-    menu.appendChild(separator1);
-    menu.appendChild(mountItem);
-    menu.appendChild(unmountItem);
-    menu.appendChild(remountItem);
-    if (parsePdfItem) {
-      menu.appendChild(separator2);
-      menu.appendChild(parsePdfItem);
+    addSeparator();
+
+    addMenuItem({
+      label: '挂载',
+      icon: global.icons.import,
+      onClick: () => {
+        if (isFolder) {
+          mountFolder(itemPath);
+        } else {
+          uploadFile(itemPath);
+        }
+      }
+    });
+
+    addMenuItem({
+      label: '重新挂载',
+      icon: global.icons.import,
+      onClick: () => {
+        if (isFolder) {
+          remountFolder(itemPath);
+        } else {
+          reuploadFile(itemPath);
+        }
+      }
+    });
+
+    addMenuItem({
+      label: '取消挂载',
+      icon: global.icons.trash,
+      onClick: () => {
+        if (isFolder) {
+          unmountFolder(itemPath);
+        } else {
+          unmountDocument(itemPath, false);
+        }
+      }
+    });
+
+    if (isPdfFile) {
+      addSeparator();
+      addMenuItem({
+        label: '深度解析',
+        icon: global.icons.file,
+        onClick: () => parsePdfToMarkdown(itemPath)
+      });
     }
 
     document.body.appendChild(menu);
@@ -1224,6 +1668,13 @@
         }
         createContextMenu(event.pageX, event.pageY, node.path, false);
       });
+      if (node.name && node.name.toLowerCase().endsWith('.zip')) {
+        div.addEventListener('dblclick', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          extractZipFile(node.path);
+        });
+      }
       container.appendChild(div);
     }
   }
@@ -1236,6 +1687,9 @@
     try {
       const tree = await global.fsAPI.getFileTree();
       global.fileTreeData = tree;
+      if (tree && tree.path) {
+        state.dataRootPath = tree.path;
+      }
       state.fileTreeEl.dataset.parentRelative = 'data';
       state.fileTreeEl.innerHTML = '';
       if (Array.isArray(tree.children)) {
@@ -1243,6 +1697,9 @@
       }
       if (typeof dependencies.updateFolderUploadStatus === 'function') {
         await dependencies.updateFolderUploadStatus('data');
+      }
+      if (state.selectedItemPath) {
+        scheduleFocusOnPath(state.selectedItemPath);
       }
     } catch (error) {
       console.error('加载文件树失败:', error);
@@ -1261,6 +1718,16 @@
   function bindRootEvents() {
     if (!state.fileTreeEl) {
       return;
+    }
+    if (state.fileTreeContainer) {
+      state.fileTreeContainer.addEventListener('contextmenu', (event) => {
+        if (event.target.closest('.file-item')) {
+          return;
+        }
+        event.preventDefault();
+        clearFileTreeSelection();
+        createContextMenu(event.pageX, event.pageY, null, true);
+      });
     }
     state.fileTreeEl.addEventListener('dragenter', (event) => {
       event.preventDefault();
@@ -1311,7 +1778,8 @@
             explorer.setSelectedItemPath(result.newPath);
           }
           setTimeout(() => {
-            const newElement = document.querySelector(`[data-path="${result.newPath}"]`);
+            const selector = `.file-item${getPathSelector(result.newPath)}`;
+            const newElement = document.querySelector(selector);
             if (newElement) {
               newElement.classList.add('selected');
               newElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1332,6 +1800,7 @@
       return;
     }
     bindRootEvents();
+    bindClipboardShortcuts();
     if (state.fileTreeContainer) {
       state.fileTreeContainer.addEventListener('click', (event) => {
         if (!event.target.closest('.file-item')) {
@@ -1343,7 +1812,9 @@
   }
 
   function createRenameInput(element, itemPath, currentName, isFolder) {
+    ensureRenameInputStyles();
     element.style.display = 'none';
+
     const paddingLeft = element.style.paddingLeft || '0px';
     const depth = parseInt(paddingLeft, 10) / 12;
     let nameWithoutExt = currentName;
@@ -1353,23 +1824,86 @@
       nameWithoutExt = currentName.substring(0, lastDotIndex);
       fileExtension = currentName.substring(lastDotIndex);
     }
+
     const inputWrapper = document.createElement('div');
-    inputWrapper.className = 'rename-input-wrapper';
+    inputWrapper.className = 'file-item rename-input-wrapper';
     inputWrapper.style.paddingLeft = `${depth * 12}px`;
+    inputWrapper.style.width = '100%';
+    inputWrapper.dataset.path = itemPath;
+    if (element.dataset && element.dataset.relativePath) {
+      inputWrapper.dataset.relativePath = element.dataset.relativePath;
+    }
+
+    const originalContent = element.querySelector('.file-item-content');
+    const originalTextSpan = originalContent ? originalContent.querySelector('.file-name-text') : null;
+    const measuredWidth = originalTextSpan ? originalTextSpan.getBoundingClientRect().width : null;
+
+    let contentDiv = null;
+    if (originalContent) {
+      contentDiv = originalContent.cloneNode(true);
+      contentDiv.classList.add('rename-input-content');
+    } else {
+      contentDiv = document.createElement('div');
+      contentDiv.className = 'file-item-content rename-input-content';
+      const nameWrapperFallback = document.createElement('span');
+      nameWrapperFallback.className = 'file-name rename-name-wrapper';
+      contentDiv.appendChild(nameWrapperFallback);
+      const iconFallback = document.createElement('span');
+      iconFallback.className = 'file-icon-wrapper';
+      iconFallback.innerHTML = getFileIcon(currentName, isFolder, false);
+      nameWrapperFallback.appendChild(iconFallback);
+      const textFallback = document.createElement('span');
+      textFallback.className = 'file-name-text';
+      textFallback.textContent = currentName;
+      nameWrapperFallback.appendChild(textFallback);
+    }
+    inputWrapper.appendChild(contentDiv);
+
+    const nameWrapper = contentDiv.querySelector('.file-name');
+    const textSpan = nameWrapper ? nameWrapper.querySelector('.file-name-text') : null;
+    const inputContainer = document.createElement('span');
+    inputContainer.className = 'rename-input-container';
+    inputContainer.style.flex = '1';
+    inputContainer.style.minWidth = '0';
+
+    if (textSpan) {
+      textSpan.replaceWith(inputContainer);
+    } else if (nameWrapper) {
+      nameWrapper.appendChild(inputContainer);
+    } else {
+      contentDiv.appendChild(inputContainer);
+    }
+
     const input = document.createElement('input');
     input.type = 'text';
     input.value = nameWithoutExt;
-    input.className = 'rename-input';
-    inputWrapper.appendChild(input);
+    input.className = 'inline-rename-input';
+    input.setAttribute('spellcheck', 'false');
+    const estimatedWidth = measuredWidth ? Math.max(measuredWidth + 12, 64) : Math.max(nameWithoutExt.length * 8 + 24, 64);
+    input.style.width = `${Math.min(estimatedWidth, 360)}px`;
+    input.style.maxWidth = '100%';
+    input.style.minWidth = '48px';
+    input.style.flex = '0 0 auto';
+    input.style.height = '20px';
+    input.style.lineHeight = '18px';
+
+    inputContainer.appendChild(input);
+
     if (!isFolder && fileExtension) {
       const extensionSpan = document.createElement('span');
       extensionSpan.textContent = fileExtension;
       extensionSpan.className = 'rename-extension';
-      inputWrapper.appendChild(extensionSpan);
+      inputContainer.appendChild(extensionSpan);
     }
+
     element.parentNode.insertBefore(inputWrapper, element.nextSibling);
-    input.focus();
-    input.select();
+
+    requestAnimationFrame(() => {
+      input.focus({ preventScroll: true });
+      const end = input.value.length;
+      input.setSelectionRange(0, end);
+    });
+
     const explorer = getExplorerModule();
     function finishRename(applyChange) {
       inputWrapper.remove();
@@ -1383,11 +1917,8 @@
       const newName = input.value.trim() + fileExtension;
       if (newName && newName !== currentName && typeof explorer.applyRename === 'function') {
         explorer.applyRename(itemPath, newName, isFolder);
-      } else {
-        // 未发生变化也需要重置状态
-        if (explorer && typeof explorer.onRenameFinished === 'function') {
-          explorer.onRenameFinished();
-        }
+      } else if (explorer && typeof explorer.onRenameFinished === 'function') {
+        explorer.onRenameFinished();
       }
     }
     input.addEventListener('keydown', (event) => {

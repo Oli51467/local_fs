@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('fsAPI', {
   deleteItem: (itemPath) => ipcRenderer.invoke('delete-item', itemPath),
   renameItem: (itemPath, newName) => ipcRenderer.invoke('rename-item', itemPath, newName),
   moveItem: (sourcePath, targetPath) => ipcRenderer.invoke('move-item', sourcePath, targetPath),
+  copyItemToClipboard: (itemPath) => ipcRenderer.invoke('copy-item-to-clipboard', itemPath),
+  compressItem: (itemPath) => ipcRenderer.invoke('compress-item', itemPath),
+  extractZip: (zipPath) => ipcRenderer.invoke('extract-zip', zipPath),
+  pasteFromClipboard: (targetPath) => ipcRenderer.invoke('paste-from-clipboard', targetPath),
   
   // 文件展示相关
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),

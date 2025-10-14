@@ -107,7 +107,9 @@ class ExplorerModule {
       
       // 通过文件树数据判断是文件还是文件夹
       const isFolder = this.isSelectedItemFolder(this.selectedItemPath);
-      this.createDeleteModal(this.selectedItemPath, isFolder);
+      this.performDeletion(this.selectedItemPath, isFolder).catch((error) => {
+        console.error('删除失败:', error);
+      });
     });
 
     // 添加键盘事件监听器
@@ -620,53 +622,70 @@ class ExplorerModule {
   }
 
   // 删除项目（公开接口）
-  deleteItem(itemPath) {
-    if (!itemPath) {
+  async deleteItem(itemPath) {
+    const targetPath = itemPath || this.selectedItemPath;
+    if (!targetPath) {
       console.warn('没有提供要删除的项目路径');
       showAlert('请先选择要删除的文件或文件夹', 'warning');
       return;
     }
-    
-    const isFolder = itemPath.includes('.') ? false : true; // 简单判断是否为文件夹
-    this.createDeleteModal(itemPath, isFolder);
-  }
 
-  // 创建删除确认弹窗
-  createDeleteModal(itemPath, isFolder) {
-    const itemName = itemPath.split('/').pop() || itemPath.split('\\').pop();
-    const message = isFolder
-      ? `是否确认删除该文件夹及该文件夹下的所有文件？\n\n文件夹名称：${itemName}`
-      : `是否确认删除文件？\n\n文件名称：${itemName}`;
-
-    const notifyError = (error) => {
+    const isFolder = this.isSelectedItemFolder(targetPath);
+    try {
+      await this.performDeletion(targetPath, isFolder);
+    } catch (error) {
+      console.error('删除失败:', error);
       const content = `删除失败: ${error.message}`;
       if (typeof window.showAlert === 'function') {
         window.showAlert(content, 'error');
       } else {
-        alert(content);
+        console.error(content);
       }
+    }
+  }
+
+  async performDeletion(itemPath, isFolder) {
+    if (!itemPath) {
+      return;
+    }
+
+    const executeDeletion = async () => {
+      await window.fsAPI.deleteItem(itemPath);
+      if (isFolder) {
+        this.closeTabsInFolder(itemPath);
+      } else if (this.fileViewer) {
+        this.fileViewer.closeTabByFilePath(itemPath);
+      }
+      this.selectedItemPath = null;
+      await this.loadFileTree();
     };
 
-    const performDeletion = async () => {
+    if (!isFolder) {
       try {
-        await window.fsAPI.deleteItem(itemPath);
-
-        if (isFolder) {
-          // 对于文件夹，需要关闭文件夹内所有打开的文件tab
-          this.closeTabsInFolder(itemPath);
-        } else if (this.fileViewer) {
-          // 对于单个文件，关闭对应的tab
-          this.fileViewer.closeTabByFilePath(itemPath);
-        }
-
-        // 清除选中状态
-        this.selectedItemPath = null;
-
-        // 刷新文件树
-        await this.loadFileTree();
+        await executeDeletion();
       } catch (error) {
         console.error('删除失败:', error);
-        notifyError(error);
+        if (typeof window.showAlert === 'function') {
+          window.showAlert(`删除失败: ${error.message}`, 'error');
+        } else {
+          console.error('删除失败:', error.message);
+        }
+        throw error;
+      }
+      return;
+    }
+
+    const confirmDeletion = async () => {
+      try {
+        await executeDeletion();
+      } catch (error) {
+        console.error('删除失败:', error);
+        if (typeof window.showAlert === 'function') {
+          window.showAlert(`删除失败: ${error.message}`, 'error');
+        } else {
+          console.error('删除失败:', error.message);
+        }
+        throw error;
       }
     };
 
@@ -674,108 +693,28 @@ class ExplorerModule {
       window.showModal({
         type: 'warning',
         title: '确认删除',
-        message,
+        message: '是否确认删除该文件夹及其所有内容？',
         confirmText: '删除',
         cancelText: '取消',
         showCancel: true,
         onConfirm: () => {
-          performDeletion();
+          confirmDeletion().catch((error) => console.error('删除失败:', error));
         }
       });
       return;
     }
 
-    // 如果统一弹窗模块不可用，则回退到基础弹窗以保证功能可用
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0, 0, 0, 0.5);
-      z-index: 1000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    `;
+    const confirmed = window.confirm('是否确认删除该文件夹及其所有内容？');
+    if (confirmed) {
+      await confirmDeletion();
+    }
+  }
 
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-      background-color: var(--bg-color);
-      border-radius: 12px;
-      padding: 24px;
-      min-width: 320px;
-      max-width: 480px;
-      box-shadow: 0 24px 48px rgba(15, 23, 42, 0.3);
-      color: var(--text-color);
-    `;
-
-    const title = document.createElement('h3');
-    title.textContent = '确认删除';
-    title.style.cssText = `
-      margin: 0 0 16px 0;
-      font-size: 18px;
-      font-weight: 600;
-    `;
-
-    const messageEl = document.createElement('p');
-    messageEl.textContent = message;
-    messageEl.style.cssText = `
-      margin: 0 0 24px 0;
-      line-height: 1.6;
-      white-space: pre-line;
-    `;
-
-    const buttonContainer = document.createElement('div');
-    buttonContainer.style.cssText = `
-      display: flex;
-      justify-content: flex-end;
-      gap: 12px;
-    `;
-
-    const cancelButton = document.createElement('button');
-    cancelButton.textContent = '取消';
-    cancelButton.style.cssText = `
-      padding: 9px 18px;
-      border-radius: 999px;
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      background: rgba(148, 163, 184, 0.12);
-      color: var(--text-color);
-      font-size: 14px;
-      cursor: pointer;
-    `;
-    cancelButton.addEventListener('click', () => {
-      document.body.removeChild(overlay);
+  // 创建删除确认弹窗（兼容旧调用，直接执行删除）
+  createDeleteModal(itemPath, isFolder) {
+    this.performDeletion(itemPath, isFolder).catch((error) => {
+      console.error('删除失败:', error);
     });
-
-    const confirmButton = document.createElement('button');
-    confirmButton.textContent = '删除';
-    confirmButton.style.cssText = `
-      padding: 9px 20px;
-      border-radius: 999px;
-      border: none;
-      background: linear-gradient(135deg, rgba(251, 191, 36, 0.35), #f59e0b);
-      color: #ffffff;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-    `;
-    confirmButton.addEventListener('click', () => {
-      performDeletion().finally(() => {
-        if (document.body.contains(overlay)) {
-          document.body.removeChild(overlay);
-        }
-      });
-    });
-
-    buttonContainer.appendChild(cancelButton);
-    buttonContainer.appendChild(confirmButton);
-    modal.appendChild(title);
-    modal.appendChild(messageEl);
-    modal.appendChild(buttonContainer);
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
   }
 
   // 获取选中项路径
