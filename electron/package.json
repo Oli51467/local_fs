@@ -1,6 +1,6 @@
 {
-  "name": "electron-python-app",
-  "version": "1.1",
+  "name": "LoFS",
+  "version": "1.1.1",
   "description": "Electron + Python (FastAPI) desktop app demo",
   "main": "main.js",
   "scripts": {
