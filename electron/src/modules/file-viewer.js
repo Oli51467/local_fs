@@ -2,6 +2,7 @@
 const { ipcMain, app } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const XLSX = require('xlsx');
 
 const ELECTRON_ROOT = path.join(__dirname, '..', '..');
 const STATIC_DEV_ROOT = path.join(ELECTRON_ROOT, 'static');
@@ -83,6 +84,329 @@ const resolveDistAsset = (relativePath) => {
   const absolutePath = path.resolve(baseDir, sanitized);
   ensureWithinBase(absolutePath, baseDir);
   return absolutePath;
+};
+
+const DEFAULT_INDEXED_COLORS = [
+  '000000', 'FFFFFF', 'FF0000', '00FF00', '0000FF', 'FFFF00', 'FF00FF', '00FFFF',
+  '800000', '008000', '000080', '808000', '800080', '008080', 'C0C0C0', '808080',
+  '9999FF', '993366', 'FFFFCC', 'CCFFFF', '660066', 'FF8080', '0066CC', 'CCCCFF',
+  '000080', 'FF00FF', 'FFFF00', '00FFFF', '800080', '800000', '008080', '0000FF',
+  '00CCFF', 'CCFFFF', 'CCFFCC', 'FFFF99', '99CCFF', 'FF99CC', 'CC99FF', 'FFCC99',
+  '3366FF', '33CCCC', '99CC00', 'FFCC00', 'FF9900', 'FF6600', '666699', '969696',
+  '003366', '339966', '003300', '333300', '993300', '993366', '333399', '333333'
+];
+
+const clamp01 = (value) => Math.max(0, Math.min(1, value));
+
+const hexToRgbTuple = (input) => {
+  if (!input || typeof input !== 'string') {
+    return null;
+  }
+  let hex = input.trim().replace(/^#/, '');
+  if (hex.length === 8) {
+    hex = hex.slice(2);
+  }
+  if (hex.length !== 6) {
+    return null;
+  }
+  const num = Number.parseInt(hex, 16);
+  if (Number.isNaN(num)) {
+    return null;
+  }
+  return [(num >> 16) & 0xff, (num >> 8) & 0xff, num & 0xff];
+};
+
+const rgbTupleToHex = (rgb) => {
+  if (!Array.isArray(rgb) || rgb.length !== 3) {
+    return null;
+  }
+  const hex = rgb
+    .map((channel) => {
+      const value = Math.max(0, Math.min(255, Math.round(channel)));
+      return value.toString(16).padStart(2, '0');
+    })
+    .join('')
+    .toLowerCase();
+  return `#${hex}`;
+};
+
+const rgbToHsl = (rgb) => {
+  if (!Array.isArray(rgb) || rgb.length !== 3) {
+    return null;
+  }
+  const [r0, g0, b0] = rgb.map((channel) => clamp01(channel / 255));
+  const max = Math.max(r0, g0, b0);
+  const min = Math.min(r0, g0, b0);
+  const delta = max - min;
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+
+  if (delta !== 0) {
+    s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+    switch (max) {
+      case r0:
+        h = (g0 - b0) / delta + (g0 < b0 ? 6 : 0);
+        break;
+      case g0:
+        h = (b0 - r0) / delta + 2;
+        break;
+      default:
+        h = (r0 - g0) / delta + 4;
+        break;
+    }
+    h /= 6;
+  }
+
+  return [clamp01(h), clamp01(s), clamp01(l)];
+};
+
+const hslToRgb = (hsl) => {
+  if (!Array.isArray(hsl) || hsl.length !== 3) {
+    return null;
+  }
+  const [h, s, l] = hsl.map(clamp01);
+  if (s === 0) {
+    const gray = Math.round(l * 255);
+    return [gray, gray, gray];
+  }
+
+  const hue2rgb = (p, q, t) => {
+    let tt = t;
+    if (tt < 0) tt += 1;
+    if (tt > 1) tt -= 1;
+    if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+    if (tt < 1 / 2) return q;
+    if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+    return p;
+  };
+
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+
+  return [
+    Math.round(hue2rgb(p, q, h + 1 / 3) * 255),
+    Math.round(hue2rgb(p, q, h) * 255),
+    Math.round(hue2rgb(p, q, h - 1 / 3) * 255)
+  ];
+};
+
+const normalizeColorHex = (value) => {
+  const rgb = hexToRgbTuple(value);
+  return rgb ? rgbTupleToHex(rgb) : null;
+};
+
+const applyTintToHex = (hex, tint) => {
+  if (typeof tint !== 'number' || tint === 0) {
+    return normalizeColorHex(hex);
+  }
+  const rgb = hexToRgbTuple(hex);
+  if (!rgb) {
+    return normalizeColorHex(hex);
+  }
+  const hsl = rgbToHsl(rgb);
+  if (!hsl) {
+    return normalizeColorHex(hex);
+  }
+  const [h, s, l] = hsl;
+  const adjustedL = tint < 0 ? l * (1 + tint) : 1 - (1 - l) * (1 - tint);
+  const tintedRgb = hslToRgb([h, s, clamp01(adjustedL)]);
+  return rgbTupleToHex(tintedRgb);
+};
+
+const buildThemeColorResolver = (themes) => {
+  if (!themes || !themes.themeElements || !Array.isArray(themes.themeElements.clrScheme)) {
+    return null;
+  }
+  const scheme = themes.themeElements.clrScheme;
+  return (themeIndex, tint) => {
+    if (themeIndex == null) {
+      return null;
+    }
+    const idx = Number(themeIndex);
+    const entry = scheme[idx];
+    const base = entry && (entry.rgb || entry.color || entry);
+    return base ? applyTintToHex(base, typeof tint === 'number' ? tint : 0) : null;
+  };
+};
+
+const createStyleResolver = (styles, themes) => {
+  const fonts = (styles && styles.Fonts) || [];
+  const fills = (styles && styles.Fills) || [];
+  const cellXfs = (styles && styles.CellXf) || [];
+  const resolveThemeColor = buildThemeColorResolver(themes);
+  const styleCache = new Map();
+
+  const resolveColor = (colorDef) => {
+    if (!colorDef || typeof colorDef !== 'object') {
+      return null;
+    }
+    if (colorDef.rgb) {
+      return normalizeColorHex(colorDef.rgb);
+    }
+    if (typeof colorDef.theme === 'number' && resolveThemeColor) {
+      return resolveThemeColor(colorDef.theme, colorDef.tint);
+    }
+    if (typeof colorDef.indexed === 'number') {
+      const hex = DEFAULT_INDEXED_COLORS[colorDef.indexed];
+      return hex ? normalizeColorHex(hex) : null;
+    }
+    return null;
+  };
+
+  const resolveAlignment = (alignment) => {
+    if (!alignment || typeof alignment !== 'object') {
+      return {};
+    }
+    const style = {};
+    if (typeof alignment.horizontal === 'string') {
+      const horizontal = alignment.horizontal.toLowerCase();
+      if (horizontal === 'center' || horizontal === 'centercontinuous') {
+        style.ht = 0;
+      } else if (horizontal === 'right') {
+        style.ht = 2;
+      } else if (horizontal === 'left' || horizontal === 'general' || horizontal === 'justify') {
+        style.ht = 1;
+      }
+    }
+    if (typeof alignment.vertical === 'string') {
+      const vertical = alignment.vertical.toLowerCase();
+      if (vertical === 'center' || vertical === 'middle') {
+        style.vt = 0;
+      } else if (vertical === 'bottom') {
+        style.vt = 2;
+      } else if (vertical === 'top') {
+        style.vt = 1;
+      }
+    }
+    return style;
+  };
+
+  return (styleIndex) => {
+    if (typeof styleIndex !== 'number' || styleIndex < 0) {
+      return null;
+    }
+    if (styleCache.has(styleIndex)) {
+      const cached = styleCache.get(styleIndex);
+      return cached ? { ...cached } : null;
+    }
+
+    const xf = cellXfs[styleIndex];
+    if (!xf) {
+      styleCache.set(styleIndex, null);
+      return null;
+    }
+
+    const style = {};
+    if (typeof xf.fontId === 'number') {
+      const font = fonts[xf.fontId];
+      if (font) {
+        const fontColor = resolveColor(font.color);
+        if (fontColor) {
+          style.fc = fontColor;
+        }
+        if (font.bold) {
+          style.bl = 1;
+        }
+        if (font.italic) {
+          style.it = 1;
+        }
+        if (font.underline) {
+          style.un = 1;
+        }
+        if (font.sz) {
+          style.fs = font.sz;
+        }
+        if (font.name) {
+          style.ff = font.name;
+        }
+      }
+    }
+
+    if (typeof xf.fillId === 'number') {
+      const fill = fills[xf.fillId];
+      if (fill && fill.patternType && fill.patternType.toLowerCase() !== 'none') {
+        const fillColor = resolveColor(fill.fgColor || fill.bgColor);
+        if (fillColor) {
+          style.bg = fillColor;
+        }
+      }
+    }
+
+    const alignmentStyle = resolveAlignment(xf.alignment);
+    Object.assign(style, alignmentStyle);
+
+    if (Object.keys(style).length === 0) {
+      styleCache.set(styleIndex, null);
+      return null;
+    }
+
+    styleCache.set(styleIndex, style);
+    return { ...style };
+  };
+};
+
+const buildSheetXmlLookup = (workbook) => {
+  const lookup = {};
+  const files = (workbook && workbook.files) || {};
+  const sheetsMeta = (workbook.Workbook && workbook.Workbook.Sheets) || [];
+  const relEntry = files['xl/_rels/workbook.xml.rels'];
+  const relContent = relEntry && relEntry.content ? relEntry.content.toString('utf8') : '';
+  const relMap = {};
+
+  if (relContent) {
+    const relRegex = /<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"[^>]*>/gi;
+    let match;
+    while ((match = relRegex.exec(relContent)) !== null) {
+      const id = match[1];
+      const target = match[2];
+      if (id && target) {
+        relMap[id] = target;
+      }
+    }
+  }
+
+  (workbook.SheetNames || []).forEach((sheetName, index) => {
+    const meta = sheetsMeta[index];
+    let target = meta && relMap[meta.id];
+    if (!target) {
+      target = `worksheets/sheet${index + 1}.xml`;
+    }
+    let normalizedTarget = target.replace(/^[/\\]+/, '');
+    if (!normalizedTarget.startsWith('xl/')) {
+      normalizedTarget = `xl/${normalizedTarget}`;
+    }
+    const fileEntry = files[normalizedTarget];
+    lookup[sheetName] = fileEntry && fileEntry.content ? fileEntry.content.toString('utf8') : '';
+  });
+
+  return lookup;
+};
+
+const extractCellStyleMap = (sheetXml) => {
+  const map = new Map();
+  if (!sheetXml || typeof sheetXml !== 'string') {
+    return map;
+  }
+  const cellRegex = /<c\b[^>]*>/gi;
+  let match;
+  while ((match = cellRegex.exec(sheetXml)) !== null) {
+    const tag = match[0];
+    const refMatch = tag.match(/\br="([^"]+)"/i);
+    if (!refMatch) {
+      continue;
+    }
+    const styleMatch = tag.match(/\bs="(\d+)"/i);
+    if (!styleMatch) {
+      continue;
+    }
+    const styleIndex = Number.parseInt(styleMatch[1], 10);
+    if (Number.isNaN(styleIndex)) {
+      continue;
+    }
+    map.set(refMatch[1], styleIndex);
+  }
+  return map;
 };
 
 class FileViewerModule {
@@ -362,6 +686,89 @@ class FileViewerModule {
     ipcMain.handle('get-pptx-lib-path', () => {
       const libPath = resolveStaticAsset('libs', 'pptx-preview.umd.js');
       return toFileUrl(libPath);
+    });
+
+    // 读取Excel（xlsx/xls）文件
+    ipcMain.handle('read-xlsx-file', async (event, filePath) => {
+      try {
+        const workbook = XLSX.readFile(filePath, { cellStyles: true, bookFiles: true });
+        const sheetXmlLookup = buildSheetXmlLookup(workbook);
+        const resolveStyle = createStyleResolver(workbook.Styles, workbook.Themes);
+        const sheets = workbook.SheetNames.map((name) => {
+          const ws = workbook.Sheets[name];
+          const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+          const cellData = [];
+          const styleMap = extractCellStyleMap(sheetXmlLookup[name]);
+
+          for (let R = range.s.r; R <= range.e.r; ++R) {
+            const row = [];
+            for (let C = range.s.c; C <= range.e.c; ++C) {
+              const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+              const cell = ws[cellAddress];
+              
+              if (cell) {
+                const cellInfo = {
+                  v: cell.v, // 值
+                  t: cell.t, // 类型
+                };
+                const styleIndex = styleMap.get(cellAddress);
+                const style = resolveStyle(styleIndex);
+                if (style) {
+                  cellInfo.s = style;
+                }
+
+                row[C] = cellInfo;
+              } else {
+                row[C] = null;
+              }
+            }
+            cellData[R] = row;
+          }
+          
+          // 获取合并单元格信息
+          const merges = ws['!merges'] || [];
+          
+          // 转换为简单的二维数组格式（保持兼容性）
+          const aoa = XLSX.utils.sheet_to_json(ws, { header: 1 });
+          
+          return { 
+            name, 
+            aoa, 
+            cellData, // 包含格式信息的完整单元格数据
+            merges // 合并单元格信息
+          };
+        });
+        return {
+          success: true,
+          sheets,
+          fileName: path.basename(filePath)
+        };
+      } catch (error) {
+        console.error('读取Excel文件失败:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    // 保存Excel（xlsx/xls）文件
+    ipcMain.handle('save-xlsx-file', async (event, payload) => {
+      try {
+        const { filePath, sheets } = payload || {};
+        if (!filePath || !Array.isArray(sheets)) {
+          throw new Error('参数无效: 需要 filePath 和 sheets');
+        }
+        const wb = XLSX.utils.book_new();
+        sheets.forEach((sheet) => {
+          const name = sheet.name || 'Sheet1';
+          const aoa = Array.isArray(sheet.aoa) ? sheet.aoa : [];
+          const ws = XLSX.utils.aoa_to_sheet(aoa);
+          XLSX.utils.book_append_sheet(wb, ws, name);
+        });
+        XLSX.writeFile(wb, filePath);
+        return { success: true };
+      } catch (error) {
+        console.error('保存Excel文件失败:', error);
+        return { success: false, error: error.message };
+      }
     });
 
     ipcMain.on('resolve-markdown-asset-sync', (event, payload) => {

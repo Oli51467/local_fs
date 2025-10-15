@@ -49,6 +49,10 @@ contextBridge.exposeInMainWorld('fsAPI', {
   
   // PPTX相关
   readPptxFile: (filePath) => ipcRenderer.invoke('read-pptx-file', filePath),
+
+  // Excel（XLSX/XLS）相关
+  readXlsxFile: (filePath) => ipcRenderer.invoke('read-xlsx-file', filePath),
+  saveXlsxFile: (payload) => ipcRenderer.invoke('save-xlsx-file', payload),
   
   // 设置相关
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),

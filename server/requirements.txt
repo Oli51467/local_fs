@@ -18,3 +18,4 @@ magic-pdf[full] # ==1.3.12
 sentence-transformers==5.1.1
 python-pptx
 requests>=2.31.0
+mem0ai

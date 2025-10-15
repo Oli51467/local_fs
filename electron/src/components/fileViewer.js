@@ -21,6 +21,7 @@ class FileViewer {
     this.htmlViewer = null; // HTML查看器实例
     this.pdfViewer = null; // PDF查看器实例
     this.pptViewer = null; // PPT查看器实例
+    this.excelViewer = null; // Excel查看器实例
     // 存储tab状态信息
     this.tabStates = new Map();
     this.init();
@@ -70,6 +71,9 @@ class FileViewer {
  
      // 初始化PDF查看器
      this.pdfViewer = new PdfViewer(this.contentContainer, this.tabManager);
+
+     // 初始化Excel查看器
+     this.excelViewer = new ExcelViewer(this.contentContainer, this.tabManager);
  
      // 初始化键盘快捷键
     this.initKeyboardShortcuts();
@@ -345,6 +349,13 @@ class FileViewer {
           await this.pptViewer.openPptxFile(filePath, tabId, fileName, pptContentElement);
           displayMode = 'pptx';
           isEditable = false;
+          break;
+        case 'xlsx':
+        case 'xls':
+          // 使用ExcelViewer处理Excel文件
+          await this.excelViewer.openExcelFile(filePath, tabId, fileName);
+          displayMode = 'excel';
+          isEditable = true;
           break;
         default:
           this.createErrorView(tabId, '不支持的文件类型');
@@ -724,6 +735,9 @@ class FileViewer {
 
           }
         }
+      } else if (displayMode === 'excel') {
+        await this.excelViewer.saveExcel(activeTabId);
+        // ExcelViewer内部会清理脏标记
       }
     } catch (error) {
       console.error('保存文件失败:', error);

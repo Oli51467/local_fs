@@ -52,10 +52,10 @@ class TabManager {
       .tabs-container {
         border-bottom: 1px solid var(--tree-border);
         background: var(--bg-color);
-        min-height: 35px;
-        margin-top: -9px;
-        margin-left: -10px;
-        margin-right: -10px;
+        min-height: 40px;
+        margin-top: 0;
+        margin-left: 0;
+        margin-right: 0;
       }
 
       .tab-wrapper {
@@ -103,7 +103,7 @@ class TabManager {
         cursor: pointer;
         width: 28px;
         height: 100%;
-        min-height: 35px;
+        min-height: 40px;
         display: flex;
         align-items: center;
         justify-content: center;

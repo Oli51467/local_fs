@@ -1098,6 +1098,9 @@
         return `<img src="${getAssetUrl('dist/assets/jpeg.png')}" style="width: 13px; height: 13px;" />`;
       case 'gif':
         return `<img src="${getAssetUrl('dist/assets/gif.png')}" style="width: 13px; height: 13px;" />`;
+      case 'xlsx':
+      case 'xls':
+        return `<img src="${getAssetUrl('dist/assets/xlsx.png')}" style="width: 13px; height: 13px;" />`;
       default:
         return global.icons?.file || '';
     }

@@ -102,6 +102,8 @@
   },
   "dependencies": {
     "axios": "^1.6.0",
-    "markdown-it": "^14.1.0"
+    "luckysheet": "^2.1.13",
+    "markdown-it": "^14.1.0",
+    "xlsx": "^0.18.5"
   }
 }
