@@ -1,0 +1,461 @@
+/* 代码查看器样式 */
+.code-viewer-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.code-viewer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--tree-bg);
+  border-bottom: 1px solid var(--border-light);
+  font-size: 12px;
+  gap: 10px;
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.file-name {
+  font-weight: 500;
+  color: var(--text-color);
+}
+
+.file-size {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.language-mode {
+  background: var(--accent-color);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.code-viewer-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-selector {
+  padding: 4px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.theme-selector:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.config-button {
+  padding: 4px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-color);
+  color: var(--text-color);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s ease;
+}
+
+.config-button:hover {
+  background: var(--tree-hover);
+  border-color: var(--accent-color);
+}
+
+.save-button, .close-button {
+  padding: 4px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--accent-color);
+  color: white;
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.2s ease;
+}
+
+.save-button:hover {
+  background: var(--accent-hover);
+}
+
+.close-button {
+  background: #dc3545;
+}
+
+.close-button:hover {
+  background: #c82333;
+}
+
+.ace-editor {
+  flex: 1;
+  position: relative;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+/* 配置对话框样式 */
+.config-dialog {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10000;
+}
+
+.config-dialog-content {
+  background: var(--bg-color);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 20px;
+  min-width: 300px;
+  max-width: 400px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.config-dialog-content h3 {
+  margin: 0 0 16px 0;
+  color: var(--text-color);
+  font-size: 16px;
+}
+
+.config-item {
+  margin-bottom: 12px;
+}
+
+.config-item label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-color);
+  font-size: 13px;
+}
+
+.config-item input[type="number"] {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-size: 13px;
+}
+
+.config-item input[type="checkbox"] {
+  margin-right: 6px;
+}
+
+.config-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.config-buttons button {
+  padding: 6px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+#saveConfig {
+  background: var(--accent-color);
+  color: white;
+  border-color: var(--accent-color);
+}
+
+#saveConfig:hover {
+  background: var(--accent-hover);
+}
+
+#cancelConfig {
+  background: var(--bg-color);
+  color: var(--text-color);
+}
+
+#cancelConfig:hover {
+  background: var(--tree-hover);
+}
+
+.code-editor {
+  flex: 1;
+  position: relative;
+  font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+/* Ace Editor 自定义样式 */
+.ace_editor {
+  font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+  font-feature-settings: "liga" 1, "calt" 1; /* 启用连字 */
+}
+
+.ace_gutter {
+  background: var(--tree-bg) !important;
+  color: var(--text-muted) !important;
+  border-right: 1px solid var(--border-light) !important;
+}
+
+.ace_gutter-active-line {
+  background: var(--accent-color) !important;
+  color: white !important;
+}
+
+.ace_active-line {
+  background: rgba(3, 102, 214, 0.05) !important;
+}
+
+.ace_cursor {
+  color: var(--accent-color) !important;
+}
+
+.ace_selection {
+  background: rgba(3, 102, 214, 0.2) !important;
+}
+
+.ace_selected-word {
+  background: rgba(3, 102, 214, 0.1) !important;
+  border: 1px solid rgba(3, 102, 214, 0.3) !important;
+}
+
+/* 搜索框样式 */
+.ace_search {
+  background: var(--bg-color) !important;
+  border: 1px solid var(--border-light) !important;
+  border-radius: 6px !important;
+  color: var(--text-color) !important;
+}
+
+.ace_search_form,
+.ace_replace_form {
+  background: var(--bg-color) !important;
+  border: none !important;
+}
+
+.ace_searchbtn,
+.ace_replacebtn {
+  background: var(--accent-color) !important;
+  border: none !important;
+  color: white !important;
+  border-radius: 4px !important;
+}
+
+.ace_searchbtn:hover,
+.ace_replacebtn:hover {
+  background: var(--accent-hover) !important;
+}
+
+.ace_search_field {
+  background: var(--tree-bg) !important;
+  border: 1px solid var(--border-light) !important;
+  border-radius: 4px !important;
+  color: var(--text-color) !important;
+  padding: 4px 8px !important;
+}
+
+/* 错误状态 */
+.code-viewer-container .error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-muted);
+  font-size: 14px;
+  background: var(--tree-bg);
+  border-radius: 8px;
+  margin: 20px;
+}
+
+/* 加载状态 */
+.code-viewer-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.code-viewer-loading::before {
+  content: '';
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-light);
+  border-top: 2px solid var(--accent-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-right: 8px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* 深色模式适配 */
+.dark-mode .code-viewer-container {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.dark-mode .code-viewer-info .file-size {
+  background: rgba(79, 195, 247, 0.2);
+  color: rgba(79, 195, 247, 0.9);
+}
+
+.dark-mode .code-viewer-info .language-mode {
+  background: rgba(79, 195, 247, 0.8);
+  color: var(--bg-color);
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .code-viewer-header {
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px;
+  }
+
+  .code-viewer-info {
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .code-viewer-info .file-name {
+    max-width: 150px;
+  }
+
+  .code-viewer-controls {
+    gap: 6px;
+  }
+
+  .code-viewer-btn {
+    width: 28px;
+    height: 28px;
+  }
+
+  .ace_editor {
+    font-size: 13px !important;
+  }
+}
+
+/* 滚动条样式 */
+.code-editor::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.code-editor::-webkit-scrollbar-track {
+  background: var(--tree-bg);
+}
+
+.code-editor::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 4px;
+}
+
+.code-editor::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* 代码折叠样式 */
+.ace_fold-widget {
+  background: var(--tree-bg) !important;
+  border: 1px solid var(--border-light) !important;
+  border-radius: 3px !important;
+  color: var(--text-muted) !important;
+  width: 11px !important;
+  height: 11px !important;
+  text-align: center !important;
+  line-height: 9px !important;
+  font-size: 9px !important;
+  position: relative !important;
+}
+
+.ace_fold-widget::before {
+  content: "▼" !important;
+  display: block !important;
+  position: absolute !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+}
+
+.ace_fold-widget.ace_closed::before {
+  content: "▶" !important;
+}
+
+.ace_fold-widget:hover {
+  background: var(--tree-hover) !important;
+  color: var(--text-color) !important;
+}
+
+.ace_fold-widget.ace_closed {
+  background: var(--accent-color) !important;
+  color: white !important;
+}
+
+/* 改善One Dark主题的自定义样式 */
+.ace-one-dark .ace_gutter {
+  background: #282c34 !important;
+  color: #6b727d !important;
+}
+
+.ace-one-dark .ace_cursor {
+  color: #528bff !important;
+}
+
+.ace-one-dark .ace_marker-layer .ace_selection {
+  background: #3E4451 !important;
+}
+
+.ace-one-dark .ace_marker-layer .ace_active-line {
+  background: #2c313c !important;
+}
+
+/* 改善Dracula主题的自定义样式 */
+.ace-dracula .ace_gutter {
+  background: #282a36 !important;
+  color: #6272a4 !important;
+}
+
+.ace-dracula .ace_cursor {
+  color: #f8f8f2 !important;
+}
+
+/* 通用编辑器增强样式 */
+.ace_editor .ace_indent-guide {
+  background: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAYAAACZgbYnAAAAE0lEQVQIHWPY9+8fAzYwirkTlgUA3n0D/QWxZVEAAAAASUVORK5CYII=") right repeat-y !important;
+}
+
+.ace_editor .ace_fold-widget {
+  transition: opacity 0.2s ease !important;
+}
+
+.ace_editor .ace_fold-widget:hover {
+  opacity: 1 !important;
+}

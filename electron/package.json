@@ -101,6 +101,7 @@
     "electronmon": "^2.0.2"
   },
   "dependencies": {
+    "ace-builds": "^1.43.3",
     "axios": "^1.6.0",
     "luckysheet": "^2.1.13",
     "markdown-it": "^14.1.0",

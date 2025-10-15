@@ -5,6 +5,8 @@
   <meta charset="utf-8">
   <title>LoFS</title>
   <link rel="stylesheet" href="./node_modules/github-markdown-css/github-markdown.css">
+  <!-- Fira Code 字体 -->
+  <link href="https://cdn.jsdelivr.net/npm/firacode/distr/fira_code.css" rel="stylesheet">
   <!-- highlight.js 库 -->
   <script src="./node_modules/highlight.js/lib/common.js"></script>
   <style>
@@ -73,9 +75,17 @@
       background: var(--sidebar-bg);
       display: flex;
       flex-direction: column;
+      justify-content: space-between;
       align-items: center;
-      padding-top: 10px;
+      padding: 10px 0;
       color: var(--sidebar-text);
+    }
+
+    .sidebar-top,
+    .sidebar-bottom {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
 
     #sidebar button {
@@ -165,24 +175,28 @@
   <div id="app" style="display: none;">
     <!-- 左侧 sidebar -->
     <div id="sidebar">
-      <button id="toggle-tree">
-        <div id="file-icon"></div>
-      </button>
-      <button id="search-btn">
-        <div id="search-icon"></div>
-      </button>
-      <button id="chat-btn">
-        <div id="chat-icon"></div>
-      </button>
-      <button id="model-btn">
-        <div id="model-icon"></div>
-      </button>
-      <button id="settings-btn">
-        <div id="settings-icon"></div>
-      </button>
-      <button id="database-btn">
-        <div id="database-icon"></div>
-      </button>
+      <div class="sidebar-top">
+        <button id="toggle-tree">
+          <div id="file-icon"></div>
+        </button>
+        <button id="search-btn">
+          <div id="search-icon"></div>
+        </button>
+        <button id="chat-btn">
+          <div id="chat-icon"></div>
+        </button>
+        <button id="model-btn">
+          <div id="model-icon"></div>
+        </button>
+      </div>
+      <div class="sidebar-bottom">
+        <button id="settings-btn">
+          <div id="settings-icon"></div>
+        </button>
+        <button id="database-btn">
+          <div id="database-icon"></div>
+        </button>
+      </div>
     </div>
 
     <!-- 文件树栏 -->
@@ -684,6 +698,7 @@
   <link rel="stylesheet" href="./src/styles/chat.css">
   <link rel="stylesheet" href="./src/styles/database.css">
   <link rel="stylesheet" href="./src/styles/model.css">
+  <link rel="stylesheet" href="./src/styles/codeViewer.css">
 
   <script src="./src/modules/splash.js"></script>
   <script src="./src/modules/tab-manager.js"></script>
@@ -694,6 +709,7 @@
   <script src="./src/components/pdfViewer.js"></script>
   <script src="./src/components/pptViewer.js"></script>
   <script src="./src/components/excelViewer.js"></script>
+  <script src="./src/components/codeViewer.js"></script>
   <script src="./src/components/fileViewer.js"></script>
   <script src="./src/modules/settings.js"></script>
   <script src="./src/modules/explorer.js"></script>

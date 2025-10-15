@@ -1063,6 +1063,20 @@
     }
     const ext = fileName.toLowerCase().split('.').pop();
     switch (ext) {
+      case 'go':
+        return `<img src="${getAssetUrl('dist/assets/go.png')}" style="width: 13px; height: 13px;" />`;
+      case 'java':
+        return `<img src="${getAssetUrl('dist/assets/java.png')}" style="width: 13px; height: 13px;" />`;
+      case 'js':
+      case 'jsx':
+      case 'mjs':
+        return `<img src="${getAssetUrl('dist/assets/js.png')}" style="width: 13px; height: 13px;" />`;
+      case 'py':
+      case 'pyw':
+      case 'pyc':
+      case 'pyo':
+      case 'pyd':
+        return `<img src="${getAssetUrl('dist/assets/python.png')}" style="width: 13px; height: 13px;" />`;
       case 'txt':
         return `<img src="${getAssetUrl('dist/assets/txt.png')}" style="width: 13px; height: 13px;" />`;
       case 'html':

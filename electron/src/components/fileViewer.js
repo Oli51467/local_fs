@@ -22,6 +22,7 @@ class FileViewer {
     this.pdfViewer = null; // PDF查看器实例
     this.pptViewer = null; // PPT查看器实例
     this.excelViewer = null; // Excel查看器实例
+    this.codeViewer = null; // 代码查看器实例
     // 存储tab状态信息
     this.tabStates = new Map();
     this.init();
@@ -74,6 +75,9 @@ class FileViewer {
 
      // 初始化Excel查看器
      this.excelViewer = new ExcelViewer(this.contentContainer, this.tabManager);
+
+     // 初始化代码查看器
+     this.codeViewer = new CodeViewer(this.contentContainer, this.tabManager);
  
      // 初始化键盘快捷键
     this.initKeyboardShortcuts();
@@ -286,10 +290,31 @@ class FileViewer {
         case 'json':
         case 'js':
         case 'css':
-          // 使用TextViewer处理这些文本文件
-          const textResult = await this.textViewer.openTextFile(filePath, tabId, fileName);
-          displayMode = textResult.displayMode;
-          isEditable = textResult.isEditable;
+        case 'py':
+        case 'java':
+        case 'cpp':
+        case 'c':
+        case 'h':
+        case 'hpp':
+        case 'php':
+        case 'rb':
+        case 'go':
+        case 'rs':
+        case 'ts':
+        case 'jsx':
+        case 'tsx':
+        case 'vue':
+        case 'xml':
+        case 'yaml':
+        case 'yml':
+        case 'sql':
+        case 'sh':
+        case 'bat':
+        case 'ps1':
+          // 使用CodeViewer处理代码文件
+          const codeResult = await this.codeViewer.openCodeFile(filePath, tabId, fileName);
+          displayMode = codeResult.displayMode;
+          isEditable = codeResult.isEditable;
           break;
         case 'html':
         case 'htm':
