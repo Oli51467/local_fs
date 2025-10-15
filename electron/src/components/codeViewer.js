@@ -44,137 +44,120 @@ class CodeViewer {
    * 加载Ace Editor
    */
   async loadAceEditor() {
-    return new Promise((resolve, reject) => {
-      // 检查是否已经加载
-      if (window.ace) {
-        resolve();
-        return;
-      }
+    if (window.ace) {
+      console.log('Ace Editor已经加载');
+      return;
+    }
 
-      // 尝试多个可能的路径
-      const possiblePaths = [
-        './node_modules/ace-builds/src-noconflict/ace.js',
-        '../node_modules/ace-builds/src-noconflict/ace.js',
-        './static/libs/ace/ace.js',
-        'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/ace.min.js'
-      ];
+    const possiblePaths = [
+      'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/ace.min.js',
+      '../../static/libs/ace/ace.js',
+      './node_modules/ace-builds/src-noconflict/ace.js',
+      '../node_modules/ace-builds/src-noconflict/ace.js'
+    ];
 
-      let currentPathIndex = 0;
+    for (const path of possiblePaths) {
+      try {
+        console.log(`尝试从路径加载Ace Editor: ${path}`);
+        
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = path;
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
 
-      const tryLoadScript = () => {
-        if (currentPathIndex >= possiblePaths.length) {
-          reject(new Error('无法从任何路径加载Ace Editor'));
+        if (window.ace) {
+          console.log(`Ace Editor加载成功: ${path}`);
+          
+          // 配置Ace Editor路径（采用ace_test.html的方式）
+          const basePath = path.replace('/ace.js', '').replace('/ace.min.js', '');
+          if (basePath.startsWith('http')) {
+            const cdnBase = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6';
+            window.ace.config.set('basePath', cdnBase);
+            window.ace.config.set('modePath', cdnBase);
+            window.ace.config.set('themePath', cdnBase);
+            window.ace.config.set('workerPath', cdnBase);
+            console.log('使用CDN路径配置');
+          } else {
+            const normalizedPath = basePath.endsWith('/') ? basePath : basePath + '/';
+            window.ace.config.set('basePath', normalizedPath);
+            window.ace.config.set('modePath', normalizedPath);
+            window.ace.config.set('themePath', normalizedPath);
+            window.ace.config.set('workerPath', normalizedPath);
+            console.log('使用本地路径配置');
+          }
+
+          window.ace.config.set('loadWorkerFromBlob', false);
+
+          console.log('配置完成: ' + JSON.stringify({
+            basePath: window.ace.config.get('basePath'),
+            modePath: window.ace.config.get('modePath'),
+            themePath: window.ace.config.get('themePath'),
+            workerPath: window.ace.config.get('workerPath')
+          }));
+
           return;
         }
+      } catch (error) {
+        console.warn(`从 ${path} 加载失败:`, error);
+        continue;
+      }
+    }
 
-        const script = document.createElement('script');
-        script.src = possiblePaths[currentPathIndex];
-        
-        script.onload = () => {
-          // 设置Ace Editor的基础路径
-          if (window.ace) {
-            // 根据成功加载的路径设置基础路径
-            const basePath = possiblePaths[currentPathIndex].replace('/ace.js', '').replace('/ace.min.js', '');
-            if (basePath.startsWith('http')) {
-              // CDN路径
-              window.ace.config.set('basePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/');
-              window.ace.config.set('modePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/');
-              window.ace.config.set('themePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/');
-              window.ace.config.set('workerPath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/');
-            } else {
-              // 本地路径
-              window.ace.config.set('basePath', basePath + '/');
-              window.ace.config.set('modePath', basePath + '/');
-              window.ace.config.set('themePath', basePath + '/');
-              window.ace.config.set('workerPath', basePath + '/');
-            }
-            console.log(`Ace Editor从路径加载成功: ${possiblePaths[currentPathIndex]}`);
-            
-            // 加载language_tools扩展和语言模式
-            this.loadLanguageTools().then(() => {
-              return this.loadLanguageModes();
-            }).then(() => {
-              return this.loadCommonThemes();
-            }).then(() => {
-              return this.loadWorkerSupport();
-            }).then(() => {
-              resolve();
-            }).catch((error) => {
-              console.warn('Language tools或语言模式加载失败:', error);
-              resolve(); // 即使加载失败，也继续
-            });
-          } else {
-            resolve();
-          }
-        };
-        
-        script.onerror = () => {
-          console.warn(`无法从路径加载Ace Editor: ${possiblePaths[currentPathIndex]}`);
-          document.head.removeChild(script);
-          currentPathIndex++;
-          tryLoadScript();
-        };
-        
-        document.head.appendChild(script);
-      };
-
-      tryLoadScript();
-    });
+    throw new Error('所有Ace Editor加载路径都失败了');
   }
 
   /**
    * 加载语言工具扩展
    */
   async loadLanguageTools() {
-    return new Promise((resolve, reject) => {
-      // 检查是否已经加载
-      if (window.ace && window.ace.require && window.ace.require("ace/ext/language_tools")) {
-        resolve();
-        return;
+    try {
+      if (window.ace && window.ace.require) {
+        try {
+          window.ace.require("ace/ext/language_tools");
+          console.log('Language tools已存在');
+          return;
+        } catch (e) {
+          // 需要加载
+        }
       }
 
       const languageToolsPaths = [
-        './node_modules/ace-builds/src-noconflict/ext-language_tools.js',
-        '../node_modules/ace-builds/src-noconflict/ext-language_tools.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/ext-language_tools.min.js',
         './static/libs/ace/ext-language_tools.js',
-        'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/ext-language_tools.min.js'
+        './node_modules/ace-builds/src-noconflict/ext-language_tools.js',
+        '../node_modules/ace-builds/src-noconflict/ext-language_tools.js'
       ];
 
-      let currentPathIndex = 0;
-
-      const tryLoadLanguageTools = () => {
-        if (currentPathIndex >= languageToolsPaths.length) {
-          reject(new Error('无法加载language_tools扩展'));
+      for (const path of languageToolsPaths) {
+        try {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = path;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+          console.log(`Language tools加载成功: ${path}`);
           return;
+        } catch (error) {
+          console.warn(`Language tools加载失败: ${path}`);
+          continue;
         }
-
-        const script = document.createElement('script');
-        script.src = languageToolsPaths[currentPathIndex];
-        
-        script.onload = () => {
-          console.log(`Language tools加载成功: ${languageToolsPaths[currentPathIndex]}`);
-          resolve();
-        };
-        
-        script.onerror = () => {
-          console.warn(`无法加载language tools: ${languageToolsPaths[currentPathIndex]}`);
-          document.head.removeChild(script);
-          currentPathIndex++;
-          tryLoadLanguageTools();
-        };
-        
-        document.head.appendChild(script);
-      };
-
-      tryLoadLanguageTools();
-    });
+      }
+      
+      console.warn('所有Language tools路径都失败了');
+    } catch (error) {
+      console.warn('加载Language tools时出错:', error);
+    }
   }
 
   /**
    * 加载语言模式
    */
   async loadLanguageModes() {
-    // 优先加载最常用的核心语言模式
     const coreModes = ['javascript', 'json', 'python'];
     const commonModes = [
       'typescript', 'java', 'c_cpp', 'html', 'css', 'xml', 
@@ -185,53 +168,43 @@ class CodeViewer {
     const basePath = window.ace.config.get('basePath') || window.ace.config.get('modePath');
     console.log(`开始加载语言模式，基础路径: ${basePath}`);
     
-    // 首先确保核心模式加载成功
-    const loadMode = (mode) => {
-      return new Promise((resolve) => {
-        try {
-          // 检查模式是否已经加载
-          if (window.ace && window.ace.define && window.ace.define.modules[`ace/mode/${mode}`]) {
-            resolve(true);
-            return;
+    const loadMode = async (mode) => {
+      try {
+        if (window.ace && window.ace.require) {
+          try {
+            window.ace.require(`ace/mode/${mode}`);
+            console.log(`模式已存在: ${mode}`);
+            return true;
+          } catch (e) {
+            // 模式不存在，需要加载
           }
-          
-          // 动态加载语言模式
+        }
+        
+        await new Promise((resolve, reject) => {
           const script = document.createElement('script');
           script.src = `${basePath}mode-${mode}.js`;
-          
-          script.onload = () => {
-            resolve(true);
-          };
-          
-          script.onerror = () => {
-            console.warn(`语言模式加载失败: ${mode}`);
-            resolve(false);
-          };
-          
+          script.onload = resolve;
+          script.onerror = reject;
           document.head.appendChild(script);
-        } catch (error) {
-          console.warn(`加载语言模式时出错: ${mode}`, error);
-          resolve(false);
-        }
-      });
+        });
+        
+        console.log(`语言模式加载成功: ${mode}`);
+        return true;
+      } catch (error) {
+        console.warn(`语言模式加载失败: ${mode}`, error);
+        return false;
+      }
     };
     
     // 先加载核心模式
     for (const mode of coreModes) {
-      const success = await loadMode(mode);
-      if (success) {
-        console.log(`核心语言模式加载成功: ${mode}`);
-      }
+      await loadMode(mode);
     }
     
     // 并行加载其他常用模式
     const loadPromises = commonModes.map(mode => loadMode(mode));
-    await Promise.all(loadPromises);
-    
-    console.log('语言模式加载完成');
-    
-    // 加载主题文件
-    await this.loadCommonThemes();
+    await Promise.allSettled(loadPromises);
+    console.log('所有语言模式加载完成');
   }
 
   /**
@@ -246,39 +219,38 @@ class CodeViewer {
     const basePath = window.ace.config.get('basePath') || window.ace.config.get('themePath');
     console.log(`开始加载主题，基础路径: ${basePath}`);
     
-    const loadPromises = commonThemes.map(theme => {
-      return new Promise((resolve) => {
-        try {
-          // 检查主题是否已经加载
-          if (window.ace && window.ace.define && window.ace.define.modules[`ace/theme/${theme}`]) {
+    const loadTheme = async (theme) => {
+      try {
+        if (window.ace && window.ace.require) {
+          try {
+            window.ace.require(`ace/theme/${theme}`);
             console.log(`主题已存在: ${theme}`);
-            resolve();
-            return;
+            return true;
+          } catch (e) {
+            // 主题不存在，需要加载
           }
-          
+        }
+        
+        await new Promise((resolve, reject) => {
           const script = document.createElement('script');
           script.src = `${basePath}theme-${theme}.js`;
-          
-          script.onload = () => {
-            console.log(`主题加载成功: ${theme}`);
-            resolve();
-          };
-          
-          script.onerror = () => {
-            console.warn(`主题加载失败: ${theme}`);
-            resolve(); // 即使失败也继续
-          };
-          
+          script.onload = resolve;
+          script.onerror = reject;
           document.head.appendChild(script);
-        } catch (error) {
-          console.warn(`加载主题时出错: ${theme}`, error);
-          resolve();
-        }
-      });
-    });
+        });
+        
+        console.log(`主题加载成功: ${theme}`);
+        return true;
+      } catch (error) {
+        console.warn(`主题加载失败: ${theme}`, error);
+        return false;
+      }
+    };
     
-    await Promise.all(loadPromises);
-    console.log('常用主题加载完成');
+    // 并行加载所有主题
+    const loadPromises = commonThemes.map(theme => loadTheme(theme));
+    await Promise.allSettled(loadPromises);
+    console.log('所有主题加载完成');
   }
 
   /**
@@ -309,9 +281,9 @@ class CodeViewer {
     }
 
     // 创建编辑器实例
-    setTimeout(() => {
+    setTimeout(async () => {
       this.editor = window.ace.edit('code-editor');
-      this.setupEditor(filePath, content);
+      await this.setupEditor(filePath, content);
       this.bindEvents(container);
     }, 100);
 
@@ -357,7 +329,7 @@ class CodeViewer {
       // this.currentTabId = tabId; // 已移动到setTimeout内部
       
       // 延迟创建编辑器实例，确保DOM已渲染
-      setTimeout(() => {
+      setTimeout(async () => {
         try {
           const editorElement = container.querySelector('#code-editor');
           if (editorElement) {
@@ -365,7 +337,7 @@ class CodeViewer {
             this.currentFilePath = filePath;
             // 确保在setupEditor之前设置currentTabId，这样bindEditorEvents就能正确访问它
             this.currentTabId = tabId;
-            this.setupEditor(filePath, content);
+            await this.setupEditor(filePath, content);
             this.addThemeSelector(tabId);
             this.addConfigButton(tabId);
             this.bindEvents(container);
@@ -388,84 +360,49 @@ class CodeViewer {
   /**
    * 设置编辑器
    */
-  setupEditor(filePath, content) {
+  async setupEditor(filePath, content) {
     if (!this.editor) {
       console.error('编辑器未初始化');
       return;
     }
 
     try {
-      // 设置编辑器内容
+      // 获取文件扩展名并设置语言模式
+      const ext = this.getFileExtension(filePath);
+      const mode = this.getAceMode(ext);
+      
+      console.log(`设置编辑器模式: ${mode} (文件: ${filePath})`);
+      
+      // 根据当前应用主题设置编辑器主题
+      const currentTheme = this.getCurrentTheme();
+      this.editor.setTheme(`ace/theme/${currentTheme}`);
+      this.editor.session.setMode(`ace/mode/${mode}`);
       this.editor.setValue(content || '', -1);
       
-      // 使用智能语言检测
-      const detectedMode = this.detectLanguageFromContent(content, filePath);
-      console.log(`智能检测语言模式: ${detectedMode} (文件: ${filePath})`);
-      
-      // 设置语言模式并加载对应的Worker
-      this.setEditorMode(detectedMode);
-      
-      // 为当前模式加载Worker支持
-      this.loadWorkerForMode(detectedMode);
-      
-      // 应用保存的主题和配置
-      const theme = this.getCurrentTheme();
-      this.editor.setTheme(`ace/theme/${theme}`);
-      
-      const options = this.getEditorOptions();
-      
-      // 设置编辑器属性
-      this.editor.setReadOnly(this.isReadOnly); // 使用实例属性设置编辑模式
-      this.editor.session.setUseWrapMode(options.wrap || false);
-      this.editor.session.setTabSize(options.tabSize || 4);
-      this.editor.session.setUseSoftTabs(options.useSoftTabs !== false);
-      
-      // 设置基本选项
+      // 设置编辑器选项（删除右侧分割线）
       this.editor.setOptions({
-        fontFamily: 'Fira Code, JetBrains Mono, Cascadia Code, Monaco, Menlo, Ubuntu Mono, monospace',
-        fontSize: options.fontSize || 14,
-        cursorStyle: 'smooth',
-        showPrintMargin: false,
+        fontSize: 14,
+        showLineNumbers: true,
         highlightActiveLine: true,
         highlightSelectedWord: true,
-        highlightGutterLine: true,
-        showGutter: true,
-        showLineNumbers: true,
-        // 启用代码折叠功能
-        foldStyle: 'markbegin',
-        showFoldWidgets: true,
-        // 启用自动补全功能
         enableBasicAutocompletion: true,
         enableLiveAutocompletion: true,
         enableSnippets: true,
-        // 启用语法检查
-        useWorker: true,
-        // 改善用户体验
-        scrollPastEnd: 0.5,
-        animatedScroll: true,
-        fadeFoldWidgets: true,
-        showInvisibles: false,
-        displayIndentGuides: true
+        showPrintMargin: false  // 删除右侧分割线
       });
-      
-      // 启用语法检查和自动补全
-      if (window.ace && window.ace.require) {
-        try {
-          const langTools = window.ace.require("ace/ext/language_tools");
-          console.log('Language tools已启用');
-        } catch (error) {
-          console.warn('启用language tools失败:', error);
-        }
-      }
+
+      // 强制启用语法高亮相关设置（关键配置）
+      this.editor.session.setUseWorker(true);
+      this.editor.session.setUseWrapMode(false);
       
       // 绑定编辑器事件
       this.bindEditorEvents();
       
-      // 强制刷新编辑器以确保语法高亮生效
-      this.editor.renderer.updateFull();
+      // 更新文件信息
+      this.updateFileInfo(filePath, content);
       
-      const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || '';
-      console.log(`代码编辑器设置完成: ${fileName} (${detectedMode})`);
+      console.log('编辑器设置完成');
+      
     } catch (error) {
       console.error('设置编辑器失败:', error);
     }
@@ -576,14 +513,9 @@ class CodeViewer {
     // 检查应用是否处于深色模式
     const isDarkMode = document.body.classList.contains('dark-mode');
     
-    // 如果用户手动设置了主题，优先使用用户设置
-    const userTheme = localStorage.getItem('ace-editor-theme');
-    if (userTheme) {
-      return userTheme;
-    }
-    
-    // 根据应用主题自动选择编辑器主题，使用更现代美观的主题
-    return isDarkMode ? 'dracula' : 'github';
+    // 根据应用主题自动选择编辑器主题
+    // 深色模式使用 monokai，浅色模式使用 textmate
+    return isDarkMode ? 'monokai' : 'textmate';
   }
 
   // 设置编辑器配置
