@@ -750,6 +750,9 @@ class FileViewer {
             this.tabManager.markTabAsClean(activeTabId);
 
           }
+        } else if (contentElement.classList.contains('code-content')) {
+          // 处理代码文件，使用CodeViewer处理
+          await this.codeViewer.saveFile();
         } else {
           // 处理其他文本文件（json, js, css等）
           const textarea = contentElement.querySelector('.txt-editor');
@@ -810,6 +813,20 @@ class FileViewer {
      document.addEventListener('keydown', (e) => {
        // Ctrl+S (Windows/Linux) 或 Command+S (Mac) 保存文件
        if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+         // 检查当前活动元素是否在代码编辑器内
+         const activeElement = document.activeElement;
+         const isInCodeEditor = activeElement && (
+           activeElement.classList.contains('ace_text-input') ||
+           activeElement.closest('.ace_editor') ||
+           activeElement.closest('.code-viewer-container')
+         );
+         
+         // 如果在代码编辑器内，让CodeViewer处理快捷键
+         if (isInCodeEditor) {
+           return; // 不阻止事件，让CodeViewer的快捷键处理
+         }
+         
+         // 否则使用FileViewer的全局处理
          e.preventDefault();
          e.stopPropagation();
          this.saveCurrentFile();

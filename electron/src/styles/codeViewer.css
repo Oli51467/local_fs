@@ -243,7 +243,16 @@
   border: 1px solid rgba(3, 102, 214, 0.3) !important;
 }
 
-/* 搜索框样式 */
+/* 确保语法高亮不被覆盖 - 移除可能影响的样式 */
+.ace_editor .ace_text-layer {
+  /* 不强制设置颜色，让主题控制 */
+}
+
+.ace_editor .ace_line {
+  /* 不强制设置颜色，让主题控制 */
+}
+
+/* 保留必要的搜索框样式 */
 .ace_search {
   background: var(--bg-color) !important;
   border: 1px solid var(--border-light) !important;

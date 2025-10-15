@@ -566,6 +566,46 @@ class FileViewerModule {
       }
     });
 
+    // 保存文件（支持另存为功能）
+    ipcMain.handle('save-file', async (event, { filePath, content }) => {
+      const { dialog } = require('electron');
+      
+      try {
+        let targetPath = filePath;
+        
+        // 如果没有提供文件路径，显示另存为对话框
+        if (!targetPath) {
+          const result = await dialog.showSaveDialog({
+            title: '另存为',
+            filters: [
+              { name: 'Text Files', extensions: ['txt'] },
+              { name: 'Markdown Files', extensions: ['md'] },
+              { name: 'JavaScript Files', extensions: ['js'] },
+              { name: 'JSON Files', extensions: ['json'] },
+              { name: 'CSS Files', extensions: ['css'] },
+              { name: 'HTML Files', extensions: ['html'] },
+              { name: 'Python Files', extensions: ['py'] },
+              { name: 'All Files', extensions: ['*'] }
+            ],
+            properties: ['createDirectory']
+          });
+          
+          if (result.canceled || !result.filePath) {
+            return { success: false, canceled: true };
+          }
+          
+          targetPath = result.filePath;
+        }
+        
+        // 写入文件
+        fs.writeFileSync(targetPath, content, 'utf-8');
+        return { success: true, filePath: targetPath };
+      } catch (error) {
+        console.error('保存文件失败:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
     // 获取文件信息
     ipcMain.handle('get-file-info', (event, filePath) => {
       try {

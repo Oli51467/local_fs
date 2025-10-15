@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('fsAPI', {
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
   readFileBuffer: (filePath) => ipcRenderer.invoke('read-file-buffer', filePath),
   writeFile: (filePath, content) => ipcRenderer.invoke('write-file', filePath, content),
+  saveFile: (options) => ipcRenderer.invoke('save-file', options),
   getFileInfo: (filePath) => ipcRenderer.invoke('get-file-info', filePath),
   fileExists: (filePath) => ipcRenderer.invoke('file-exists', filePath),
   getFileMimeType: (filePath) => ipcRenderer.invoke('get-file-mime-type', filePath),

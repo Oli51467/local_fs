@@ -4,10 +4,12 @@
  */
 
 class CodeViewer {
-  constructor() {
+  constructor(contentContainer, tabManager) {
     this.editor = null;
     this.currentFilePath = null;
     this.isReadOnly = false;
+    this.contentContainer = contentContainer; // 接收传入的contentContainer
+    this.tabManager = tabManager; // 接收传入的tabManager
     this.supportedExtensions = new Set([
       'js', 'jsx', 'ts', 'tsx', 'json', 'py', 'java', 'cpp', 'c', 'h', 'hpp',
       'css', 'scss', 'sass', 'less', 'html', 'xml', 'php', 'rb', 'go', 'rs',
@@ -172,23 +174,24 @@ class CodeViewer {
    * 加载语言模式
    */
   async loadLanguageModes() {
-    // 预加载常用的语言模式以确保语法高亮正常工作
+    // 优先加载最常用的核心语言模式
+    const coreModes = ['javascript', 'json', 'python'];
     const commonModes = [
-      'javascript', 'typescript', 'python', 'java', 'c_cpp', 
-      'html', 'css', 'json', 'xml', 'markdown', 'yaml', 'sql',
-      'php', 'ruby', 'golang', 'rust', 'sh', 'batchfile', 'powershell'
+      'typescript', 'java', 'c_cpp', 'html', 'css', 'xml', 
+      'markdown', 'yaml', 'sql', 'php', 'ruby', 'golang', 
+      'rust', 'sh', 'batchfile', 'powershell'
     ];
     
     const basePath = window.ace.config.get('basePath') || window.ace.config.get('modePath');
     console.log(`开始加载语言模式，基础路径: ${basePath}`);
     
-    const loadPromises = commonModes.map(mode => {
+    // 首先确保核心模式加载成功
+    const loadMode = (mode) => {
       return new Promise((resolve) => {
         try {
           // 检查模式是否已经加载
           if (window.ace && window.ace.define && window.ace.define.modules[`ace/mode/${mode}`]) {
-            console.log(`语言模式已存在: ${mode}`);
-            resolve();
+            resolve(true);
             return;
           }
           
@@ -197,25 +200,35 @@ class CodeViewer {
           script.src = `${basePath}mode-${mode}.js`;
           
           script.onload = () => {
-            console.log(`语言模式加载成功: ${mode}`);
-            resolve();
+            resolve(true);
           };
           
           script.onerror = () => {
             console.warn(`语言模式加载失败: ${mode}`);
-            resolve(); // 即使失败也继续
+            resolve(false);
           };
           
           document.head.appendChild(script);
         } catch (error) {
           console.warn(`加载语言模式时出错: ${mode}`, error);
-          resolve();
+          resolve(false);
         }
       });
-    });
+    };
     
+    // 先加载核心模式
+    for (const mode of coreModes) {
+      const success = await loadMode(mode);
+      if (success) {
+        console.log(`核心语言模式加载成功: ${mode}`);
+      }
+    }
+    
+    // 并行加载其他常用模式
+    const loadPromises = commonModes.map(mode => loadMode(mode));
     await Promise.all(loadPromises);
-    console.log('常用语言模式加载完成');
+    
+    console.log('语言模式加载完成');
     
     // 加载主题文件
     await this.loadCommonThemes();
@@ -227,7 +240,7 @@ class CodeViewer {
   async loadCommonThemes() {
     const commonThemes = [
       'one_dark', 'dracula', 'monokai', 'github', 'tomorrow_night_blue',
-      'twilight', 'chrome', 'textmate', 'solarized_dark', 'solarized_light'
+      'twilight', 'chrome', 'textmate', 'nord_dark', 'gruvbox'
     ];
     
     const basePath = window.ace.config.get('basePath') || window.ace.config.get('themePath');
@@ -273,7 +286,7 @@ class CodeViewer {
    */
   createContainer() {
     const container = document.createElement('div');
-    container.className = 'code-viewer-container';
+    container.className = 'code-viewer-container code-content'; // 添加code-content类
     container.innerHTML = `
       <div class="code-editor" id="code-editor"></div>
     `;
@@ -340,8 +353,8 @@ class CodeViewer {
         console.error('找不到标签页内容容器:', tabId);
       }
       
-      // 设置当前标签页ID
-      this.currentTabId = tabId;
+      // 设置当前标签页ID（移除重复设置）
+      // this.currentTabId = tabId; // 已移动到setTimeout内部
       
       // 延迟创建编辑器实例，确保DOM已渲染
       setTimeout(() => {
@@ -350,6 +363,8 @@ class CodeViewer {
           if (editorElement) {
             this.editor = window.ace.edit(editorElement);
             this.currentFilePath = filePath;
+            // 确保在setupEditor之前设置currentTabId，这样bindEditorEvents就能正确访问它
+            this.currentTabId = tabId;
             this.setupEditor(filePath, content);
             this.addThemeSelector(tabId);
             this.addConfigButton(tabId);
@@ -463,32 +478,25 @@ class CodeViewer {
     if (!this.editor || !mode) return;
     
     try {
-      // 强制设置语言模式
+      // 直接设置语言模式，类似于用户提供的setLanguageByFileName函数
       this.editor.session.setMode(`ace/mode/${mode}`);
       
-      // 等待一小段时间后再次确认模式设置
+      // 强制启用语法高亮
+      this.editor.session.setUseWorker(true);
+      this.editor.setHighlightActiveLine(true);
+      this.editor.setHighlightSelectedWord(true);
+      
+      // 简单验证模式是否设置成功
       setTimeout(() => {
         const currentMode = this.editor.session.getMode().$id;
-        console.log(`当前编辑器模式: ${currentMode}`);
-        
-        // 如果模式设置失败，尝试重新设置
-        if (!currentMode.includes(mode)) {
-          console.warn(`模式设置可能失败，重新尝试设置: ${mode}`);
-          this.editor.session.setMode(`ace/mode/${mode}`);
-          
-          // 再次验证
-          setTimeout(() => {
-            const finalMode = this.editor.session.getMode().$id;
-            if (!finalMode.includes(mode)) {
-              console.error(`语言模式设置最终失败: ${mode}，当前模式: ${finalMode}`);
-              // 尝试加载缺失的模式文件
-              this.loadMissingMode(mode);
-            } else {
-              console.log(`语言模式设置成功: ${mode}`);
-            }
-          }, 200);
-        } else {
+        if (currentMode.includes(mode)) {
           console.log(`语言模式设置成功: ${mode}`);
+          // 强制刷新语法高亮
+          this.editor.session.bgTokenizer.start(0);
+          this.editor.renderer.updateFull();
+        } else {
+          console.warn(`语言模式设置失败，尝试重新加载: ${mode}`);
+          this.loadMissingMode(mode);
         }
       }, 100);
     } catch (error) {
@@ -525,12 +533,21 @@ class CodeViewer {
 
   // 绑定编辑器事件
   bindEditorEvents() {
-    if (!this.editor) return;
+    if (!this.editor) {
+      console.warn('bindEditorEvents: 编辑器未初始化');
+      return;
+    }
 
     // 监听编辑器内容变化，标记标签页为已修改
     this.editor.on('change', () => {
-      if (this.currentTabId && window.fileViewer && window.fileViewer.tabManager) {
-        window.fileViewer.tabManager.markTabAsDirty(this.currentTabId);
+      if (this.currentTabId && this.tabManager && typeof this.tabManager.markTabAsDirty === 'function') {
+        this.tabManager.markTabAsDirty(this.currentTabId);
+      } else {
+        console.warn('无法标记标签页为已修改 - tabManager或currentTabId不可用', {
+          currentTabId: this.currentTabId,
+          hasTabManager: !!this.tabManager,
+          hasMarkTabAsDirty: this.tabManager && typeof this.tabManager.markTabAsDirty === 'function'
+        });
       }
     });
 
@@ -540,6 +557,7 @@ class CodeViewer {
       bindKey: {win: 'Ctrl-S', mac: 'Command-S'},
       exec: () => {
         this.saveFile();
+        return true; // 阻止事件继续传播
       }
     });
   }
@@ -564,8 +582,8 @@ class CodeViewer {
       return userTheme;
     }
     
-    // 根据应用主题自动选择编辑器主题，使用更专业的主题
-    return isDarkMode ? 'one_dark' : 'github';
+    // 根据应用主题自动选择编辑器主题，使用更现代美观的主题
+    return isDarkMode ? 'dracula' : 'github';
   }
 
   // 设置编辑器配置
@@ -597,8 +615,12 @@ class CodeViewer {
   // 获取文件扩展名对应的Ace Editor模式
   getAceMode(fileExt) {
     const modeMap = {
-      // JavaScript 系列
+      // 核心语言优先映射 - 确保最常用的文件类型有准确的映射
+      'py': 'python',
+      'json': 'json',
       'js': 'javascript',
+      
+      // JavaScript 系列
       'jsx': 'javascript',
       'mjs': 'javascript',
       'cjs': 'javascript',
@@ -619,7 +641,6 @@ class CodeViewer {
       'svelte': 'html',
       
       // 数据格式
-      'json': 'json',
       'jsonc': 'json',
       'json5': 'json',
       'xml': 'xml',
@@ -631,7 +652,6 @@ class CodeViewer {
       'conf': 'ini',
       
       // Python 系列
-      'py': 'python',
       'pyw': 'python',
       'pyi': 'python',
       'ipynb': 'json', // Jupyter notebooks
@@ -717,11 +737,9 @@ class CodeViewer {
     
     const mode = modeMap[fileExt.toLowerCase()];
     if (mode) {
-      console.log(`文件扩展名 ${fileExt} 映射到模式: ${mode}`);
       return mode;
     }
     
-    console.log(`未知文件扩展名 ${fileExt}，使用默认文本模式`);
     return 'text';
   }
 
@@ -800,8 +818,17 @@ class CodeViewer {
 
   // 添加主题选择器
   addThemeSelector(tabId) {
+    // 检查contentContainer是否存在
+    if (!this.contentContainer) {
+      console.warn('contentContainer未初始化，跳过添加主题选择器');
+      return;
+    }
+    
     const header = this.contentContainer.querySelector(`[data-tab-id="${tabId}"] .code-viewer-header`);
-    if (!header) return;
+    if (!header) {
+      console.warn('未找到代码查看器头部，跳过添加主题选择器');
+      return;
+    }
 
     const themeSelector = document.createElement('select');
     themeSelector.className = 'theme-selector';
@@ -833,8 +860,17 @@ class CodeViewer {
 
   // 添加配置按钮
   addConfigButton(tabId) {
+    // 检查contentContainer是否存在
+    if (!this.contentContainer) {
+      console.warn('contentContainer未初始化，跳过添加配置按钮');
+      return;
+    }
+    
     const header = this.contentContainer.querySelector(`[data-tab-id="${tabId}"] .code-viewer-header`);
-    if (!header) return;
+    if (!header) {
+      console.warn('未找到代码查看器头部，跳过添加配置按钮');
+      return;
+    }
 
     const configButton = document.createElement('button');
     configButton.className = 'config-button';
@@ -993,26 +1029,78 @@ class CodeViewer {
    * 保存文件
    */
   async saveFile() {
-    if (!this.editor || !this.currentFilePath) return;
+    if (!this.editor || !this.currentFilePath) {
+      console.warn('无法保存文件：编辑器或文件路径不存在');
+      return;
+    }
 
     try {
       const content = this.editor.getValue();
-      const result = await window.fsAPI.writeFile(this.currentFilePath, content);
+      
+      const result = await window.fsAPI.saveFile({ 
+        filePath: this.currentFilePath, 
+        content: content 
+      });
       
       if (result.success) {
-        // 显示保存成功提示
-        this.showNotification('文件保存成功', 'success');
+        this.showNotification(`文件已保存`, 'success');
         
         // 标记标签页为已保存（清除*号）
-        if (this.currentTabId && window.fileViewer && window.fileViewer.tabManager) {
-          window.fileViewer.tabManager.markTabAsClean(this.currentTabId);
+        if (this.currentTabId && this.tabManager && typeof this.tabManager.markTabAsClean === 'function') {
+          this.tabManager.markTabAsClean(this.currentTabId);
         }
+      } else if (result.canceled) {
+        this.showNotification('保存操作已取消', 'info');
       } else {
-        this.showNotification('文件保存失败: ' + result.error, 'error');
+        this.showNotification('保存失败: ' + result.error, 'error');
+        console.error('保存失败:', result.error);
       }
     } catch (error) {
       console.error('保存文件失败:', error);
-      this.showNotification('文件保存失败', 'error');
+      this.showNotification('保存文件失败', 'error');
+    }
+  }
+
+  /**
+   * 另存为文件
+   */
+  async saveAsFile() {
+    if (!this.editor) return;
+
+    try {
+      const content = this.editor.getValue();
+      const result = await window.fsAPI.saveFile({ 
+        filePath: null, // 不提供路径，触发另存为对话框
+        content: content 
+      });
+      
+      if (result.success && result.filePath) {
+        // 更新当前文件路径
+        this.currentFilePath = result.filePath;
+        
+        // 显示保存成功提示
+        this.showNotification(`文件已另存为: ${result.filePath}`, 'success');
+        
+        // 标记标签页为已保存（清除*号）
+        if (this.currentTabId && this.tabManager) {
+          if (typeof this.tabManager.markTabAsClean === 'function') {
+            this.tabManager.markTabAsClean(this.currentTabId);
+          }
+          // 更新标签页标题
+          const fileName = result.filePath.split('/').pop() || result.filePath.split('\\').pop();
+          if (typeof this.tabManager.updateTabTitle === 'function') {
+            this.tabManager.updateTabTitle(this.currentTabId, fileName);
+          }
+        }
+      } else if (result.canceled) {
+        // 用户取消了另存为操作
+        this.showNotification('另存为操作已取消', 'info');
+      } else {
+        this.showNotification('另存为失败: ' + result.error, 'error');
+      }
+    } catch (error) {
+      console.error('另存为失败:', error);
+      this.showNotification('另存为失败', 'error');
     }
   }
 
@@ -1085,48 +1173,8 @@ class CodeViewer {
       return;
     }
 
-    const commonWorkers = [
-      'python',
-      'javascript', 
-      'json',
-      'html',
-      'css',
-      'xml',
-      'yaml',
-      'php',
-      'java',
-      'c_cpp',
-      'typescript'
-    ];
-
-    const basePath = this.basePath || this.modePath || '/node_modules/ace-builds/src-noconflict/';
-    
-    for (const worker of commonWorkers) {
-      try {
-        // 检查Worker是否已经存在
-        if (window.ace.require && window.ace.require.modules[`ace/mode/${worker}_worker`]) {
-          continue;
-        }
-
-        const workerScript = document.createElement('script');
-        workerScript.src = `${basePath}worker-${worker}.js`;
-        workerScript.async = true;
-        
-        await new Promise((resolve, reject) => {
-          workerScript.onload = () => {
-            console.log(`Worker ${worker} 加载成功`);
-            resolve();
-          };
-          workerScript.onerror = () => {
-            console.warn(`Worker ${worker} 加载失败`);
-            resolve(); // 不阻塞其他Worker的加载
-          };
-          document.head.appendChild(workerScript);
-        });
-      } catch (error) {
-        console.warn(`加载Worker ${worker} 时出错:`, error);
-      }
-    }
+    // 不再预加载所有Worker，改为按需加载
+    console.log('Worker支持已启用，将按需加载');
   }
 
   /**
@@ -1156,31 +1204,25 @@ class CodeViewer {
 
     try {
       // 检查Worker是否已经存在
-      if (window.ace.require && window.ace.require.modules[`ace/mode/${workerName}_worker`]) {
+      const workerModuleName = `ace/mode/${workerName}_worker`;
+      if (window.ace.require && window.ace.require.modules[workerModuleName]) {
+        console.log(`Worker ${workerName} 已存在，跳过加载`);
         return;
       }
 
-      const basePath = this.basePath || this.modePath || '/node_modules/ace-builds/src-noconflict/';
-      const workerScript = document.createElement('script');
-      workerScript.src = `${basePath}worker-${workerName}.js`;
-      workerScript.async = true;
-      
-      await new Promise((resolve, reject) => {
-        workerScript.onload = () => {
-          console.log(`Worker ${workerName} 为模式 ${mode} 加载成功`);
-          resolve();
-        };
-        workerScript.onerror = () => {
-          console.warn(`Worker ${workerName} 为模式 ${mode} 加载失败`);
-          resolve();
-        };
-        document.head.appendChild(workerScript);
-      });
+      // 尝试通过Ace的配置设置Worker路径
+      if (window.ace.config) {
+        const basePath = this.basePath || this.modePath || '/node_modules/ace-builds/src-noconflict/';
+        window.ace.config.setModuleUrl(workerModuleName, `${basePath}worker-${workerName}.js`);
+        console.log(`为模式 ${mode} 设置Worker路径: ${basePath}worker-${workerName}.js`);
+      } else {
+        console.warn(`Ace配置不可用，无法为模式 ${mode} 设置Worker`);
+      }
     } catch (error) {
-      console.warn(`为模式 ${mode} 加载Worker时出错:`, error);
+      console.warn(`为模式 ${mode} 配置Worker时出错:`, error);
     }
   }
 }
 
-// 导出单例
-window.codeViewer = new CodeViewer();
+// 不再创建全局实例，由FileViewer负责创建
+// window.codeViewer = new CodeViewer();
