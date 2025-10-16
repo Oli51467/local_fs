@@ -969,6 +969,12 @@ class ChatModule {
 
       bubble.appendChild(contentEl);
 
+      if (isWaitingMessage) {
+        this.removeCopyButton(bubble);
+      } else {
+        this.attachCopyButton(bubble, contentEl);
+      }
+
       header.appendChild(bubble);
       wrapper.appendChild(header);
       this.chatMessagesEl.appendChild(wrapper);
@@ -1078,10 +1084,12 @@ class ChatModule {
     const role = state.message?.role || 'assistant';
     if (!trimmed) {
       this.renderWaitingIndicator(state.content);
+      this.removeCopyButton(state.bubble);
       this.applyWaitingState(state.wrapper, state.avatar, state.bubble, true, role);
       return;
     }
     this.setBubbleContent(state.content, content, role);
+    this.attachCopyButton(state.bubble, state.content);
     this.applyWaitingState(state.wrapper, state.avatar, state.bubble, false, role);
 
     if (role === 'assistant' && state.wrapper) {
@@ -1957,6 +1965,119 @@ class ChatModule {
       return normalized;
     }
     return `${normalized.slice(0, limit).trim()} ...`;
+  }
+
+  attachCopyButton(bubble, contentEl) {
+    if (!bubble || !contentEl) {
+      return;
+    }
+    bubble.classList.add('has-copy');
+    let button = bubble.querySelector('.chat-copy-button');
+    if (!button) {
+      button = this.createCopyButton(contentEl);
+      bubble.appendChild(button);
+    }
+    button._copyTarget = contentEl;
+    button.classList.remove('is-copied');
+  }
+
+  removeCopyButton(bubble) {
+    if (!bubble) {
+      return;
+    }
+    bubble.classList.remove('has-copy');
+    const button = bubble.querySelector('.chat-copy-button');
+    if (!button) {
+      return;
+    }
+    if (button._copyTimer) {
+      clearTimeout(button._copyTimer);
+    }
+    button.remove();
+  }
+
+  createCopyButton(contentEl) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'chat-copy-button';
+    button.innerHTML = window.icons?.copy || '复制';
+    button.setAttribute('aria-label', '复制内容');
+    button.setAttribute('title', '复制内容');
+    button._copyTarget = contentEl;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const target = button._copyTarget || contentEl;
+      this.copyBubbleContent(button, target);
+    });
+    return button;
+  }
+
+  async copyBubbleContent(button, contentEl) {
+    if (!contentEl) {
+      this.setStatus('暂无可复制内容', 'warning');
+      return;
+    }
+    const text = this.extractBubbleText(contentEl);
+    if (!text) {
+      this.setStatus('暂无可复制内容', 'warning');
+      return;
+    }
+
+    let success = false;
+    if (navigator?.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        success = true;
+      } catch (error) {
+        success = false;
+      }
+    }
+
+    if (!success) {
+      success = this.fallbackCopyToClipboard(text);
+    }
+
+    if (!success) {
+      this.setStatus('复制失败，请手动复制。', 'error');
+      return;
+    }
+
+    button.classList.add('is-copied');
+    button.blur();
+    if (button._copyTimer) {
+      clearTimeout(button._copyTimer);
+    }
+    button._copyTimer = setTimeout(() => {
+      button.classList.remove('is-copied');
+    }, 1500);
+  }
+
+  extractBubbleText(contentEl) {
+    if (!contentEl) {
+      return '';
+    }
+    const text = typeof contentEl.innerText === 'string' ? contentEl.innerText : contentEl.textContent;
+    return (text || '').replace(/\r\n/g, '\n').trim();
+  }
+
+  fallbackCopyToClipboard(text) {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-9999px';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      textarea.setSelectionRange(0, textarea.value.length);
+      const succeeded = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return succeeded;
+    } catch (error) {
+      return false;
+    }
   }
 
   async highlightReferenceChunk(targetPath, reference, chunks, metadata) {
