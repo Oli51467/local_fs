@@ -1573,37 +1573,114 @@ class ChatModule {
       return null;
     }
 
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'chat-reference-item';
+    const chunkList = this.collectReferenceChunks(reference, metadata);
+    const chunkCount = chunkList.length || (Array.isArray(reference.chunk_indices) ? reference.chunk_indices.length : 0);
+
+    const item = document.createElement('div');
+    item.className = 'chat-reference-item is-collapsed';
     item.setAttribute('data-file-path', reference.file_path || '');
-    item.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.handleReferenceClick(reference, metadata, item);
-    });
+
+    const header = document.createElement('div');
+    header.className = 'chat-reference-header';
+
+    const toggleButton = document.createElement('button');
+    toggleButton.type = 'button';
+    toggleButton.className = 'chat-reference-toggle';
+    toggleButton.setAttribute('aria-expanded', 'false');
+
+    const toggleIcon = document.createElement('span');
+    toggleIcon.className = 'chat-reference-toggle-icon';
+    toggleButton.appendChild(toggleIcon);
+    header.appendChild(toggleButton);
 
     const textWrapper = document.createElement('div');
     textWrapper.className = 'chat-reference-texts';
 
-    const name = document.createElement('span');
-    name.className = 'chat-reference-name';
-    name.textContent = reference.display_name || reference.filename || '未命名文件';
-    textWrapper.appendChild(name);
+    const docButton = document.createElement('button');
+    docButton.type = 'button';
+    docButton.className = 'chat-reference-name';
+    docButton.textContent = reference.display_name || reference.filename || '未命名文件';
+    docButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.handleReferenceClick(reference, metadata, docButton);
+    });
+    textWrapper.appendChild(docButton);
 
-    item.appendChild(textWrapper);
+    header.appendChild(textWrapper);
 
-    if (Array.isArray(reference.chunk_indices) && reference.chunk_indices.length) {
-      const meta = document.createElement('span');
-      meta.className = 'chat-reference-meta';
-      meta.textContent = `${reference.chunk_indices.length} 个片段`;
-      item.appendChild(meta);
+    const meta = document.createElement('span');
+    meta.className = 'chat-reference-meta';
+    meta.textContent = chunkCount ? `${chunkCount} 个片段` : '未找到片段';
+    header.appendChild(meta);
+
+    const chunkContainer = document.createElement('div');
+    chunkContainer.className = 'chat-reference-chunks';
+    chunkContainer.hidden = true;
+    chunkContainer.style.display = 'none';
+
+    const setExpanded = (expanded) => {
+      if (expanded) {
+        item.classList.add('is-expanded');
+        item.classList.remove('is-collapsed');
+        chunkContainer.hidden = false;
+        chunkContainer.style.display = 'flex';
+        toggleButton.setAttribute('aria-expanded', 'true');
+      } else {
+        item.classList.add('is-collapsed');
+        item.classList.remove('is-expanded');
+        chunkContainer.hidden = true;
+        chunkContainer.style.display = 'none';
+        toggleButton.setAttribute('aria-expanded', 'false');
+      }
+    };
+
+    toggleButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const expanded = !item.classList.contains('is-expanded');
+      setExpanded(expanded);
+    });
+
+    if (chunkList.length) {
+      chunkList.forEach((chunk, index) => {
+        const chunkBlock = document.createElement('button');
+        chunkBlock.type = 'button';
+        chunkBlock.className = 'chat-reference-chunk';
+        chunkBlock.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.handleReferenceClick(reference, metadata, chunkBlock, chunk);
+        });
+
+        const chunkContent = document.createElement('div');
+        chunkContent.className = 'chat-reference-chunk-content';
+        chunkContent.textContent = this.buildReferenceSnippet(chunk.content);
+
+        const chunkLabel = document.createElement('div');
+        chunkLabel.className = 'chat-reference-chunk-label';
+        chunkLabel.textContent = `片段 ${index + 1}`;
+
+        chunkBlock.appendChild(chunkLabel);
+        chunkBlock.appendChild(chunkContent);
+
+        chunkContainer.appendChild(chunkBlock);
+      });
+    } else {
+      const empty = document.createElement('div');
+      empty.className = 'chat-reference-empty';
+      empty.textContent = '未找到片段内容，可尝试打开文档查看详情。';
+      chunkContainer.appendChild(empty);
     }
+
+    item.appendChild(header);
+    item.appendChild(chunkContainer);
+    setExpanded(false);
 
     return item;
   }
 
-  async handleReferenceClick(reference, metadata, trigger) {
+  async handleReferenceClick(reference, metadata, trigger, preferredChunk = null) {
     if (!reference || typeof reference !== 'object') {
       return;
     }
@@ -1614,7 +1691,16 @@ class ChatModule {
     }
 
     try {
-      const chunks = this.collectReferenceChunks(reference, metadata);
+      const chunks = this.collectReferenceChunks(reference, metadata).slice();
+      if (preferredChunk) {
+        const matchIndex = chunks.findIndex((candidate) => this.isSameReferenceChunk(candidate, preferredChunk));
+        if (matchIndex > 0) {
+          const [selected] = chunks.splice(matchIndex, 1);
+          chunks.unshift(selected);
+        } else if (matchIndex === -1) {
+          chunks.unshift(preferredChunk);
+        }
+      }
       const targetPath = await this.resolveReferencePath(reference, chunks);
       if (!targetPath) {
         this.setStatus('无法定位参考资料路径。', 'warning');
@@ -1645,6 +1731,7 @@ class ChatModule {
 
         try {
           await searchModule.openSearchResult(referencePayload);
+          await this.highlightReferenceChunk(targetPath, reference, chunks, metadata);
         } catch (error) {
           console.warn('调用搜索模块打开参考资料失败，尝试备用逻辑:', error);
           await this.openReferenceManually(targetPath, reference, chunks, metadata);
@@ -1835,6 +1922,41 @@ class ChatModule {
 
       return false;
     });
+  }
+
+  isSameReferenceChunk(left, right) {
+    if (!left || !right) {
+      return false;
+    }
+    if (typeof left.vector_id === 'number' && typeof right.vector_id === 'number' && left.vector_id === right.vector_id) {
+      return true;
+    }
+    if (typeof left.chunk_index === 'number' && typeof right.chunk_index === 'number') {
+      const leftPath = (left.file_path || left.path || '').trim();
+      const rightPath = (right.file_path || right.path || '').trim();
+      if (left.chunk_index === right.chunk_index && leftPath && rightPath && leftPath === rightPath) {
+        return true;
+      }
+    }
+    if (left.content && right.content && left.content === right.content) {
+      return true;
+    }
+    return false;
+  }
+
+  buildReferenceSnippet(content) {
+    if (content === null || content === undefined) {
+      return '片段内容为空';
+    }
+    const normalized = String(content).trim();
+    if (!normalized) {
+      return '片段内容为空';
+    }
+    const limit = 680;
+    if (normalized.length <= limit) {
+      return normalized;
+    }
+    return `${normalized.slice(0, limit).trim()} ...`;
   }
 
   async highlightReferenceChunk(targetPath, reference, chunks, metadata) {

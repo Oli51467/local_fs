@@ -48,6 +48,11 @@ LEXICAL_FUSION_WEIGHT = 0.15
 
 MIN_COMPONENT_SCORE = 0.4
 MIN_FINAL_SCORE = 0.45
+RERANK_STRONG_THRESHOLD = 0.55
+DENSE_STRONG_THRESHOLD = 0.6
+LEXICAL_STRONG_THRESHOLD = 0.5
+FINAL_STRONG_THRESHOLD = 0.62
+RELATIVE_SCORE_KEEP = 0.75
 class RetrievedChunk(BaseModel):
     document_id: int
     filename: str
@@ -227,8 +232,15 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
         if not chunk_record:
             return None
 
-        content = (chunk_record.get('content') or '').strip()
-        if not content:
+        raw_content = chunk_record.get('content')
+        if raw_content is None:
+            return None
+        if isinstance(raw_content, bytes):
+            raw_content = raw_content.decode('utf-8', 'ignore')
+        if not isinstance(raw_content, str):
+            raw_content = str(raw_content)
+
+        if not raw_content.strip():
             return None
 
         candidate = {
@@ -237,7 +249,7 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             'filename': chunk_record.get('filename') or (source_payload or {}).get('filename') or '',
             'file_path': chunk_record.get('file_path') or (source_payload or {}).get('file_path') or '',
             'chunk_index': chunk_record.get('chunk_index', 0),
-            'content': content,
+            'content': raw_content,
             'embedding_score': None,
             'embedding_norm': None,
             'bm25_raw': None,
@@ -440,13 +452,74 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             chunk.bm25_score,
             chunk.rerank_score_normalized
         ]
-        for comp in components:
-            if comp is not None and comp < MIN_COMPONENT_SCORE:
-                return False
-        return chunk.score >= MIN_FINAL_SCORE
+        scored_components = [comp for comp in components if comp is not None]
+        if not scored_components:
+            return False
+        if max(scored_components) < MIN_COMPONENT_SCORE:
+            return False
+
+        rerank_ok = (
+            chunk.rerank_score_normalized is not None
+            and chunk.rerank_score_normalized >= MIN_COMPONENT_SCORE
+        )
+        dense_ok = (
+            chunk.embedding_score_normalized is not None
+            and chunk.embedding_score_normalized >= MIN_COMPONENT_SCORE
+        )
+        lexical_ok = (
+            chunk.bm25_score is not None
+            and chunk.bm25_score >= MIN_COMPONENT_SCORE
+        )
+
+        if rerank_ok:
+            primary_signal = True
+        elif dense_ok and lexical_ok:
+            primary_signal = True
+        elif chunk.score >= MIN_FINAL_SCORE + 0.15:
+            primary_signal = True
+        else:
+            return False
+
+        return primary_signal and chunk.score >= MIN_FINAL_SCORE
 
     filtered = [chunk for chunk in ranked if _passes_threshold(chunk)]
-    return filtered[:top_k]
+    if not filtered:
+        return []
+
+    top_chunk = filtered[0]
+    top_rerank = top_chunk.rerank_score_normalized or 0.0
+    top_dense = top_chunk.embedding_score_normalized or 0.0
+    top_lexical = top_chunk.bm25_score or 0.0
+
+    strong_top = (
+        top_rerank >= RERANK_STRONG_THRESHOLD
+        or (top_dense >= DENSE_STRONG_THRESHOLD and top_lexical >= LEXICAL_STRONG_THRESHOLD)
+        or top_chunk.score >= FINAL_STRONG_THRESHOLD
+    )
+
+    if not strong_top:
+        return []
+
+    relative_cutoff = max(MIN_FINAL_SCORE, top_chunk.score * RELATIVE_SCORE_KEEP)
+    confident_chunks: List[RetrievedChunk] = []
+    for chunk in filtered:
+        if chunk.score < relative_cutoff:
+            continue
+
+        rerank_confident = (chunk.rerank_score_normalized or 0.0) >= (RERANK_STRONG_THRESHOLD * 0.9)
+        dense_lexical_confident = (
+            (chunk.embedding_score_normalized or 0.0) >= DENSE_STRONG_THRESHOLD
+            and (chunk.bm25_score or 0.0) >= (LEXICAL_STRONG_THRESHOLD * 0.9)
+        )
+        final_confident = chunk.score >= FINAL_STRONG_THRESHOLD
+
+        if rerank_confident or dense_lexical_confident or final_confident:
+            confident_chunks.append(chunk)
+
+    if not confident_chunks:
+        confident_chunks = [top_chunk]
+
+    return confident_chunks[:top_k]
 
 
 def _build_references_from_chunks(chunks: List[RetrievedChunk]) -> List[ReferenceDocument]:
@@ -548,9 +621,10 @@ def _build_llm_messages(
     selection: ModelSelection
 ) -> List[Dict[str, str]]:
     system_prompt = (
-        "你是一名资深的企业知识助手，会结合提供的资料回答问题。\n"
+        "你是一名资深的企业知识助手，会综合提供的资料与自身掌握的通用知识回答问题。\n"
+        "当提供了参考资料时要优先基于资料内容进行分析并给出贴合语境的总结；"
+        "当未提供任何参考资料时，也需要依靠你的知识储备完整作答，不要刻意强调资料缺失。\n"
         "请始终使用 Markdown 输出，结构清晰、分层表达。"
-        "若资料不足，需明确说明并指出可能的补充方向。"
     )
 
     messages: List[Dict[str, str]] = [{'role': 'system', 'content': system_prompt}]
@@ -572,15 +646,18 @@ def _build_llm_messages(
     knowledge_block = _format_chunks_for_prompt(chunks)
     if knowledge_block:
         knowledge_text = f"以下资料可供参考：\n{knowledge_block}\n\n"
+        citation_instruction = (
+            "引用资料时请以自然语言描述来源（例如提及文档名称、章节主题），"
+            "不要在回答中输出任何参考编号或标注（例如 [1]、(1)、[资料 1]），也不要展示资料的 ID 或完整文件路径。"
+        )
     else:
         knowledge_text = (
-            "未检索到足够的相关资料。请谨慎作答，必要时明确说明，并可结合自身掌握的知识完成回答。\n\n"
+            "当前没有检索到任何外部参考资料。请直接依据你掌握的行业常识、经验与通用知识体系给出详尽、可靠的回答。"
+            "可以在需要时做出合理推断，但若为推测请在回答中简要说明依据。\n\n"
         )
-
-    citation_instruction = (
-        "引用资料时请以自然语言描述来源。请不要在回答中输出任何参考编号或标注"
-        "（例如 [1]、(1)、[资料 1]），也不要展示资料的 ID 或完整文件路径。"
-    )
+        citation_instruction = (
+            "请勿在回答中提及资料缺失，也不要生成任何引用编号或来源描述，直接给出你的专业解答。"
+        )
 
     user_prompt = (
         f"{knowledge_text}"
@@ -645,6 +722,7 @@ def _prepare_chat_context(
         'model': selection_data,
         'chunks': [chunk.dict() for chunk in chunks],
         'references': [reference.dict() for reference in references],
+        'reference_mode': 'retrieval' if references else 'llm_only',
     }
 
     assistant_message_id = sqlite_manager.insert_chat_message(

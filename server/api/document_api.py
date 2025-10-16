@@ -138,7 +138,12 @@ DOC_TYPES = {'doc'}
 WORD_TYPES = DOC_TYPES.union(DOCX_TYPES)
 PDF_TYPES = {'pdf'}
 PPTX_TYPES = {'pptx'}
-SUPPORTED_FILE_TYPES = TEXT_TYPES.union(MARKDOWN_TYPES, WORD_TYPES, PDF_TYPES, PPTX_TYPES, IMAGE_TYPES)
+CODE_TYPES = {
+    'js', 'jsx', 'ts', 'tsx', 'json', 'py', 'java', 'cpp', 'c', 'h', 'hpp',
+    'css', 'scss', 'sass', 'less', 'html', 'xml', 'php', 'rb', 'go', 'rs',
+    'sh', 'bash', 'sql', 'yaml', 'yml', 'toml', 'ini', 'conf'
+}
+SUPPORTED_FILE_TYPES = TEXT_TYPES.union(MARKDOWN_TYPES, WORD_TYPES, PDF_TYPES, PPTX_TYPES, IMAGE_TYPES, CODE_TYPES)
 
 _pdf_parse_tasks: Dict[str, Dict[str, Any]] = {}
 _pdf_parse_lock = threading.Lock()

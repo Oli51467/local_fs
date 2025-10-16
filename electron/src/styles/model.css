@@ -331,8 +331,8 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(15, 23, 42, 0.35);
-  backdrop-filter: blur(6px);
+  /* Avoid backdrop blur to prevent expensive repaints on modal input */
+  background: rgba(15, 23, 42, 0.55);
   z-index: 1600;
   box-sizing: border-box;
 }

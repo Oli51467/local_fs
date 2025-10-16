@@ -255,6 +255,7 @@ def test_chat_creates_new_conversation_without_results():
     assert payload['assistant_message']['content'] == '没有找到相关资料。'
     assert payload['assistant_message']['metadata']['chunks'] == []
     assert payload['assistant_message']['metadata']['model']['model_id'] == 'Qwen/Qwen3-8B'
+    assert payload['assistant_message']['metadata']['reference_mode'] == 'llm_only'
     assert len(fake_sqlite.conversations) == 1
 
     history = client.get('/api/chat/conversations')
@@ -322,6 +323,7 @@ def test_chat_returns_retrieved_chunks():
     assistant_chunks = payload['assistant_message']['metadata']['chunks']
     assert len(assistant_chunks) == 1
     assert assistant_chunks[0]['vector_id'] == 42
+    assert payload['assistant_message']['metadata']['reference_mode'] == 'retrieval'
 
     conversation_id = payload['conversation_id']
     detail = client.get(f'/api/chat/conversations/{conversation_id}')
@@ -331,6 +333,59 @@ def test_chat_returns_retrieved_chunks():
     assert len(detail_payload['messages']) == 2
     assert detail_payload['messages'][0]['role'] == 'user'
     assert detail_payload['messages'][1]['role'] == 'assistant'
+
+
+def test_chat_filters_chunks_without_strong_signal():
+    fake_sqlite = FakeSQLiteManager()
+    fake_sqlite.chunks_by_vector[11] = {
+        'document_id': 3,
+        'filename': 'weak.txt',
+        'file_path': 'docs/weak.txt',
+        'chunk_index': 0,
+        'content': '这是一段与问题无关的描述，只是一个占位示例。'
+    }
+
+    fake_faiss = FakeFaissManager(results=[[
+        {
+            'vector_id': 11,
+            'score': 0.4,
+            'filename': 'weak.txt',
+            'file_path': 'docs/weak.txt',
+            'chunk_index': 0
+        }
+    ]])
+    fake_faiss.metadata = [
+        {
+            'vector_id': 11,
+            'filename': 'weak.txt',
+            'file_path': 'docs/weak.txt',
+            'chunk_index': 0
+        }
+    ]
+    fake_embedding = FakeEmbeddingService()
+    fake_llm = FakeLLMClient(content='直接基于常识回答。')
+    fake_bm25 = FakeBM25Service([0.35])
+    weak_reranker = FakeRerankerService(score=0.42)
+    client = create_test_client(fake_faiss, fake_sqlite, fake_embedding, fake_bm25, weak_reranker, fake_llm=fake_llm)
+
+    response = client.post('/api/chat', json={
+        'question': '如何快速部署系统？',
+        'top_k': 3,
+        'model': {
+            'source_id': 'siliconflow',
+            'model_id': 'Qwen/Qwen3-8B',
+            'api_model': 'Qwen/Qwen3-8B',
+            'api_key': 'test-key',
+            'provider_name': '硅基流动'
+        }
+    })
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload['chunks'] == []
+    assert payload['assistant_message']['metadata']['chunks'] == []
+    assert payload['assistant_message']['metadata']['reference_mode'] == 'llm_only'
+    assert payload['assistant_message']['content'] == '直接基于常识回答。'
 
 
 def test_delete_conversation_removes_history():
