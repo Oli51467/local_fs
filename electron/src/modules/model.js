@@ -1,11 +1,11 @@
 // 资源路径解析（与 chat.js 保持一致）
-const __assetUrlCache = new Map();
+const MODEL_ASSET_URL_CACHE = new Map();
 function getAssetUrl(relativePath) {
   if (!relativePath) {
     return '';
   }
-  if (__assetUrlCache.has(relativePath)) {
-    return __assetUrlCache.get(relativePath);
+  if (MODEL_ASSET_URL_CACHE.has(relativePath)) {
+    return MODEL_ASSET_URL_CACHE.get(relativePath);
   }
   let resolved = `./${String(relativePath).replace(/^([./\\])+/, '')}`;
   try {
@@ -18,7 +18,7 @@ function getAssetUrl(relativePath) {
   } catch (error) {
     console.warn('解析资源路径失败，使用默认相对路径:', error);
   }
-  __assetUrlCache.set(relativePath, resolved);
+  MODEL_ASSET_URL_CACHE.set(relativePath, resolved);
   return resolved;
 }
 
@@ -36,6 +36,7 @@ class ModelModule {
     this.systemPollingInterval = null;
     this.systemPollingDelayMs = 30000;
     this.systemDownloadRequests = new Set();
+    this.registryListeners = new Set();
 
     this.dependencies = {
       getSettingsModule: () => null
@@ -917,6 +918,7 @@ class ModelModule {
 
   renderAllModels() {
     if (!this.cardContainerEl) {
+      this.notifyModelRegistryChanged();
       return;
     }
 
@@ -1070,9 +1072,48 @@ class ModelModule {
 
   notifyModelRegistryChanged() {
     const snapshot = this.getModels();
+    const safeSnapshot = Array.isArray(snapshot) ? snapshot.map((model) => ({ ...model })) : [];
+
+    if (typeof window !== 'undefined') {
+      window.__fsModelRegistry = {
+        models: safeSnapshot.map((model) => ({ ...model })),
+        updatedAt: Date.now()
+      };
+    }
+
+    this.registryListeners.forEach((listener) => {
+      if (typeof listener !== 'function') {
+        return;
+      }
+      try {
+        listener(safeSnapshot.map((model) => ({ ...model })));
+      } catch (error) {
+        console.error('通知模型监听器失败:', error);
+      }
+    });
+
     document.dispatchEvent(new CustomEvent('modelRegistryChanged', {
-      detail: { models: snapshot }
+      detail: { models: safeSnapshot }
     }));
+  }
+
+  onModelRegistryChanged(listener) {
+    if (typeof listener !== 'function') {
+      return () => {};
+    }
+
+    this.registryListeners.add(listener);
+
+    try {
+      const snapshot = this.getModels();
+      listener(snapshot.map((model) => ({ ...model })));
+    } catch (error) {
+      console.error('初始化模型监听器回调失败:', error);
+    }
+
+    return () => {
+      this.registryListeners.delete(listener);
+    };
   }
 
   getModels() {

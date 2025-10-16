@@ -29,13 +29,13 @@ const WINDOWS_1252_REVERSE = new Map([
 ]);
 
 // 资源路径解析（参考 fileTree.js 的 getAssetUrl）
-const __assetUrlCache = new Map();
+const CHAT_ASSET_URL_CACHE = new Map();
 function getAssetUrl(relativePath) {
   if (!relativePath) {
     return '';
   }
-  if (__assetUrlCache.has(relativePath)) {
-    return __assetUrlCache.get(relativePath);
+  if (CHAT_ASSET_URL_CACHE.has(relativePath)) {
+    return CHAT_ASSET_URL_CACHE.get(relativePath);
   }
   let resolved = `./${String(relativePath).replace(/^([./\\])+/, '')}`;
   try {
@@ -48,7 +48,7 @@ function getAssetUrl(relativePath) {
   } catch (error) {
     console.warn('解析资源路径失败，使用默认相对路径:', error);
   }
-  __assetUrlCache.set(relativePath, resolved);
+  CHAT_ASSET_URL_CACHE.set(relativePath, resolved);
   return resolved;
 }
 
@@ -91,6 +91,16 @@ class ChatModule {
     this.streamingState = null;
     this.markdownViewer = null;
     this.markdownStyleRefs = new Set();
+    this.unsubscribeModelRegistry = null;
+    this.modelModuleListenerRetryScheduled = false;
+
+    if (window.fsAPI && typeof window.fsAPI.onSettingsUpdated === 'function') {
+      window.fsAPI.onSettingsUpdated((config) => {
+        this.handleSettingsUpdated(config);
+      });
+    }
+
+    this.tryAttachModelModuleListener();
   }
 
   async init() {
@@ -99,7 +109,8 @@ class ChatModule {
     }
 
     this.bindEvents();
-    this.updateModelSelect(this.getInitialModelList());
+    this.tryAttachModelModuleListener();
+    await this.refreshAvailableModels();
     this.initialized = true;
   }
 
@@ -159,11 +170,40 @@ class ChatModule {
     document.addEventListener('modelRegistryChanged', this.modelRegistryHandler);
   }
 
-  getInitialModelList() {
-    if (window.modelModule && typeof window.modelModule.getModels === 'function') {
+  tryAttachModelModuleListener() {
+    if (this.unsubscribeModelRegistry || typeof window === 'undefined') {
+      return;
+    }
+
+    const module = window.modelModule;
+    if (module && typeof module.onModelRegistryChanged === 'function') {
+      const handler = (models) => {
+        this.refreshAvailableModels({ models }).catch((error) => {
+          console.warn('通过模型模块刷新聊天模型列表失败:', error);
+        });
+      };
       try {
-        const models = window.modelModule.getModels();
-        return Array.isArray(models) ? models : [];
+        const unsubscribe = module.onModelRegistryChanged(handler);
+        this.unsubscribeModelRegistry = typeof unsubscribe === 'function' ? unsubscribe : () => {};
+      } catch (error) {
+        console.error('注册模型监听器失败:', error);
+      }
+      return;
+    }
+
+    if (!this.modelModuleListenerRetryScheduled) {
+      this.modelModuleListenerRetryScheduled = true;
+      setTimeout(() => {
+        this.modelModuleListenerRetryScheduled = false;
+        this.tryAttachModelModuleListener();
+      }, 120);
+    }
+  }
+
+  getInitialModelList() {
+    if (typeof window !== 'undefined' && window.modelModule && typeof window.modelModule.getModels === 'function') {
+      try {
+        return this.normalizeModelList(window.modelModule.getModels());
       } catch (error) {
         console.warn('获取初始模型列表失败:', error);
       }
@@ -172,8 +212,20 @@ class ChatModule {
   }
 
   handleModelRegistryChanged(event) {
-    const models = event?.detail?.models || [];
-    this.updateModelSelect(models);
+    const models = event?.detail?.models;
+    this.refreshAvailableModels({ models }).catch((error) => {
+      console.warn('刷新聊天模型列表失败:', error);
+    });
+  }
+
+  handleSettingsUpdated(config) {
+    if (!config || !Object.prototype.hasOwnProperty.call(config, 'customModels')) {
+      return;
+    }
+    const models = Array.isArray(config.customModels) ? config.customModels : [];
+    this.refreshAvailableModels({ models }).catch((error) => {
+      console.warn('设置更新后刷新聊天模型列表失败:', error);
+    });
   }
 
   updateModelSelect(models) {
@@ -307,6 +359,116 @@ class ChatModule {
     return `${model.sourceId || ''}::${model.modelId || ''}`;
   }
 
+  normalizeModelRecord(model) {
+    if (!model || typeof model !== 'object') {
+      return null;
+    }
+    const normalized = { ...model };
+    if (normalized.source_id && !normalized.sourceId) {
+      normalized.sourceId = normalized.source_id;
+    }
+    if (normalized.model_id && !normalized.modelId) {
+      normalized.modelId = normalized.model_id;
+    }
+    if (normalized.api_model && !normalized.apiModel) {
+      normalized.apiModel = normalized.api_model;
+    }
+    if (normalized.provider_name && !normalized.providerName) {
+      normalized.providerName = normalized.provider_name;
+    }
+    if (normalized.api_key_setting && !normalized.apiKeySetting) {
+      normalized.apiKeySetting = normalized.api_key_setting;
+    }
+    return normalized;
+  }
+
+  normalizeModelList(models) {
+    if (!Array.isArray(models) || models.length === 0) {
+      return [];
+    }
+
+    const seen = new Set();
+    const result = [];
+    models.forEach((item) => {
+      const normalized = this.normalizeModelRecord(item);
+      if (!normalized) {
+        return;
+      }
+
+      let prepared = { ...normalized };
+      if (typeof window !== 'undefined' && window.modelModule && typeof window.modelModule.enrichModel === 'function') {
+        try {
+          prepared = window.modelModule.enrichModel({ ...normalized });
+        } catch (error) {
+          console.warn('补充模型信息失败，使用原始模型数据:', error);
+          prepared = { ...normalized };
+        }
+      }
+
+      prepared.sourceId = prepared.sourceId || '';
+      prepared.modelId = prepared.modelId || prepared.apiModel || prepared.name || '';
+      prepared.apiModel = prepared.apiModel || prepared.modelId || '';
+      prepared.name = prepared.name || prepared.apiModel || prepared.modelId || '未命名模型';
+      prepared.providerName = prepared.providerName || prepared.sourceId || '自定义';
+      prepared.apiKeySetting = prepared.apiKeySetting || 'siliconflwApiKey';
+
+      const key = this.getModelKey(prepared);
+      if (!key || seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      result.push(prepared);
+    });
+
+    return result;
+  }
+
+  async refreshAvailableModels(options = {}) {
+    const hasDirectModels = Object.prototype.hasOwnProperty.call(options || {}, 'models');
+    let list = [];
+
+    if (hasDirectModels) {
+      list = this.normalizeModelList(Array.isArray(options.models) ? options.models : []);
+    }
+
+    if (!list.length && typeof window !== 'undefined' && window.modelModule && typeof window.modelModule.getModels === 'function') {
+      try {
+        list = this.normalizeModelList(window.modelModule.getModels());
+      } catch (error) {
+        console.warn('读取模型模块列表失败:', error);
+      }
+    }
+
+    if (!list.length && typeof window !== 'undefined' && window.__fsModelRegistry && Array.isArray(window.__fsModelRegistry.models)) {
+      list = this.normalizeModelList(window.__fsModelRegistry.models);
+    }
+
+    if (!list.length && typeof window !== 'undefined') {
+      const settingsModule = window.settingsModule;
+      if (settingsModule && typeof settingsModule.getCustomModels === 'function') {
+        try {
+          list = this.normalizeModelList(settingsModule.getCustomModels());
+        } catch (error) {
+          console.warn('从设置模块获取模型失败:', error);
+        }
+      }
+    }
+
+    if (!list.length && typeof window !== 'undefined' && window.fsAPI && typeof window.fsAPI.getSettings === 'function') {
+      try {
+        const settings = await window.fsAPI.getSettings();
+        if (Array.isArray(settings?.customModels)) {
+          list = this.normalizeModelList(settings.customModels);
+        }
+      } catch (error) {
+        console.warn('直接读取设置失败:', error);
+      }
+    }
+
+    this.updateModelSelect(list);
+    return list;
+  }
+
   toggleModelDropdown() {
     if (this.chatModelButtonEl && this.chatModelButtonEl.disabled) {
       return;
@@ -367,6 +529,7 @@ class ChatModule {
 
   async enterChatMode() {
     await this.init();
+    await this.refreshAvailableModels();
     await this.refreshConversations();
     if (this.conversations.length && this.currentConversationId === null) {
       this.openConversation(this.conversations[0].id);
