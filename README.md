@@ -1,11 +1,19 @@
-<div style="display:flex; align-items:center; gap:18px;">
-  <img src="electron/dist/assets/logo.png" alt="LoFS Logo" width="108" style="border-radius:24px;" />
-  <h1 style="margin:0;">🗂️ LoFS · Load once Fast Search</h1>
+<div style="display:flex; align-items:center; gap:18px; padding:18px 24px; background:#ffffff; border-radius:18px; box-shadow:0 18px 46px rgba(15,23,42,0.08);">
+  <div style="flex:0 0 120px;">
+    <img src="electron/dist/assets/logo.png" alt="LoFS Logo" width="120" style="display:block; border-radius:24px;">
+  </div>
+  <div style="flex:1;">
+    <h1 style="margin:0 0 12px 0;">🗂️ LoFS · Load once Fast Search</h1>
+    <div style="font-size:14px; line-height:1.6; color:#475467;">
+      <p style="margin:0 0 6px 0; color:#1f2933;">
+        <a href="README_EN.md">English</a> ｜ <strong>中文</strong>
+      </p>
+      <p style="margin:0; color:#1f2933;">
+        LoFS（Load once Fast Search）是一款面向本地知识库的桌面级文件管理与信息检索应用，只需挂载一次，后续即可获得毫秒级的全文与语义检索体验。
+      </p>
+    </div>
+  </div>
 </div>
-
-[English](README_EN.md) ｜ **中文**
-
-LoFS（Load once Fast Search）是一款面向本地知识库的桌面级文件管理与信息检索应用，只需挂载一次，后续即可获得毫秒级的全文与语义检索体验。
 
 ## 1. 项目简介
 LoFS 聚焦“本地优先”的知识管理场景，将文件管理与语义检索合二为一：
@@ -84,7 +92,7 @@ npm run dev
 
 ### 4.4 打包与模型资源管理
 ```bash
-python package.py        # 跨平台一键打包
+python package.py # 一键打包
 ```
 
 - 应用启动时会在 `meta` 目录创建所需模型文件夹（`embedding/bge-m3`、`embedding/clip`、`reranker/bge-reranker-v3-m3`、`pdf-extract-kit`）。

@@ -1,11 +1,19 @@
-<div style="display:flex; align-items:center; gap:18px;">
-  <img src="electron/dist/assets/logo.png" alt="LoFS Logo" width="108" style="border-radius:24px;" />
-  <h1 style="margin:0;">🗂️ LoFS · Load once Fast Search</h1>
+<div style="display:flex; align-items:center; gap:18px; padding:18px 24px; background:#ffffff; border-radius:18px; box-shadow:0 18px 46px rgba(15,23,42,0.08);">
+  <div style="flex:0 0 120px;">
+    <img src="electron/dist/assets/logo.png" alt="LoFS Logo" width="120" style="display:block; border-radius:24px;">
+  </div>
+  <div style="flex:1;">
+    <h1 style="margin:0 0 12px 0;">🗂️ LoFS · Load once Fast Search</h1>
+    <div style="font-size:14px; line-height:1.6; color:#475467;">
+      <p style="margin:0 0 6px 0; color:#1f2933;">
+        <strong>English</strong> ｜ <a href="README.md">中文</a>
+      </p>
+      <p style="margin:0; color:#1f2933;">
+        LoFS (Load once Fast Search) is a desktop-first knowledge base manager for local files. Mount a directory once and enjoy millisecond hybrid search afterwards.
+      </p>
+    </div>
+  </div>
 </div>
-
-**English** ｜ [中文](README.md)
-
-LoFS (Load once Fast Search) is a desktop-first knowledge base manager for local files. Mount a folder a single time and enjoy millisecond hybrid search from then on.
 
 ## 1. Project Overview
 LoFS fuses local file organization with semantic retrieval to deliver an “always up to date” knowledge workspace:

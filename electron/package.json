@@ -1,7 +1,7 @@
 {
   "name": "LoFS",
-  "version": "1.1.1",
-  "description": "Electron + Python (FastAPI) desktop app demo",
+  "version": "1.1.2",
+  "description": "LoFS (Load once Fast Search) is a desktop-first knowledge base manager for local files. Mount a directory once and enjoy millisecond hybrid search afterwards.",
   "main": "main.js",
   "scripts": {
     "start": "electronmon .",
