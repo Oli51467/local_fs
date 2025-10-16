@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -97,6 +97,15 @@ function createWindow() {
       enableBlinkFeatures: '',
       disableBlinkFeatures: 'Auxclick'
     }
+  });
+
+  // 监听主题变化
+  ipcMain.handle('set-title-bar-theme', (event, isDarkMode) => {
+    if (process.platform === 'darwin') {
+      // macOS 使用 nativeTheme 来控制标题栏主题
+      nativeTheme.themeSource = isDarkMode ? 'dark' : 'light';
+    }
+    // Windows 会自动跟随系统主题，这里不需要额外处理
   });
 
   win.loadFile(path.join(__dirname, 'index.html'));

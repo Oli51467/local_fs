@@ -131,9 +131,13 @@ class SettingsModule {
     if (this.isDarkMode) {
       document.body.classList.add('dark-mode');
       this.darkModeToggle.checked = true;
+      // 同步标题栏主题
+      window.fsAPI.setTitleBarTheme(true);
     } else {
       document.body.classList.remove('dark-mode');
       this.darkModeToggle.checked = false;
+      // 同步标题栏主题
+      window.fsAPI.setTitleBarTheme(false);
     }
   }
 
@@ -149,6 +153,8 @@ class SettingsModule {
       this.updateApiSettingsFromConfig(settings, { replaceOriginal: true, silent: true, resetVisibility: true });
       this.updateApiSaveButtonState();
       this.customModels = this.normalizeCustomModels(settings?.customModels);
+      // 确保标题栏主题在应用启动时正确应用
+      await window.fsAPI.setTitleBarTheme(this.isDarkMode);
     } catch (error) {
       console.error('加载设置失败:', error);
     }
@@ -552,6 +558,23 @@ class SettingsModule {
 
     this.retrievalConfig[configKey] = parsedValue;
     this.updateRetrievalValueDisplay(configKey, parsedValue);
+
+    // 实现BM25S和向量检索权重的联动逻辑
+    if (configKey === 'BM25S_WEIGHT' || configKey === 'EMBEDDING_WEIGHT') {
+      const otherKey = configKey === 'BM25S_WEIGHT' ? 'EMBEDDING_WEIGHT' : 'BM25S_WEIGHT';
+      const otherValue = Math.max(0, Math.min(1, 1 - parsedValue)); // 确保另一个值在0-1范围内
+      
+      // 更新另一个滑块的值
+      this.retrievalConfig[otherKey] = otherValue;
+      
+      // 更新另一个滑块的UI
+      const otherInputEl = this.retrievalInputs[otherKey];
+      if (otherInputEl) {
+        otherInputEl.value = otherValue.toFixed(2);
+      }
+      this.updateRetrievalValueDisplay(otherKey, otherValue);
+    }
+
     this.retrievalConfigDirty = true;
     this.updateRetrievalSaveButtonState();
     this.validateRetrievalConfig({ showFeedback: true });
@@ -582,6 +605,20 @@ class SettingsModule {
   applyRetrievalConfig(config) {
     if (!config) {
       return;
+    }
+
+    // 确保权重值之和为1，如果不是则进行调整
+    if (config.BM25S_WEIGHT !== undefined && config.EMBEDDING_WEIGHT !== undefined) {
+      const sum = config.BM25S_WEIGHT + config.EMBEDDING_WEIGHT;
+      if (Math.abs(sum - 1) > 0.01 && sum > 0) {
+        // 按比例调整权重，使其和为1
+        config.BM25S_WEIGHT = config.BM25S_WEIGHT / sum;
+        config.EMBEDDING_WEIGHT = config.EMBEDDING_WEIGHT / sum;
+      } else if (sum <= 0) {
+        // 如果两个权重都为0或负数，设置默认值
+        config.BM25S_WEIGHT = 0.7;
+        config.EMBEDDING_WEIGHT = 0.3;
+      }
     }
 
     Object.entries(this.retrievalInputs).forEach(([key, inputEl]) => {
@@ -745,6 +782,8 @@ class SettingsModule {
       errorMessage = '分块重叠不能大于分块大小，请调整后再保存。';
     } else if ((payload.bm25s_weight + payload.embedding_weight) <= 0) {
       errorMessage = 'BM25S 与向量检索权重至少需要一个大于 0。';
+    } else if (Math.abs((payload.bm25s_weight + payload.embedding_weight) - 1) > 0.01) {
+      errorMessage = 'BM25S 与向量检索权重之和必须等于 1.00。';
     }
 
     this.retrievalValidationError = errorMessage;
@@ -846,6 +885,8 @@ class SettingsModule {
     this.isDarkMode = darkMode;
     this.applyTheme();
     await this.saveSettings();
+    // 同步标题栏主题
+    await window.fsAPI.setTitleBarTheme(darkMode);
   }
 
   getApiKey(key) {

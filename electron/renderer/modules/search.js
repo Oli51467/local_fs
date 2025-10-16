@@ -451,6 +451,7 @@
           gap: 18px;
           padding: 24px;
           width: 100%;
+          height: 100%;
           background: var(--bg-color);
           color: var(--text-color);
           box-sizing: border-box;
@@ -479,6 +480,8 @@
           color: var(--text-muted);
           text-align: center;
           gap: 14px;
+          flex: 1;
+          min-height: 200px;
         }
 
         .search-result-status .spinner {
@@ -876,11 +879,9 @@
     if (!searchState.query) {
       const status = document.createElement('div');
       status.className = 'search-result-status';
-      const title = document.createElement('strong');
-      title.textContent = '智能检索';
       const message = document.createElement('span');
-      message.textContent = '输入关键词并按 Enter，即可检索文件内容。';
-      status.appendChild(title);
+      message.textContent = '想检索什么信息？💻';
+      //status.appendChild(title);
       status.appendChild(message);
       searchResultsContainer.appendChild(status);
       return;
@@ -962,7 +963,7 @@
     const searchInput = document.getElementById('search-input');
     if (searchInput) {
       searchInput.placeholder = searchState.mode === SEARCH_MODES.IMAGE
-        ? '输入图片描述或场景，检索相关图片'
+        ? '检索相关图片'
         : '搜索文件内容';
     }
   }

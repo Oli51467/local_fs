@@ -60,6 +60,13 @@ class ModelModule {
             apiKeySetting: 'siliconflwApiKey'
           }
         ]
+      },
+      {
+        sourceId: 'openai',
+        name: 'Open AI',
+        icon: './dist/assets/openai.png',
+        apiKeySetting: 'openaiApiKey',
+        models: []
       }
     ];
   }
@@ -692,7 +699,13 @@ class ModelModule {
     this.setModalStatus('正在测试连接，请稍候...', 'info');
 
     try {
-      await this.testSiliconflowConnection(apiKey, modelName);
+      // 根据来源选择不同的验证方法
+      if (sourceId === 'openai') {
+        await this.testOpenAIConnection(apiKey, modelName);
+      } else {
+        await this.testSiliconflowConnection(apiKey, modelName);
+      }
+      
       this.setModalStatus('测试通过，模型已添加。', 'success');
       this.appendModelCard({
         sourceId: source.sourceId,
@@ -765,6 +778,49 @@ class ModelModule {
         data?.error?.message ||
         data?.message ||
         `调用失败，状态码 ${response.status}`;
+      throw new Error(errorMessage);
+    }
+  }
+
+  async testOpenAIConnection(apiKey, model = "gpt-4o-mini") {
+    const url = 'https://api.openai.com/v1/chat/completions';
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          { role: "user", content: "测试连接是否正常，请回答'OK'" }
+        ],
+        max_tokens: 5  // 限制返回字数，减少开销
+      })
+    });
+
+    let data = null;
+    try {
+      data = await response.json();
+      if (data && data.choices && data.choices[0]) {
+        console.debug('OpenAI 测试响应已接收', {
+          status: response.status,
+          model: model,
+          content: data.choices[0].message?.content
+        });
+      } else {
+        console.debug('OpenAI 测试响应已接收');
+      }
+    } catch (parseError) {
+      console.warn('解析 OpenAI 响应失败:', parseError);
+    }
+
+    if (!response.ok) {
+      const errorMessage =
+        data?.error?.message ||
+        data?.message ||
+        `模型 "${model}" 调用失败，状态码 ${response.status}`;
       throw new Error(errorMessage);
     }
   }

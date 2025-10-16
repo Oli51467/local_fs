@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('fsAPI', {
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   getSettings: () => ipcRenderer.invoke('get-settings'),
   onSettingsUpdated: (callback) => ipcRenderer.on('settings-updated', (event, config) => callback(config)),
+  setTitleBarTheme: (isDarkMode) => ipcRenderer.invoke('set-title-bar-theme', isDarkMode),
   
   // 文件导入相关
   selectFiles: () => ipcRenderer.invoke('select-files'),

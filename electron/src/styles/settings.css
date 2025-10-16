@@ -6,6 +6,38 @@
   overflow: auto;
 }
 
+/* 滚动条样式 */
+#settings-page::-webkit-scrollbar {
+  width: 8px;
+}
+
+#settings-page::-webkit-scrollbar-track {
+  background: var(--sidebar-bg);
+  border-radius: 4px;
+}
+
+#settings-page::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+#settings-page::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* 深色模式下的滚动条样式 */
+.dark-mode #settings-page::-webkit-scrollbar-track {
+  background: var(--sidebar-bg);
+}
+
+.dark-mode #settings-page::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.dark-mode #settings-page::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
 .settings-section {
   margin-bottom: 20px;
 }
