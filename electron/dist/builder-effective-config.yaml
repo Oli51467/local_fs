@@ -3,6 +3,7 @@ directories:
   buildResources: build
 appId: com.electron.python.app
 productName: LoFS
+icon: dist/assets/logo.png
 files:
   - filter:
       - '**/*'

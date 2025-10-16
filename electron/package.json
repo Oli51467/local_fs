@@ -14,6 +14,7 @@
   "build": {
     "appId": "com.electron.python.app",
     "productName": "LoFS",
+    "icon": "dist/assets/logo.png",
     "files": [
       "**/*",
       "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
