@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, nativeImage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -83,10 +83,27 @@ function resolveAppPaths() {
   };
 }
 
+function resolveIconPath() {
+  const devIcon = path.join(__dirname, 'dist', 'assets', 'logo.png');
+  if (fs.existsSync(devIcon)) {
+    return devIcon;
+  }
+
+  const packagedIcon = path.join(process.resourcesPath || '', 'dist', 'assets', 'logo.png');
+  if (fs.existsSync(packagedIcon)) {
+    return packagedIcon;
+  }
+
+  return devIcon;
+}
+
 function createWindow() {
+  const iconPath = resolveIconPath();
+  const iconImage = nativeImage.createFromPath(iconPath);
   const win = new BrowserWindow({
     width: 1300,
     height: 800,
+    icon: iconImage.isEmpty() ? undefined : iconImage,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -109,6 +126,15 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'index.html'));
+
+  if (!iconImage.isEmpty()) {
+    if (process.platform === 'darwin' && app.dock) {
+      app.dock.setIcon(iconImage);
+    }
+    if (process.platform === 'win32' || process.platform === 'linux') {
+      win.setIcon(iconImage);
+    }
+  }
 }
 
 // 初始化各个功能模块

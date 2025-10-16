@@ -37,16 +37,34 @@ function getAssetUrl(relativePath) {
   if (CHAT_ASSET_URL_CACHE.has(relativePath)) {
     return CHAT_ASSET_URL_CACHE.get(relativePath);
   }
-  let resolved = `./${String(relativePath).replace(/^([./\\])+/, '')}`;
+  const raw = String(relativePath).trim();
+  if (!raw) {
+    CHAT_ASSET_URL_CACHE.set(relativePath, '');
+    return '';
+  }
+  if (/^(?:file|https?|data):/i.test(raw)) {
+    CHAT_ASSET_URL_CACHE.set(relativePath, raw);
+    return raw;
+  }
+  let resolved = `./${raw.replace(/^([./\\])+/, '')}`;
   try {
     if (window.fsAPI && typeof window.fsAPI.getAssetPathSync === 'function') {
-      const candidate = window.fsAPI.getAssetPathSync(relativePath);
+      const candidate = window.fsAPI.getAssetPathSync(raw);
       if (candidate) {
         resolved = candidate;
       }
+    } else if (typeof window !== 'undefined' && window.location) {
+      resolved = new URL(resolved.replace(/^\.\//, ''), window.location.href).href;
     }
   } catch (error) {
     console.warn('解析资源路径失败，使用默认相对路径:', error);
+  }
+  if (!/^(?:file|https?):/i.test(resolved) && typeof window !== 'undefined' && window.location) {
+    try {
+      resolved = new URL(resolved, window.location.href).href;
+    } catch (error) {
+      // ignore
+    }
   }
   CHAT_ASSET_URL_CACHE.set(relativePath, resolved);
   return resolved;

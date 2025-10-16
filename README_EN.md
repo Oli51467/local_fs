@@ -1,4 +1,7 @@
-# 🗂️ LoFS · Load once Fast Search
+<div style="display:flex; align-items:center; gap:18px;">
+  <img src="electron/dist/assets/logo.png" alt="LoFS Logo" width="108" style="border-radius:24px;" />
+  <h1 style="margin:0;">🗂️ LoFS · Load once Fast Search</h1>
+</div>
 
 **English** ｜ [中文](README.md)
 

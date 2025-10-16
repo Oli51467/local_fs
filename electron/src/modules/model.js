@@ -7,16 +7,34 @@ function getAssetUrl(relativePath) {
   if (MODEL_ASSET_URL_CACHE.has(relativePath)) {
     return MODEL_ASSET_URL_CACHE.get(relativePath);
   }
-  let resolved = `./${String(relativePath).replace(/^([./\\])+/, '')}`;
+  const raw = String(relativePath).trim();
+  if (!raw) {
+    MODEL_ASSET_URL_CACHE.set(relativePath, '');
+    return '';
+  }
+  if (/^(?:file|https?|data):/i.test(raw)) {
+    MODEL_ASSET_URL_CACHE.set(relativePath, raw);
+    return raw;
+  }
+  let resolved = `./${raw.replace(/^([./\\])+/, '')}`;
   try {
     if (window.fsAPI && typeof window.fsAPI.getAssetPathSync === 'function') {
-      const candidate = window.fsAPI.getAssetPathSync(relativePath);
+      const candidate = window.fsAPI.getAssetPathSync(raw);
       if (candidate) {
         resolved = candidate;
       }
+    } else if (typeof window !== 'undefined' && window.location) {
+      resolved = new URL(resolved.replace(/^\.\//, ''), window.location.href).href;
     }
   } catch (error) {
     console.warn('解析资源路径失败，使用默认相对路径:', error);
+  }
+  if (!/^(?:file|https?):/i.test(resolved) && typeof window !== 'undefined' && window.location) {
+    try {
+      resolved = new URL(resolved, window.location.href).href;
+    } catch (error) {
+      // ignore
+    }
   }
   MODEL_ASSET_URL_CACHE.set(relativePath, resolved);
   return resolved;
@@ -49,7 +67,7 @@ class ModelModule {
       {
         sourceId: 'siliconflow',
         name: '硅基流动',
-        icon: './dist/assets/qwen.png',
+        icon: '../dist/assets/qwen.png',
         apiKeySetting: 'siliconflwApiKey',
         models: [
           {
@@ -706,7 +724,7 @@ class ModelModule {
       } else {
         await this.testSiliconflowConnection(apiKey, modelName);
       }
-      
+
       this.setModalStatus('测试通过，模型已添加。', 'success');
       this.appendModelCard({
         sourceId: source.sourceId,
@@ -979,17 +997,6 @@ class ModelModule {
     const header = document.createElement('div');
     header.className = 'model-card-header';
 
-    const avatar = document.createElement('div');
-    avatar.className = 'model-card-avatar';
-    if (model.providerIcon) {
-      const img = document.createElement('img');
-      img.src = model.providerIcon;
-      img.alt = `${model.providerName} 图标`;
-      avatar.appendChild(img);
-    } else {
-      avatar.textContent = this.getInitials(model.name);
-    }
-
     const titleWrapper = document.createElement('div');
     titleWrapper.className = 'model-card-titles';
 
@@ -1001,10 +1008,14 @@ class ModelModule {
     providerLabel.className = 'model-card-provider';
     providerLabel.textContent = model.providerName;
 
+    const statusLabel = document.createElement('span');
+    statusLabel.className = 'model-card-status model-card-status--connected';
+    statusLabel.textContent = '已连接';
+
     titleWrapper.appendChild(title);
     titleWrapper.appendChild(providerLabel);
+    titleWrapper.appendChild(statusLabel);
 
-    header.appendChild(avatar);
     header.appendChild(titleWrapper);
 
     const description = document.createElement('p');
@@ -1099,7 +1110,7 @@ class ModelModule {
 
   onModelRegistryChanged(listener) {
     if (typeof listener !== 'function') {
-      return () => {};
+      return () => { };
     }
 
     this.registryListeners.add(listener);

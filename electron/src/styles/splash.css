@@ -27,11 +27,24 @@
 .logo-icon {
   margin-bottom: 20px;
   animation: logoFloat 2s ease-in-out infinite;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  overflow: hidden;
+  background-color: rgba(59, 130, 246, 0.12);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
 }
 
 .logo-icon svg {
+  width: 64px;
+  height: 64px;
+  transform: scale(0.9);
+  transform-origin: center;
   color: var(--accent-color);
-  filter: drop-shadow(0 4px 8px var(--shadow-light));
+  filter: drop-shadow(0 2px 4px rgba(15, 23, 42, 0.15));
 }
 
 .splash-title {
