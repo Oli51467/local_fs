@@ -434,6 +434,32 @@ class SQLiteManager:
                 }
             return None
 
+    def get_document_by_id(self, document_id: int) -> Optional[Dict]:
+        """根据文档ID获取文档"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, filename, file_path, file_type, file_size,
+                       upload_time, content_hash, total_chunks
+                FROM documents
+                WHERE id = ?
+                LIMIT 1
+            """, (document_id,))
+
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'id': row[0],
+                    'filename': row[1],
+                    'file_path': row[2],
+                    'file_type': row[3],
+                    'file_size': row[4],
+                    'upload_time': row[5],
+                    'file_hash': row[6],
+                    'total_chunks': row[7]
+                }
+            return None
+
     def get_documents_by_paths(self, file_paths: List[str]) -> List[str]:
         """批量根据文件路径获取已存在的文档路径"""
         if not file_paths:

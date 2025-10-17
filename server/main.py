@@ -79,6 +79,7 @@ async def lifespan(app: FastAPI):
         image_faiss_instance,
         bm25s_service_instance,
         reranker_service_instance,
+        sqlite_instance,
     )
     
     # 初始化文档API

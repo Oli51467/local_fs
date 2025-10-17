@@ -12,6 +12,7 @@ import logging
 from service.reranker_service import RerankerService
 from service.bm25s_service import BM25SService
 from config.config import ServerConfig
+from service.sqlite_service import SQLiteManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/faiss", tags=["faiss"])
@@ -22,6 +23,7 @@ image_faiss_manager = None
 embedding_service = None
 reranker_service = None
 bm25s_service = None
+sqlite_manager = None
 
 TEXT_DENSE_RECALL_MULTIPLIER = 10
 TEXT_DENSE_RECALL_MIN = 120
@@ -37,11 +39,20 @@ TEXT_RERANK_MAX = 150
 
 TEXT_MIN_COMPONENT_SCORE = 0.4
 TEXT_MIN_FINAL_SCORE = 0.45
+TEXT_STRONG_RERANK_THRESHOLD = 0.55
+TEXT_STRONG_DENSE_THRESHOLD = 0.6
+TEXT_STRONG_LEXICAL_THRESHOLD = 0.5
+TEXT_STRONG_CLIP_THRESHOLD = 0.58
+TEXT_STRONG_FINAL_THRESHOLD = 0.62
+TEXT_RELATIVE_KEEP_FACTOR = 0.75
+CLIP_TEXT_TRUNCATE = 512
+CLIP_CANDIDATE_LIMIT = 220
 IMAGE_MIN_FINAL_SCORE = 0.45
 
-FUSION_RERANK_WEIGHT = 0.6
-FUSION_DENSE_WEIGHT = 0.25
+FUSION_RERANK_WEIGHT = 0.45
+FUSION_DENSE_WEIGHT = 0.3
 FUSION_LEXICAL_WEIGHT = 0.15
+FUSION_CLIP_WEIGHT = 0.1
 
 
 def clamp_unit(value: Optional[float]) -> float:
@@ -188,6 +199,18 @@ def build_chunk_key(meta: Dict[str, Any]) -> Tuple:
     return ('chunk_text', file_path, content[:64])
 
 
+def deduplicate_results(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen: Set[Tuple] = set()
+    deduped: List[Dict[str, Any]] = []
+    for entry in entries:
+        key = build_chunk_key(entry)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+    return deduped
+
+
 def search_image_vectors(
     query_text: str,
     top_k: int,
@@ -320,6 +343,7 @@ def search_image_vectors(
         record['source'] = 'image'
         record['sources'] = ['image']
         record['vector_index'] = int(faiss_index)
+        record.setdefault('vector_id', int(faiss_index))
         record['cosine_similarity'] = best_cosine
         record['avg_cosine'] = average_cosine
         record['combined_cosine'] = combined_cosine
@@ -342,6 +366,25 @@ def search_image_vectors(
         }
         record.setdefault('filename', record.get('image_name'))
         record.setdefault('display_name', record.get('image_name'))
+        if sqlite_manager is not None:
+            document_allowed = False
+            doc_id_raw = record.get('document_id')
+            if doc_id_raw is not None:
+                try:
+                    document_allowed = sqlite_manager.get_document_by_id(int(doc_id_raw)) is not None
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.debug("图片结果文档校验失败(ID=%s): %s", doc_id_raw, exc)
+                    document_allowed = False
+            if not document_allowed:
+                candidate_path = record.get('file_path') or record.get('path') or record.get('source_path')
+                if candidate_path:
+                    try:
+                        document_allowed = sqlite_manager.get_document_by_path(str(candidate_path)) is not None
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.debug("图片结果路径校验失败(%s): %s", candidate_path, exc)
+                        document_allowed = False
+            if not document_allowed:
+                continue
         if record['final_score'] < IMAGE_MIN_FINAL_SCORE:
             continue
         matches.append(record)
@@ -356,18 +399,20 @@ def init_faiss_api(
     image_faiss_mgr: ImageFaissManager,
     bm25s_svc: Optional[BM25SService] = None,
     reranker_svc: Optional[RerankerService] = None,
+    sqlite_svc: Optional[SQLiteManager] = None,
 ) -> None:
     """初始化Faiss API"""
 
     if image_faiss_mgr is None:
         raise ValueError("image_faiss_mgr must be provided")
 
-    global faiss_manager, image_faiss_manager, embedding_service, reranker_service, bm25s_service
+    global faiss_manager, image_faiss_manager, embedding_service, reranker_service, bm25s_service, sqlite_manager
     faiss_manager = faiss_mgr
     image_faiss_manager = image_faiss_mgr
     embedding_service = embedding_svc
     reranker_service = reranker_svc
     bm25s_service = bm25s_svc
+    sqlite_manager = sqlite_svc
 
     if reranker_service:
         logger.info("Reranker服务已初始化")
@@ -516,6 +561,133 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
             bm25s_service if bm25s_service is not None and bm25s_service.is_available() else None
         )
         reranker = reranker_service if reranker_service is not None else None
+        sqlite_service = sqlite_manager if sqlite_manager is not None else None
+
+        chunk_cache: Dict[int, Optional[Dict[str, Any]]] = {}
+        document_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+        document_id_cache: Dict[int, Optional[Dict[str, Any]]] = {}
+        meta_cache: Dict[int, Optional[Dict[str, Any]]] = {}
+
+        def get_chunk_record(vector_id: Optional[int]) -> Optional[Dict[str, Any]]:
+            if vector_id is None:
+                return None
+            if vector_id in chunk_cache:
+                return chunk_cache[vector_id]
+            if sqlite_service is None:
+                chunk_cache[vector_id] = None
+                return None
+            try:
+                record = sqlite_service.get_chunk_by_vector_id(int(vector_id))
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("查询向量ID对应的块失败(%s): %s", vector_id, exc)
+                record = None
+            chunk_cache[vector_id] = record
+            return record
+
+        def get_document_record(file_path: str) -> Optional[Dict[str, Any]]:
+            normalized = (file_path or '').strip()
+            if not normalized:
+                return None
+            cached = document_cache.get(normalized)
+            if cached is not None or normalized in document_cache:
+                return cached
+            if sqlite_service is None:
+                document_cache[normalized] = {}
+                return document_cache[normalized]
+            try:
+                document = sqlite_service.get_document_by_path(normalized)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("查询文档路径失败(%s): %s", normalized, exc)
+                document = None
+            document_cache[normalized] = document
+            return document
+
+        def get_document_record_by_id(document_id: Optional[int]) -> Optional[Dict[str, Any]]:
+            if document_id is None:
+                return None
+            if document_id in document_id_cache:
+                return document_id_cache[document_id]
+            if sqlite_service is None:
+                document_id_cache[document_id] = {}
+                return document_id_cache[document_id]
+            try:
+                document = sqlite_service.get_document_by_id(int(document_id))
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("根据ID查询文档失败(%s): %s", document_id, exc)
+                document = None
+            document_id_cache[document_id] = document
+            return document
+
+        def resolve_meta(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            if not meta:
+                return None
+            vector_id_raw = meta.get('vector_id')
+            vector_id_val: Optional[int] = None
+            if vector_id_raw is not None:
+                cache_key = None
+                try:
+                    vector_id_val = int(vector_id_raw)
+                    cache_key = vector_id_val
+                except (TypeError, ValueError):
+                    vector_id_val = None
+                if cache_key is not None and cache_key in meta_cache:
+                    return meta_cache[cache_key]
+
+            data = dict(meta)
+            if sqlite_service is None:
+                if vector_id_val is not None:
+                    meta_cache[vector_id_val] = data
+                return data
+
+            chunk_record = get_chunk_record(vector_id_val)
+            if chunk_record:
+                data['vector_id'] = chunk_record.get('vector_id', vector_id_val)
+                data['document_id'] = chunk_record.get('document_id')
+                data['filename'] = chunk_record.get('filename') or data.get('filename')
+                data['file_path'] = chunk_record.get('file_path') or data.get('file_path')
+                data['chunk_index'] = chunk_record.get('chunk_index')
+                chunk_content = chunk_record.get('content')
+                if chunk_content:
+                    data['chunk_text'] = chunk_content
+                if vector_id_val is not None:
+                    meta_cache[vector_id_val] = data
+                return data
+
+            document_id_raw = data.get('document_id')
+            document_id_val: Optional[int] = None
+            if document_id_raw is not None:
+                try:
+                    document_id_val = int(document_id_raw)
+                except (TypeError, ValueError):
+                    document_id_val = None
+                if document_id_val is not None:
+                    document_record = get_document_record_by_id(document_id_val)
+                    if document_record:
+                        data['document_id'] = document_record.get('id', document_id_val)
+                        data.setdefault('filename', document_record.get('filename'))
+                        data['file_path'] = document_record.get('file_path') or data.get('file_path')
+                        if vector_id_val is not None:
+                            meta_cache[vector_id_val] = data
+                        return data
+
+            file_path = data.get('file_path') or data.get('path')
+            if not file_path:
+                if vector_id_val is not None:
+                    meta_cache[vector_id_val] = None
+                return None
+
+            document_record = get_document_record(str(file_path))
+            if document_record is None:
+                if vector_id_val is not None:
+                    meta_cache[vector_id_val] = None
+                return None
+
+            data.setdefault('document_id', document_record.get('id'))
+            data.setdefault('filename', document_record.get('filename'))
+            data['file_path'] = document_record.get('file_path') or str(file_path)
+            if vector_id_val is not None:
+                meta_cache[vector_id_val] = data
+            return data
 
         def build_result(meta: Dict[str, Any], source: str, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             data = dict(meta) if isinstance(meta, dict) else {}
@@ -560,9 +732,12 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
             lowered = query_text.lower()
 
             for meta in faiss_manager.metadata or []:
-                chunk_text = str(meta.get('chunk_text') or meta.get('text') or '')
-                filename = str(meta.get('filename') or '')
-                file_path = str(meta.get('file_path') or meta.get('path') or '')
+                resolved_meta = resolve_meta(meta)
+                if not resolved_meta:
+                    continue
+                chunk_text = str(resolved_meta.get('chunk_text') or resolved_meta.get('text') or '')
+                filename = str(resolved_meta.get('filename') or '')
+                file_path = str(resolved_meta.get('file_path') or resolved_meta.get('path') or '')
 
                 best_match: Optional[Dict[str, Any]] = None
                 for field_name, candidate in (
@@ -600,7 +775,7 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 if best_match is None or best_match['field'] == 'filename':
                     continue
 
-                key = build_chunk_key(meta)
+                key = build_chunk_key(resolved_meta)
                 if key in seen_exact:
                     continue
                 seen_exact.add(key)
@@ -609,7 +784,7 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 match_preview = build_match_preview(best_match['text'], best_match['position'], match_length)
                 rank = len(exact_results) + 1
                 result = build_result(
-                    meta,
+                    resolved_meta,
                     'exact',
                     {
                         'rank': rank,
@@ -635,23 +810,27 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
         text_candidates: List[Dict[str, Any]] = []
         bm25_used = False
         rerank_used = False
+        clip_used = False
 
-        def collect_text_candidates() -> Tuple[List[Dict[str, Any]], bool, bool]:
+        def collect_text_candidates() -> Tuple[List[Dict[str, Any]], bool, bool, bool]:
             candidate_map: Dict[Tuple, Dict[str, Any]] = {}
 
             def ensure_candidate(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 if not meta:
                     return None
-                key = build_chunk_key(meta)
+                resolved_meta = resolve_meta(meta)
+                if not resolved_meta:
+                    return None
+                key = build_chunk_key(resolved_meta)
                 candidate = candidate_map.get(key)
                 if candidate is not None:
                     return candidate
-                content = get_candidate_content(meta).strip()
+                content = get_candidate_content(resolved_meta).strip()
                 if not content:
                     return None
                 candidate_map[key] = {
                     'key': key,
-                    'meta': dict(meta),
+                    'meta': resolved_meta,
                     'content': content,
                     'sources': set(),
                     'embedding_score': None,
@@ -663,6 +842,9 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                     'dense_rank': None,
                     'lexical_rank': None,
                     'rerank_rank': None,
+                    'clip_score': None,
+                    'clip_norm': None,
+                    'clip_rank': None,
                 }
                 return candidate_map[key]
 
@@ -697,6 +879,7 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                         candidate['embedding_norm'] = normalize_embedding_score(raw_score)
 
             bm25_used_local = False
+            clip_used_local = False
             if bm25_service is not None:
                 lexical_limit = min(
                     max(top_k * TEXT_LEXICAL_RECALL_MULTIPLIER, TEXT_LEXICAL_RECALL_MIN),
@@ -741,7 +924,7 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
 
             candidates = list(candidate_map.values())
             if not candidates:
-                return [], bm25_used_local, False
+                return [], bm25_used_local, False, clip_used_local
 
             if bm25_service is not None:
                 corpus = [candidate['content'] for candidate in candidates]
@@ -762,10 +945,58 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                             candidate['bm25_raw'] = raw_val
                             candidate['bm25_norm'] = normalize_bm25_score(raw_val)
 
+            clip_service = None
+            try:
+                clip_service = get_clip_embedding_service()
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.debug("CLIP服务不可用，跳过文本CLIP打分: %s", exc)
+
+            if clip_service is not None and candidates:
+                try:
+                    query_clip_vectors = clip_service.encode_texts([query_text[:CLIP_TEXT_TRUNCATE]])
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.debug("CLIP查询向量生成失败: %s", exc)
+                    query_clip_vectors = []
+
+                if query_clip_vectors:
+                    query_clip_vec = np.asarray(query_clip_vectors[0], dtype=np.float32)
+                    clip_payload: List[Tuple[int, str]] = []
+                    for idx, candidate in enumerate(candidates[:CLIP_CANDIDATE_LIMIT]):
+                        content = candidate.get('content') or ''
+                        trimmed = str(content).strip()
+                        if not trimmed:
+                            continue
+                        clip_payload.append((idx, trimmed[:CLIP_TEXT_TRUNCATE]))
+
+                    if clip_payload:
+                        try:
+                            clip_texts = [text for _, text in clip_payload]
+                            clip_vectors = clip_service.encode_texts(clip_texts)
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.debug("CLIP候选向量生成失败: %s", exc)
+                            clip_vectors = []
+
+                        if clip_vectors:
+                            doc_matrix = np.asarray(clip_vectors, dtype=np.float32)
+                            if doc_matrix.ndim == 1:
+                                doc_matrix = doc_matrix.reshape(1, -1)
+                            if doc_matrix.size and doc_matrix.shape[1] == query_clip_vec.shape[0]:
+                                scores = doc_matrix @ query_clip_vec
+                                clip_used_local = True
+                                for order, (candidate_idx, _) in enumerate(clip_payload):
+                                    candidate = candidates[candidate_idx]
+                                    score = float(scores[order])
+                                    normalized = clamp_unit((score + 1.0) / 2.0)
+                                    candidate['clip_score'] = score
+                                    candidate['clip_norm'] = normalized
+                                    candidate['clip_rank'] = order + 1
+                                    candidate['sources'].add('clip')
+
             for candidate in candidates:
                 emb_norm = candidate.get('embedding_norm') or 0.0
                 bm_norm = candidate.get('bm25_norm') or 0.0
-                candidate['pre_score'] = emb_norm + bm_norm
+                clip_norm = candidate.get('clip_norm') or 0.0
+                candidate['pre_score'] = emb_norm + bm_norm + clip_norm
 
             rerank_used_local = False
             if reranker is not None and candidates:
@@ -821,6 +1052,7 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 emb_norm = candidate.get('embedding_norm')
                 bm_norm = candidate.get('bm25_norm')
                 rerank_norm = candidate.get('rerank_norm')
+                clip_norm = candidate.get('clip_norm')
                 if emb_norm is not None:
                     breakdown['dense'] = emb_norm
                     candidate['sources'].add('dense')
@@ -828,6 +1060,8 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                     breakdown['lexical'] = bm_norm
                 if rerank_norm is not None:
                     breakdown['reranker'] = rerank_norm
+                if clip_norm is not None:
+                    breakdown['clip'] = clip_norm
 
                 weights: Dict[str, float] = {}
                 if 'dense' in breakdown and embedding_weight > 0:
@@ -836,6 +1070,8 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                     weights['lexical'] = bm25_weight
                 if 'reranker' in breakdown and rerank_weight > 0:
                     weights['reranker'] = rerank_weight
+                if 'clip' in breakdown and FUSION_CLIP_WEIGHT > 0:
+                    weights['clip'] = FUSION_CLIP_WEIGHT
 
                 if not weights:
                     final_score = breakdown.get('dense')
@@ -867,10 +1103,10 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 ),
                 reverse=True,
             )
-            return candidates, bm25_used_local, rerank_used_local
+            return candidates, bm25_used_local, rerank_used_local, clip_used_local
 
         if not perfect_exact_matches:
-            text_candidates, bm25_used, rerank_used = collect_text_candidates()
+            text_candidates, bm25_used, rerank_used, clip_used = collect_text_candidates()
 
         def serialize_candidate(candidate: Dict[str, Any], rank: int) -> Dict[str, Any]:
             sources = sorted(candidate.get('sources') or [])
@@ -887,6 +1123,9 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                     'bm25s_score': candidate.get('bm25_norm'),
                     'rerank_score': candidate.get('rerank_raw'),
                     'rerank_score_normalized': candidate.get('rerank_norm'),
+                    'clip_score': candidate.get('clip_score'),
+                    'clip_score_normalized': candidate.get('clip_norm'),
+                    'clip_rank': candidate.get('clip_rank'),
                     'mixed_score': candidate.get('final_score'),
                     'quality_score': candidate.get('final_score'),
                     'final_score': candidate.get('final_score'),
@@ -910,26 +1149,103 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 'dense_rank': candidate.get('dense_rank'),
                 'lexical_rank': candidate.get('lexical_rank'),
                 'rerank_rank': candidate.get('rerank_rank'),
+                'clip_score': candidate.get('clip_score'),
+                'clip_score_normalized': candidate.get('clip_norm'),
+                'clip_rank': candidate.get('clip_rank'),
             }
             result.setdefault('metrics', {})
             result['metrics']['semantic'] = metrics
             return result
 
         def _candidate_passes(candidate: Dict[str, Any]) -> bool:
-            components = [
-                candidate.get('embedding_norm'),
-                candidate.get('bm25_norm'),
-                candidate.get('rerank_norm'),
-            ]
-            for comp in components:
-                if comp is not None and comp < TEXT_MIN_COMPONENT_SCORE:
-                    return False
-            return (candidate.get('final_score') or 0.0) >= TEXT_MIN_FINAL_SCORE
+            emb_norm = candidate.get('embedding_norm')
+            bm_norm = candidate.get('bm25_norm')
+            rerank_norm = candidate.get('rerank_norm')
+            clip_norm = candidate.get('clip_norm')
+
+            components = [comp for comp in (emb_norm, bm_norm, rerank_norm, clip_norm) if comp is not None]
+            if not components:
+                return False
+
+            if max(components) < TEXT_MIN_COMPONENT_SCORE:
+                return False
+
+            final_score = candidate.get('final_score') or 0.0
+            if final_score < TEXT_MIN_FINAL_SCORE:
+                return False
+
+            rerank_ok = rerank_norm is not None and rerank_norm >= TEXT_MIN_COMPONENT_SCORE
+            clip_ok = clip_norm is not None and clip_norm >= TEXT_MIN_COMPONENT_SCORE
+            dense_ok = emb_norm is not None and emb_norm >= TEXT_MIN_COMPONENT_SCORE
+            lexical_ok = bm_norm is not None and bm_norm >= TEXT_MIN_COMPONENT_SCORE
+
+            if rerank_ok or clip_ok:
+                return True
+            if dense_ok and lexical_ok:
+                return True
+            return False
+
+        def _is_strong_candidate(candidate: Dict[str, Any]) -> bool:
+            rerank_norm = candidate.get('rerank_norm') or 0.0
+            clip_norm = candidate.get('clip_norm') or 0.0
+            emb_norm = candidate.get('embedding_norm') or 0.0
+            bm_norm = candidate.get('bm25_norm') or 0.0
+            final_score = candidate.get('final_score') or 0.0
+            return (
+                rerank_norm >= TEXT_STRONG_RERANK_THRESHOLD
+                or clip_norm >= TEXT_STRONG_CLIP_THRESHOLD
+                or (emb_norm >= TEXT_STRONG_DENSE_THRESHOLD and bm_norm >= TEXT_STRONG_LEXICAL_THRESHOLD)
+                or final_score >= TEXT_STRONG_FINAL_THRESHOLD
+            )
+
+        def _is_confident_candidate(candidate: Dict[str, Any]) -> bool:
+            rerank_norm = candidate.get('rerank_norm') or 0.0
+            clip_norm = candidate.get('clip_norm') or 0.0
+            emb_norm = candidate.get('embedding_norm') or 0.0
+            bm_norm = candidate.get('bm25_norm') or 0.0
+            final_score = candidate.get('final_score') or 0.0
+
+            rerank_confident = rerank_norm >= (TEXT_STRONG_RERANK_THRESHOLD * 0.9)
+            clip_confident = clip_norm >= (TEXT_STRONG_CLIP_THRESHOLD * 0.9)
+            dense_confident = emb_norm >= TEXT_STRONG_DENSE_THRESHOLD
+            lexical_confident = bm_norm >= (TEXT_STRONG_LEXICAL_THRESHOLD * 0.9)
+            final_confident = final_score >= TEXT_STRONG_FINAL_THRESHOLD
+
+            return (
+                rerank_confident
+                or clip_confident
+                or (dense_confident and lexical_confident)
+                or final_confident
+            )
 
         filtered_candidates = [candidate for candidate in text_candidates if _candidate_passes(candidate)]
 
-        for idx, candidate in enumerate(filtered_candidates[:top_k], start=1):
-            semantic_results.append(serialize_candidate(candidate, idx))
+        if filtered_candidates:
+            top_candidate = filtered_candidates[0]
+            if _is_strong_candidate(top_candidate):
+                relative_cutoff = max(
+                    TEXT_MIN_FINAL_SCORE,
+                    (top_candidate.get('final_score') or 0.0) * TEXT_RELATIVE_KEEP_FACTOR,
+                )
+                confident_candidates = [
+                    candidate for candidate in filtered_candidates
+                    if (candidate.get('final_score') or 0.0) >= relative_cutoff and _is_confident_candidate(candidate)
+                ]
+                if not confident_candidates:
+                    confident_candidates = [top_candidate]
+                filtered_candidates = confident_candidates
+            else:
+                filtered_candidates = []
+
+        selected_candidates = filtered_candidates[:top_k]
+        seen_semantic_keys: Set[Tuple] = set()
+        for candidate in selected_candidates:
+            key = build_chunk_key(candidate.get('meta', {}))
+            if key in seen_semantic_keys:
+                continue
+            rank = len(semantic_results) + 1
+            semantic_results.append(serialize_candidate(candidate, rank))
+            seen_semantic_keys.add(key)
 
         combined_results: List[Dict[str, Any]] = []
         for item in exact_results:
@@ -943,6 +1259,7 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
 
         image_threshold = 0.3
         image_results = search_image_vectors(query_text, top_k, threshold=image_threshold)
+        image_results = deduplicate_results(image_results)
         for image_entry in image_results:
             combined_results.append(image_entry)
 
@@ -967,6 +1284,7 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 'results': semantic_results,
                 'bm25s_performed': bm25_used,
                 'rerank_performed': rerank_used,
+                'clip_performed': clip_used,
             },
             'combined': {
                 'total': len(combined_results),
