@@ -162,25 +162,30 @@ function initializeModules(appPaths) {
 let modules = null;
 let appPaths = null;
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   appPaths = resolveAppPaths();
   process.env.FS_APP_EXTERNAL_ROOT = appPaths.externalRoot;
   process.env.FS_APP_DATA_DIR = appPaths.dataRoot;
   process.env.FS_APP_META_DIR = appPaths.metaRoot;
   process.env.FS_APP_API_HOST = process.env.FS_APP_API_HOST || '127.0.0.1';
 
-  // 创建主窗口
-  createWindow();
-  
   // 初始化所有功能模块
   modules = initializeModules(appPaths);
+
+  // 创建主窗口，确保欢迎页尽快显示
+  createWindow();
   
   // 启动Python后端
-  modules.pythonBackendModule
-    .startPythonBackend()
-    .catch((error) => {
-      console.error('Failed to start Python backend:', error);
-    });
+  let backendReady = false;
+  try {
+    backendReady = await modules.pythonBackendModule.startPythonBackend();
+  } catch (error) {
+    console.error('Failed to start Python backend:', error);
+  }
+
+  if (!backendReady) {
+    console.warn('Python backend did not report ready; continuing to launch UI for diagnostics.');
+  }
 });
 
 // 应用退出时的清理工作 

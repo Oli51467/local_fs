@@ -5,6 +5,8 @@ const net = require('net');
 const { spawn, execFile, exec } = require('child_process');
 const { app, dialog } = require('electron');
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 class PythonBackendModule {
   constructor(appPaths) {
     this.pythonProcess = null;
@@ -86,6 +88,43 @@ class PythonBackendModule {
     });
   }
 
+  async waitForBackendReady({ timeoutMs = 30000, intervalMs = 500 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await this.isBackendResponsive(this.apiPort, this.apiHost)) {
+        return true;
+      }
+      await delay(intervalMs);
+    }
+    return false;
+  }
+
+  attachProcessListeners(processHandle) {
+    if (!processHandle) {
+      return;
+    }
+
+    if (processHandle.stdout) {
+      processHandle.stdout.on('data', (data) => {
+        console.log(`Python stdout: ${data}`);
+      });
+    }
+
+    if (processHandle.stderr) {
+      processHandle.stderr.on('data', (data) => {
+        console.error(`Python stderr: ${data}`);
+      });
+    }
+
+    processHandle.on('close', (code) => {
+      console.log(`Python process exited with code ${code}`);
+    });
+
+    processHandle.on('error', (error) => {
+      console.error('Python backend process error:', error);
+    });
+  }
+
   async startPythonBackend() {
     const runtimePaths = this.getRuntimePaths();
     this.apiPort = this.getApiPort();
@@ -95,7 +134,7 @@ class PythonBackendModule {
     if (await this.isBackendResponsive(this.apiPort, this.apiHost)) {
       console.log('Python backend already running, reusing existing instance.');
       this.reusedBackend = true;
-      return;
+      return true;
     }
 
     const portAvailable = await this.isPortAvailable(this.apiPort, this.apiHost);
@@ -104,7 +143,7 @@ class PythonBackendModule {
       console.error(message);
       dialog.showErrorBox('Python 后端启动失败', message);
       this.reusedBackend = false;
-      return;
+      return false;
     }
 
     const packagedBackend = process.platform === 'win32'
@@ -135,7 +174,8 @@ class PythonBackendModule {
 
       if (!fs.existsSync(backendEntry)) {
         console.error(`无法找到Python后端入口文件: ${backendEntry}`);
-        return;
+        dialog.showErrorBox('Python 后端启动失败', '未找到后端入口文件，无法启动Python服务。');
+        return false;
       }
 
       const env = {
@@ -147,23 +187,32 @@ class PythonBackendModule {
         FS_APP_API_HOST: this.apiHost,
       };
 
-      this.pythonProcess = spawn(pythonPath, [backendEntry], {
-        cwd: path.join(__dirname, '..', '..', '..', 'server'),
-        env,
-      });
+      try {
+        this.pythonProcess = spawn(pythonPath, [backendEntry], {
+          cwd: path.join(__dirname, '..', '..', '..', 'server'),
+          env,
+        });
+      } catch (error) {
+        console.error('启动Python后端进程失败:', error);
+        dialog.showErrorBox('Python 后端启动失败', '无法启动Python解释器，请检查Python环境配置。');
+        return false;
+      }
     }
-    
-    this.pythonProcess.stdout.on('data', (data) => {
-      console.log(`Python stdout: ${data}`);
-    });
-    
-    this.pythonProcess.stderr.on('data', (data) => {
-      console.error(`Python stderr: ${data}`);
-    });
-    
-    this.pythonProcess.on('close', (code) => {
-      console.log(`Python process exited with code ${code}`);
-    });
+
+    this.reusedBackend = false;
+    this.attachProcessListeners(this.pythonProcess);
+
+    const backendReady = await this.waitForBackendReady();
+    if (!backendReady) {
+      const message = 'Python 后端未能在预期时间内启动，请检查日志后重试。';
+      console.error(message);
+      this.stopPythonBackend();
+      dialog.showErrorBox('Python 后端启动超时', message);
+      return false;
+    }
+
+    console.log('Python backend is ready.');
+    return true;
   }
 
   stopPythonBackend() {

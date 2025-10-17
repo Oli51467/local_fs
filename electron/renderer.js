@@ -345,15 +345,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 // 创建重命名输入框
 // 连接Python后端API
 async function testPythonBackend() {
-  try {
-    const response = await fetch('http://127.0.0.1:8000/api/health/ready');
-    const data = await response.json();
-    console.log('Python后端健康检查:', data);
-    return data;
-  } catch (error) {
-    console.error('无法连接到Python后端:', error);
-    return null;
+  if (splashScreen && splashScreen.isReady) {
+    return { ready: true };
   }
+
+  return new Promise((resolve) => {
+    let timeout;
+    const handleReady = (event) => {
+      clearTimeout(timeout);
+      resolve(event?.detail || { ready: true });
+    };
+
+    timeout = setTimeout(() => {
+      document.removeEventListener('appReady', handleReady);
+      resolve(null);
+    }, 60000);
+
+    document.addEventListener('appReady', handleReady, { once: true });
+  });
 }
 
 // 在初始化时测试Python后端连接

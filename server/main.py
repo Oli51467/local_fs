@@ -13,6 +13,7 @@ from api.faiss_api import router as faiss_router, init_faiss_api
 from api.cleanup_api import router as cleanup_router
 from api.model_api import router as model_router
 from api.config_api import router as config_router
+from api.status_api import router as status_router, status_broadcaster
 from service.sqlite_service import SQLiteManager
 from service.faiss_service import FaissManager
 from service.image_faiss_service import ImageFaissManager
@@ -39,6 +40,15 @@ async def lifespan(app: FastAPI):
     global sqlite_instance, faiss_instance, embedding_instance, app_ready, init_message
     
     logger.info("正在初始化系统...")
+    app_ready = False
+    init_message = "正在启动系统..."
+    await status_broadcaster.broadcast(
+        {
+            "ready": app_ready,
+            "message": init_message,
+            "status": "initializing",
+        }
+    )
 
     # Ensure model directories exist even if the meta folder was removed
     model_manager = get_model_manager()
@@ -98,11 +108,27 @@ async def lifespan(app: FastAPI):
     logger.info("系统初始化完成")
     app_ready = True
     init_message = "系统初始化完成"
+    await status_broadcaster.broadcast(
+        {
+            "ready": app_ready,
+            "message": init_message,
+            "status": "ready",
+        }
+    )
     
     yield
     
     # 关闭时清理
     logger.info("正在关闭系统...")
+    app_ready = False
+    shutdown_message = "系统正在关闭..."
+    await status_broadcaster.broadcast(
+        {
+            "ready": app_ready,
+            "message": shutdown_message,
+            "status": "stopping",
+        }
+    )
 
 app = FastAPI(
     title="文档管理系统API",
@@ -129,6 +155,7 @@ app.include_router(cleanup_router)
 app.include_router(model_router)
 app.include_router(config_router)
 app.include_router(chat_router)
+app.include_router(status_router)
 
 @app.get("/")
 async def root():

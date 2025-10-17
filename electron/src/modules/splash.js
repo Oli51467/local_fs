@@ -8,10 +8,17 @@ class SplashScreen {
     this.appElement = null;
     this.loadingText = null;
     this.isReady = false;
-    this.checkInterval = null;
-    this.minDisplayTime = 2000; // 最小显示时间2秒
+    this.minDisplayTime = 2000; // 最小显示时间 2 秒
     this.startTime = Date.now();
-    
+    this.latestStatus = null;
+    this.backendConnected = false;
+
+    this.statusSocket = null;
+    this.statusReconnectTimer = null;
+    this.shouldReconnect = true;
+    this.reconnectDelay = 2000;
+    this.baseApiUrl = 'http://localhost:8000';
+
     this.init();
   }
 
@@ -22,55 +29,112 @@ class SplashScreen {
     this.splashElement = document.getElementById('splash-screen');
     this.appElement = document.getElementById('app');
     this.loadingText = document.querySelector('.loading-text');
-    
+
     if (!this.splashElement || !this.appElement) {
       console.error('启动页面元素未找到');
       return;
     }
 
-    // 开始检查后端状态
-    this.startBackendCheck();
-    
-    // 监听深色模式切换
+    this.updateLoadingText('等待服务启动...');
+
+    this.startBackendStatusStream();
     this.setupThemeListener();
   }
 
   /**
-   * 开始检查后端准备状态
+   * 开始监听后端状态
    */
-  startBackendCheck() {
-    this.updateLoadingText('正在启动服务...');
-    
-    // 立即检查一次
-    this.checkBackendStatus();
-    
-    // 设置定期检查 - 降低轮询频率减少服务器负载
-    this.checkInterval = setInterval(() => {
-      this.checkBackendStatus();
-    }, 2000);
+  startBackendStatusStream() {
+    this.shouldReconnect = true;
+    this.connectStatusSocket();
   }
 
   /**
-   * 检查后端状态
+   * 连接后端状态 WebSocket
    */
-  async checkBackendStatus() {
-    try {
-      const response = await fetch('http://localhost:8000/api/health/ready', {
-        method: 'GET',
-        timeout: 1000
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        if (data.ready) {
-          this.onBackendReady();
-        } else {
-          this.updateLoadingText(data.message || '正在初始化系统...');
-        }
+  connectStatusSocket() {
+    if (!this.shouldReconnect) {
+      return;
+    }
+
+    this.clearReconnectTimer();
+
+    if (this.statusSocket) {
+      try {
+        this.statusSocket.close();
+      } catch (error) {
+        console.warn('关闭旧的后端状态连接失败:', error);
       }
+      this.statusSocket = null;
+    }
+
+    const websocketUrl = this.baseApiUrl.replace(/^http/, 'ws') + '/ws/status';
+
+    try {
+      this.statusSocket = new WebSocket(websocketUrl);
     } catch (error) {
-      // 后端还未启动，继续等待
-      console.log('等待后端启动...', error.message);
+      console.error('创建后端状态 WebSocket 失败:', error);
+      this.scheduleReconnect();
+      return;
+    }
+
+    this.statusSocket.addEventListener('open', () => {
+      this.backendConnected = true;
+      if (!this.isReady) {
+        this.updateLoadingText('后端已连接，等待状态更新...');
+      }
+      console.log('后端状态 WebSocket 已连接');
+    });
+
+    this.statusSocket.addEventListener('message', (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        this.handleBackendStatus(payload);
+      } catch (error) {
+        console.error('解析后端状态数据失败:', error);
+      }
+    });
+
+    this.statusSocket.addEventListener('close', () => {
+      console.log('后端状态 WebSocket 已关闭');
+      this.statusSocket = null;
+      this.backendConnected = false;
+      if (!this.isReady) {
+        this.updateLoadingText('等待服务启动...');
+        this.scheduleReconnect();
+      }
+    });
+
+    this.statusSocket.addEventListener('error', (event) => {
+      console.error('后端状态 WebSocket 发生错误:', event);
+      if (this.statusSocket) {
+        try {
+          this.statusSocket.close();
+        } catch (closeError) {
+          console.warn('关闭出错的 WebSocket 失败:', closeError);
+        }
+        this.statusSocket = null;
+      }
+    });
+  }
+
+  /**
+   * 处理后端推送的状态
+   */
+  handleBackendStatus(payload) {
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+
+    this.latestStatus = payload;
+    document.dispatchEvent(new CustomEvent('backendStatus', { detail: payload }));
+
+    if (payload.message) {
+      this.updateLoadingText(payload.message);
+    }
+
+    if (payload.ready) {
+      this.onBackendReady();
     }
   }
 
@@ -78,21 +142,16 @@ class SplashScreen {
    * 后端准备就绪时的处理
    */
   onBackendReady() {
-    if (this.isReady) return;
-    
-    this.isReady = true;
-    this.updateLoadingText('系统初始化完成');
-    
-    // 清除检查定时器
-    if (this.checkInterval) {
-      clearInterval(this.checkInterval);
-      this.checkInterval = null;
+    if (this.isReady) {
+      return;
     }
 
-    // 确保最小显示时间
+    this.isReady = true;
+    this.updateLoadingText('系统初始化完成');
+
     const elapsedTime = Date.now() - this.startTime;
     const remainingTime = Math.max(0, this.minDisplayTime - elapsedTime);
-    
+
     setTimeout(() => {
       this.hideSplashScreen();
     }, remainingTime);
@@ -102,28 +161,25 @@ class SplashScreen {
    * 隐藏启动页面，显示主应用
    */
   hideSplashScreen() {
-    if (!this.splashElement || !this.appElement) return;
-    
-    // 添加淡出动画
+    if (!this.splashElement || !this.appElement) {
+      return;
+    }
+
     this.splashElement.classList.add('fade-out');
-    
-    // 预先设置主应用样式为淡入准备状态
+
     this.appElement.style.display = 'flex';
     this.appElement.style.opacity = '0';
     this.appElement.style.transform = 'translateY(20px)';
     this.appElement.style.transition = 'opacity 0.6s ease-out, transform 0.6s ease-out';
-    
-    // 启动页面淡出完成后开始主应用淡入
+
     setTimeout(() => {
       this.splashElement.style.display = 'none';
-      
-      // 触发主应用淡入动画
+
       requestAnimationFrame(() => {
         this.appElement.style.opacity = '1';
         this.appElement.style.transform = 'translateY(0)';
       });
-      
-      // 动画完成后清理样式并触发应用初始化事件
+
       setTimeout(() => {
         this.appElement.style.transition = '';
         this.triggerAppReady();
@@ -141,14 +197,37 @@ class SplashScreen {
   }
 
   /**
+   * 安排重连
+   */
+  scheduleReconnect() {
+    if (this.statusReconnectTimer || !this.shouldReconnect) {
+      return;
+    }
+
+    this.statusReconnectTimer = setTimeout(() => {
+      this.statusReconnectTimer = null;
+      this.connectStatusSocket();
+    }, this.reconnectDelay);
+  }
+
+  /**
+   * 清除重连定时器
+   */
+  clearReconnectTimer() {
+    if (this.statusReconnectTimer) {
+      clearTimeout(this.statusReconnectTimer);
+      this.statusReconnectTimer = null;
+    }
+  }
+
+  /**
    * 设置主题监听器
    */
   setupThemeListener() {
-    // 监听深色模式切换
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
-          // 主题已切换，无需特殊处理，CSS变量会自动应用
+          // 主题变化由 CSS 变量自动处理
         }
       });
     });
@@ -163,14 +242,13 @@ class SplashScreen {
    * 触发应用准备就绪事件
    */
   triggerAppReady() {
-    // 派发自定义事件，通知其他模块应用已准备就绪
     const event = new CustomEvent('appReady', {
       detail: {
         timestamp: Date.now(),
         loadTime: Date.now() - this.startTime
       }
     });
-    
+
     document.dispatchEvent(event);
     console.log('应用启动完成，加载时间:', Date.now() - this.startTime, 'ms');
   }
@@ -189,7 +267,8 @@ class SplashScreen {
     return {
       isReady: this.isReady,
       elapsedTime: Date.now() - this.startTime,
-      isVisible: this.splashElement && this.splashElement.style.display !== 'none'
+      isVisible: this.splashElement && this.splashElement.style.display !== 'none',
+      latestStatus: this.latestStatus
     };
   }
 
@@ -197,14 +276,20 @@ class SplashScreen {
    * 销毁启动页面实例
    */
   destroy() {
-    if (this.checkInterval) {
-      clearInterval(this.checkInterval);
-      this.checkInterval = null;
+    this.shouldReconnect = false;
+    this.clearReconnectTimer();
+
+    if (this.statusSocket) {
+      try {
+        this.statusSocket.close();
+      } catch (error) {
+        console.warn('销毁启动页面时关闭 WebSocket 失败:', error);
+      }
+      this.statusSocket = null;
     }
   }
 }
 
-// 导出启动页面类
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = SplashScreen;
 } else {

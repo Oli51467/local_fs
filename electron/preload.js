@@ -1,5 +1,18 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+function safeRequire(moduleId) {
+  try {
+    // eslint-disable-next-line global-require, import/no-dynamic-require
+    return require(moduleId);
+  } catch (error) {
+    console.warn(`Optional dependency "${moduleId}" failed to load:`, error.message);
+    return null;
+  }
+}
+
+const hljs = safeRequire('highlight.js/lib/common');
+const xml2js = safeRequire('xml2js');
+
 contextBridge.exposeInMainWorld('fsAPI', {
   // 文件树相关
   getFileTree: () => ipcRenderer.invoke('get-file-tree'),
@@ -65,3 +78,29 @@ contextBridge.exposeInMainWorld('fsAPI', {
   selectFiles: () => ipcRenderer.invoke('select-files'),
   importFiles: (targetPath, filePaths) => ipcRenderer.invoke('import-files', targetPath, filePaths)
 });
+
+if (hljs) {
+  contextBridge.exposeInMainWorld('hljs', hljs);
+} else {
+  contextBridge.exposeInMainWorld('hljs', null);
+}
+
+if (xml2js) {
+  contextBridge.exposeInMainWorld('xml2js', {
+    Parser: xml2js.Parser,
+    Builder: xml2js.Builder,
+    defaults: xml2js.defaults,
+    processors: xml2js.processors,
+    parseString: (xml, options, callback) => {
+      if (typeof options === 'function') {
+        callback = options;
+        options = undefined;
+      }
+      const parser = new xml2js.Parser(options);
+      parser.parseString(xml, callback);
+    },
+    parseStringPromise: (xml, options) => xml2js.parseStringPromise(xml, options || {})
+  });
+} else {
+  contextBridge.exposeInMainWorld('xml2js', null);
+}

@@ -32,6 +32,7 @@ from service.pptx_extraction_service import (
 )
 from uuid import uuid4
 from config.config import ServerConfig, DatabaseConfig
+from api.status_api import status_broadcaster
 from model.document_request_model import (
     FileUploadRequest,
     FileUploadResponse
@@ -94,6 +95,7 @@ class PdfParseResponse(BaseModel):
     task_id: Optional[str] = None
     progress: Optional[float] = None
     stage: Optional[str] = None
+    file_path: Optional[str] = None
 
 
 class FolderUploadStatusRequest(BaseModel):
@@ -152,6 +154,7 @@ _pdf_parse_lock = threading.Lock()
 def _create_pdf_task(task_id: str, data: Dict[str, Any]) -> None:
     with _pdf_parse_lock:
         _pdf_parse_tasks[task_id] = data
+    _broadcast_pdf_task_state(task_id)
 
 
 def _update_pdf_task(task_id: str, **kwargs: Any) -> None:
@@ -160,12 +163,115 @@ def _update_pdf_task(task_id: str, **kwargs: Any) -> None:
         if not task:
             return
         task.update(kwargs)
+    _broadcast_pdf_task_state(task_id)
 
 
 def _get_pdf_task(task_id: str) -> Optional[Dict[str, Any]]:
     with _pdf_parse_lock:
         task = _pdf_parse_tasks.get(task_id)
         return dict(task) if task else None
+
+
+def _clamp_progress(value: float) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _schedule_status_broadcast(payload: Dict[str, Any], keep_latest: bool = True) -> None:
+    """Safely broadcast status payloads from sync contexts without blocking."""
+    async def _send() -> None:
+        try:
+            await status_broadcaster.broadcast(payload, keep_latest=keep_latest)
+        except Exception:
+            logger.debug("广播状态信息失败", exc_info=True)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        loop.create_task(_send())
+        return
+
+    try:
+        asyncio.run(_send())
+    except RuntimeError:
+        new_loop = asyncio.new_event_loop()
+        try:
+            new_loop.run_until_complete(_send())
+        finally:
+            new_loop.close()
+
+
+def _broadcast_pdf_task_state(task_id: str) -> None:
+    with _pdf_parse_lock:
+        task = _pdf_parse_tasks.get(task_id)
+        if not task:
+            return
+        snapshot = dict(task)
+
+    snapshot["progress"] = _clamp_progress(snapshot.get("progress", 0.0))
+    payload = {
+        "event": "pdf_parse",
+        "task_id": task_id,
+        **snapshot,
+    }
+    _schedule_status_broadcast(payload, keep_latest=False)
+
+
+async def _broadcast_document_progress(
+    file_path: Optional[str],
+    stage: str,
+    message: str,
+    progress: float,
+    status: str = "running",
+    **extra: Any
+) -> None:
+    if not file_path:
+        return
+
+    payload = {
+        "event": "document_upload",
+        "file_path": file_path,
+        "stage": stage,
+        "message": message,
+        "progress": _clamp_progress(progress),
+        "status": status,
+        **extra,
+    }
+
+    try:
+        await status_broadcaster.broadcast(payload, keep_latest=False)
+    except Exception:
+        logger.debug("广播文档上传进度失败", exc_info=True)
+
+
+async def _broadcast_folder_progress(
+    operation: str,
+    folder_path: Optional[str],
+    status: str,
+    progress: float,
+    **extra: Any
+) -> None:
+    if not folder_path:
+        return
+
+    payload = {
+        "event": "folder_operation",
+        "operation": operation,
+        "folder_path": folder_path,
+        "status": status,
+        "progress": _clamp_progress(progress),
+        **extra,
+    }
+
+    try:
+        await status_broadcaster.broadcast(payload, keep_latest=False)
+    except Exception:
+        logger.debug("广播文件夹操作进度失败", exc_info=True)
 
 
 def read_text_file_with_fallback(file_path: pathlib.Path) -> str:
@@ -507,16 +613,34 @@ def build_pdf_markdown_output_path(pdf_path: pathlib.Path) -> pathlib.Path:
 
 def _run_pdf_parse_task(task_id: str, pdf_path: pathlib.Path) -> None:
     project_root = ServerConfig.PROJECT_ROOT.resolve()
+    try:
+        relative_pdf_path = str(pdf_path.resolve().relative_to(project_root))
+    except ValueError:
+        relative_pdf_path = str(pdf_path)
 
     def progress_callback(value: float, stage: str) -> None:
         try:
             clamped = max(0.0, min(1.0, float(value)))
         except Exception:  # pylint: disable=broad-except
             clamped = 0.0
-        _update_pdf_task(task_id, progress=clamped, stage=stage, message=stage)
+        _update_pdf_task(
+            task_id,
+            progress=clamped,
+            stage=stage,
+            message=stage,
+            status='processing',
+            file_path=relative_pdf_path
+        )
 
     try:
-        _update_pdf_task(task_id, status='processing', stage='准备解析', progress=0.01, message='准备解析')
+        _update_pdf_task(
+            task_id,
+            status='processing',
+            stage='准备解析',
+            progress=0.01,
+            message='准备解析',
+            file_path=relative_pdf_path
+        )
         output_path = build_pdf_markdown_output_path(pdf_path)
         generate_pdf_markdown(
             pdf_path,
@@ -537,8 +661,9 @@ def _run_pdf_parse_task(task_id: str, pdf_path: pathlib.Path) -> None:
             message='PDF解析成功',
             stage='解析完成',
             progress=1.0,
-            markdown_path=None,
-            filename=output_path.name
+            markdown_path=relative_output,
+            filename=output_path.name,
+            file_path=relative_pdf_path
         )
     except PdfExtractionError as exc:
         logger.error("PDF解析失败: %s", exc)
@@ -549,7 +674,8 @@ def _run_pdf_parse_task(task_id: str, pdf_path: pathlib.Path) -> None:
             stage='解析失败',
             progress=1.0,
             markdown_path=None,
-            filename=None
+            filename=None,
+            file_path=relative_pdf_path
         )
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("PDF解析任务异常: %s", exc)
@@ -560,7 +686,8 @@ def _run_pdf_parse_task(task_id: str, pdf_path: pathlib.Path) -> None:
             stage='解析失败',
             progress=1.0,
             markdown_path=None,
-            filename=None
+            filename=None,
+            file_path=relative_pdf_path
         )
 
 
@@ -919,7 +1046,8 @@ def normalize_project_relative_path(path_value: str) -> str:
 async def run_folder_tasks(
     files: List[pathlib.Path],
     operation: Callable[[pathlib.Path], Awaitable[Any]],
-    max_concurrency: int = 8
+    max_concurrency: int = 8,
+    on_progress: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
 ) -> List[Dict[str, Any]]:
     semaphore = asyncio.Semaphore(max(1, min(max_concurrency, len(files))))
     project_root = ServerConfig.PROJECT_ROOT.resolve()
@@ -969,7 +1097,16 @@ async def run_folder_tasks(
                     'success': False
                 }
 
-    tasks = [worker(path) for path in files]
+    async def wrapped_worker(path: pathlib.Path) -> Dict[str, Any]:
+        result = await worker(path)
+        if on_progress:
+            try:
+                await on_progress(result)
+            except Exception:
+                logger.debug("文件夹任务进度回调失败", exc_info=True)
+        return result
+
+    tasks = [wrapped_worker(path) for path in files]
     results = await asyncio.gather(*tasks)
     return results
 
@@ -1075,6 +1212,8 @@ async def upload_document(request: FileUploadRequest):
     Returns:
         上传结果，包括状态、消息和文档信息
     """
+    relative_file_path: Optional[str] = None
+    filename = ""
     try:
         logger.info(f"收到文件上传请求: {request.file_path}")
         
@@ -1091,7 +1230,7 @@ async def upload_document(request: FileUploadRequest):
         
         # 验证文件是否在项目根目录内
         try:
-            file_path.relative_to(project_root)
+            relative_file_path = str(file_path.relative_to(project_root))
         except ValueError:
             raise HTTPException(status_code=400, detail=f"文件必须在项目根目录内: {project_root}")
         
@@ -1099,10 +1238,18 @@ async def upload_document(request: FileUploadRequest):
         filename = file_path.name
         file_type = file_path.suffix.lower().lstrip('.')
         logger.info(f"文件信息: 名称={filename}, 类型={file_type}")
+
+        await _broadcast_document_progress(
+            relative_file_path,
+            stage="准备中",
+            message=f"开始挂载 {filename}",
+            progress=0.05,
+            status="running",
+            absolute_path=str(file_path)
+        )
         
         # 3. 计算文件哈希值检查是否已上传
         file_hash = calculate_file_hash(file_path)
-        relative_file_path = str(file_path.relative_to(project_root))
         
         # 使用新的复合校验逻辑：同时检查文件路径和哈希
         if sqlite_manager:
@@ -1117,6 +1264,14 @@ async def upload_document(request: FileUploadRequest):
                     document_id = existing_doc['id']
                     # 跳过文档插入步骤，继续执行后续步骤
                 else:
+                    await _broadcast_document_progress(
+                        relative_file_path,
+                        stage="已存在",
+                        message="文件已存在，跳过挂载",
+                        progress=1.0,
+                        status="exists",
+                        document_id=existing_doc['id']
+                    )
                     return FileUploadResponse(
                         status="exists",
                         message=f"文件已存在，文档ID: {existing_doc['id']}",
@@ -1141,6 +1296,14 @@ async def upload_document(request: FileUploadRequest):
                     
                     if original_full_path.exists():
                         # 原文件还存在，说明是不同位置的相同文件，拒绝上传
+                        await _broadcast_document_progress(
+                            relative_file_path,
+                            stage="已存在",
+                            message=f"相同内容的文件已存在于: {existing_doc['file_path']}",
+                            progress=1.0,
+                            status="exists",
+                            document_id=existing_doc['id']
+                        )
                         return FileUploadResponse(
                             status="exists",
                             message=f"相同内容的文件已存在于: {existing_doc['file_path']}",
@@ -1164,6 +1327,14 @@ async def upload_document(request: FileUploadRequest):
                         if faiss_manager:
                             faiss_manager.update_metadata_by_path(existing_doc['file_path'], relative_file_path)
                         
+                        await _broadcast_document_progress(
+                            relative_file_path,
+                            stage="已更新",
+                            message=f"文件路径已更新: {existing_doc['file_path']} -> {relative_file_path}",
+                            progress=1.0,
+                            status="updated",
+                            document_id=existing_doc['id']
+                        )
                         return FileUploadResponse(
                             status="updated",
                             message=f"文件路径已更新: {existing_doc['file_path']} -> {relative_file_path}",
@@ -1187,6 +1358,12 @@ async def upload_document(request: FileUploadRequest):
         vector_ids: List[int] = []
         chunk_ids: List[int] = []
         try:
+            await _broadcast_document_progress(
+                relative_file_path,
+                stage="解析内容",
+                message="正在提取文件内容…",
+                progress=0.2
+            )
             text_content, extracted_images, cleanup_paths = extract_text_and_images(file_path, file_type)
 
             is_image_document = file_type in IMAGE_TYPES
@@ -1202,6 +1379,14 @@ async def upload_document(request: FileUploadRequest):
                 raise HTTPException(status_code=400, detail="文件内容为空")
 
             logger.info(f"文本提取完成，长度: {len(text_content)}")
+            await _broadcast_document_progress(
+                relative_file_path,
+                stage="提取完成",
+                message="文件内容提取完成",
+                progress=0.35,
+                text_length=len(text_content),
+                image_candidates=len(extracted_images)
+            )
 
             if not is_image_document:
                 if not text_splitter_service:
@@ -1210,6 +1395,13 @@ async def upload_document(request: FileUploadRequest):
                 chunks = text_splitter_service.split_text(text_content)
                 splitter_info = text_splitter_service.get_splitter_info()
                 logger.info(f"文本分割完成，共 {len(chunks)} 个块，分割器类型: {splitter_info['type']}")
+                await _broadcast_document_progress(
+                    relative_file_path,
+                    stage="分割文本",
+                    message=f"已分割为 {len(chunks)} 个文本块",
+                    progress=0.45,
+                    splitter=splitter_info.get('type')
+                )
 
                 if not chunks:
                     raise HTTPException(status_code=400, detail="文本分割后无有效内容")
@@ -1225,6 +1417,13 @@ async def upload_document(request: FileUploadRequest):
             if 'document_id' in locals():
                 is_reprocessing = True
                 logger.info(f"重新处理文档，文档ID: {document_id}")
+                await _broadcast_document_progress(
+                    relative_file_path,
+                    stage="重新处理",
+                    message="检测到已有记录，正在清理旧数据…",
+                    progress=0.5,
+                    document_id=document_id
+                )
                 # 清理现有的块和向量数据
                 relative_path_str = str(file_path.relative_to(project_root))
 
@@ -1268,22 +1467,60 @@ async def upload_document(request: FileUploadRequest):
                 )
                 logger.info(f"文档已存储到SQLite，文档ID: {document_id}")
 
+            await _broadcast_document_progress(
+                relative_file_path,
+                stage="写入文档",
+                message="文档元数据已写入数据库",
+                progress=0.6,
+                document_id=document_id
+            )
+
             if chunks:
                 embedding_svc = embedding_service
                 if embedding_svc is None:
                     raise HTTPException(status_code=500, detail="嵌入服务未初始化")
 
                 embeddings = []
-                for i, chunk in enumerate(chunks):
+                total_chunks = len(chunks)
+                await _broadcast_document_progress(
+                    relative_file_path,
+                    stage="生成嵌入",
+                    message="正在生成文本向量…",
+                    progress=0.62,
+                    document_id=document_id,
+                    total_chunks=total_chunks
+                )
+                update_interval = max(1, total_chunks // 5) if total_chunks else 1
+                for index, chunk in enumerate(chunks, start=1):
                     try:
                         embedding = embedding_svc.encode_text(chunk)
                         embeddings.append(embedding)
-                        logger.debug(f"已生成第 {i+1} 个文本块的嵌入向量")
+                        logger.debug(f"已生成第 {index} 个文本块的嵌入向量")
+                        if total_chunks:
+                            if index == total_chunks or index % update_interval == 0:
+                                ratio = index / total_chunks
+                                await _broadcast_document_progress(
+                                    relative_file_path,
+                                    stage="生成嵌入",
+                                    message=f"已生成 {index}/{total_chunks} 个文本向量",
+                                    progress=0.62 + 0.2 * ratio,
+                                    document_id=document_id,
+                                    processed_chunks=index,
+                                    total_chunks=total_chunks
+                                )
                     except Exception as e:
                         logger.error(f"生成嵌入向量失败: {str(e)}")
                         raise HTTPException(status_code=500, detail=f"生成嵌入向量失败: {str(e)}")
 
                 logger.info(f"嵌入向量生成完成，共 {len(embeddings)} 个向量")
+                await _broadcast_document_progress(
+                    relative_file_path,
+                    stage="写入向量",
+                    message="正在将向量写入索引…",
+                    progress=0.84,
+                    document_id=document_id,
+                    vector_candidates=len(embeddings)
+                )
 
                 if not faiss_manager:
                     raise HTTPException(status_code=500, detail="Faiss管理器未初始化")
@@ -1305,6 +1542,14 @@ async def upload_document(request: FileUploadRequest):
                 embeddings_array = np.array(embeddings, dtype=np.float32)
                 vector_ids = faiss_manager.add_vectors(embeddings_array, vector_metadata)
                 logger.info(f"向量已存储到Faiss索引，向量ID列表: {vector_ids}")
+                await _broadcast_document_progress(
+                    relative_file_path,
+                    stage="写入向量",
+                    message=f"已写入 {len(vector_ids)} 个文本向量",
+                    progress=0.88,
+                    document_id=document_id,
+                    vector_count=len(vector_ids)
+                )
 
                 for i, (chunk, vector_id) in enumerate(zip(chunks, vector_ids)):
                     chunk_id = sqlite_manager.insert_chunk(
@@ -1316,8 +1561,24 @@ async def upload_document(request: FileUploadRequest):
                     chunk_ids.append(chunk_id)
 
                 logger.info(f"文本块信息已存储到数据库，块ID列表: {chunk_ids}")
+                await _broadcast_document_progress(
+                    relative_file_path,
+                    stage="写入文本块",
+                    message="文本块信息已写入数据库",
+                    progress=0.9,
+                    document_id=document_id,
+                    chunk_count=len(chunk_ids)
+                )
             else:
                 logger.info("图片文件无需生成文本向量，已跳过嵌入与块写入")
+                await _broadcast_document_progress(
+                    relative_file_path,
+                    stage="处理图片",
+                    message="图片文件跳过向量生成",
+                    progress=0.7,
+                    document_id=document_id,
+                    image_candidates=len(extracted_images)
+                )
 
             image_result = store_document_images(document_id, file_path, extracted_images)
             logger.info(
@@ -1325,7 +1586,23 @@ async def upload_document(request: FileUploadRequest):
                 document_id,
                 image_result.get('stored', 0)
             )
+            await _broadcast_document_progress(
+                relative_file_path,
+                stage="处理图片",
+                message="图片资源处理完成",
+                progress=0.93,
+                document_id=document_id,
+                image_count=image_result.get('stored', 0)
+            )
 
+            await _broadcast_document_progress(
+                relative_file_path,
+                stage="完成",
+                message="文档挂载完成",
+                progress=1.0,
+                status="success",
+                document_id=document_id
+            )
             return FileUploadResponse(
                 status="success",
                 message=f"文档上传成功，文档ID: {document_id}",
@@ -1353,10 +1630,26 @@ async def upload_document(request: FileUploadRequest):
                 except Exception:  # pylint: disable=broad-except
                     pass
         
-    except HTTPException:
+    except HTTPException as exc:
+        if relative_file_path:
+            await _broadcast_document_progress(
+                relative_file_path,
+                stage="失败",
+                message=str(exc.detail),
+                progress=1.0,
+                status="error"
+            )
         raise
     except Exception as e:
         logger.error(f"文档上传失败: {str(e)}")
+        if relative_file_path:
+            await _broadcast_document_progress(
+                relative_file_path,
+                stage="失败",
+                message=f"文档上传失败: {e}",
+                progress=1.0,
+                status="error"
+            )
         raise HTTPException(status_code=500, detail=f"文档上传失败: {str(e)}")
 
 
@@ -1375,7 +1668,7 @@ async def parse_pdf_to_markdown(
 
         project_root = ServerConfig.PROJECT_ROOT.resolve()
         try:
-            pdf_path.relative_to(project_root)
+            relative_pdf_path = str(pdf_path.relative_to(project_root))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="文件必须位于项目根目录内") from exc
 
@@ -1394,8 +1687,9 @@ async def parse_pdf_to_markdown(
                 'stage': '准备中',
                 'progress': 0.0,
                 'markdown_path': None,
-                'filename': None,
-                'task_id': task_id
+                'filename': pdf_path.name,
+                'task_id': task_id,
+                'file_path': relative_pdf_path
             }
         )
 
@@ -1406,7 +1700,8 @@ async def parse_pdf_to_markdown(
             message='解析任务已启动',
             stage='准备中',
             progress=0.0,
-            task_id=task_id
+            task_id=task_id,
+            file_path=relative_pdf_path
         )
     except HTTPException:
         raise
@@ -1437,16 +1732,58 @@ async def mount_folder(request: FolderOperationRequest) -> Dict[str, Any]:
 
     logger.info("开始批量挂载文件夹: %s, 文件数量: %d", folder_path, len(files))
 
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
+    folder_relative = str(folder_path.resolve().relative_to(project_root))
+    total_files = len(files)
+    await _broadcast_folder_progress(
+        "mount_folder",
+        folder_relative,
+        status="running",
+        progress=0.0,
+        total=total_files,
+        completed=0
+    )
+    progress_lock = asyncio.Lock()
+    completed = 0
+
     async def mount_file(path: pathlib.Path):
         upload_request = FileUploadRequest(file_path=str(path))
         return await upload_document(upload_request)
 
-    results = await run_folder_tasks(files, mount_file)
+    async def progress_callback(result: Dict[str, Any]) -> None:
+        nonlocal completed
+        async with progress_lock:
+            completed = min(total_files, completed + 1)
+            progress_value = completed / total_files if total_files else 1.0
+        await _broadcast_folder_progress(
+            "mount_folder",
+            folder_relative,
+            status="running",
+            progress=progress_value,
+            completed=completed,
+            total=total_files,
+            last_file=result.get('relative_path') or result.get('path'),
+            last_file_status=result.get('status'),
+            last_file_success=result.get('success')
+        )
+
+    results = await run_folder_tasks(files, mount_file, on_progress=progress_callback)
 
     success_count = sum(1 for item in results if item['success'])
     failure_count = len(results) - success_count
 
     status = 'success' if failure_count == 0 else ('partial' if success_count > 0 else 'failed')
+
+    await _broadcast_folder_progress(
+        "mount_folder",
+        folder_relative,
+        status=status,
+        progress=1.0,
+        total=total_files,
+        completed=len(results),
+        succeeded=success_count,
+        failed=failure_count
+    )
 
     return {
         'status': status,
@@ -1474,6 +1811,18 @@ async def remount_folder(request: FolderRemountRequest) -> Dict[str, Any]:
 
     force = request.force_reupload
     project_root = ServerConfig.PROJECT_ROOT.resolve()
+    folder_relative = str(folder_path.resolve().relative_to(project_root))
+    total_files = len(files)
+    await _broadcast_folder_progress(
+        "remount_folder",
+        folder_relative,
+        status="running",
+        progress=0.0,
+        total=total_files,
+        completed=0
+    )
+    progress_lock = asyncio.Lock()
+    completed = 0
 
     async def remount_file(path: pathlib.Path):
         resolved_path = path.resolve()
@@ -1510,12 +1859,41 @@ async def remount_folder(request: FolderRemountRequest) -> Dict[str, Any]:
         upload_request = FileUploadRequest(file_path=str(resolved_path))
         return await upload_document(upload_request)
 
-    results = await run_folder_tasks(files, remount_file)
+    async def progress_callback(result: Dict[str, Any]) -> None:
+        nonlocal completed
+        async with progress_lock:
+            completed = min(total_files, completed + 1)
+            progress_value = completed / total_files if total_files else 1.0
+        await _broadcast_folder_progress(
+            "remount_folder",
+            folder_relative,
+            status="running",
+            progress=progress_value,
+            completed=completed,
+            total=total_files,
+            last_file=result.get('relative_path') or result.get('path'),
+            last_file_status=result.get('status'),
+            last_file_success=result.get('success')
+        )
+
+    results = await run_folder_tasks(files, remount_file, on_progress=progress_callback)
 
     success_count = sum(1 for item in results if item['success'])
     failure_count = len(results) - success_count
     skipped_count = sum(1 for item in results if item.get('status') == 'skipped')
     status = 'success' if failure_count == 0 else ('partial' if success_count > 0 else 'failed')
+
+    await _broadcast_folder_progress(
+        "remount_folder",
+        folder_relative,
+        status=status,
+        progress=1.0,
+        total=total_files,
+        completed=len(results),
+        succeeded=success_count,
+        failed=failure_count,
+        skipped=skipped_count
+    )
 
     return {
         'status': status,
@@ -1542,15 +1920,57 @@ async def unmount_folder(request: FolderOperationRequest) -> Dict[str, Any]:
 
     logger.info("开始批量取消挂载文件夹: %s, 文件数量: %d", folder_path, len(files))
 
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
+    folder_relative = str(folder_path.resolve().relative_to(project_root))
+    total_files = len(files)
+    await _broadcast_folder_progress(
+        "unmount_folder",
+        folder_relative,
+        status="running",
+        progress=0.0,
+        total=total_files,
+        completed=0
+    )
+    progress_lock = asyncio.Lock()
+    completed = 0
+
     async def unmount_file(path: pathlib.Path):
         unmount_request = UnmountDocumentRequest(file_path=str(path), is_folder=False)
         return await unmount_document(unmount_request)
 
-    results = await run_folder_tasks(files, unmount_file)
+    async def progress_callback(result: Dict[str, Any]) -> None:
+        nonlocal completed
+        async with progress_lock:
+            completed = min(total_files, completed + 1)
+            progress_value = completed / total_files if total_files else 1.0
+        await _broadcast_folder_progress(
+            "unmount_folder",
+            folder_relative,
+            status="running",
+            progress=progress_value,
+            completed=completed,
+            total=total_files,
+            last_file=result.get('relative_path') or result.get('path'),
+            last_file_status=result.get('status'),
+            last_file_success=result.get('success')
+        )
+
+    results = await run_folder_tasks(files, unmount_file, on_progress=progress_callback)
 
     success_count = sum(1 for item in results if item['success'])
     failure_count = len(results) - success_count
     status = 'success' if failure_count == 0 else ('partial' if success_count > 0 else 'failed')
+
+    await _broadcast_folder_progress(
+        "unmount_folder",
+        folder_relative,
+        status=status,
+        progress=1.0,
+        total=total_files,
+        completed=len(results),
+        succeeded=success_count,
+        failed=failure_count
+    )
 
     return {
         'status': status,

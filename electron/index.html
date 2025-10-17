@@ -4,11 +4,9 @@
 <head>
   <meta charset="utf-8">
   <title>LoFS</title>
-  <link rel="stylesheet" href="./node_modules/github-markdown-css/github-markdown.css">
+  <link rel="stylesheet" data-asset-href="node_modules/github-markdown-css/github-markdown.css">
   <!-- Fira Code 字体 -->
   <link href="https://cdn.jsdelivr.net/npm/firacode/distr/fira_code.css" rel="stylesheet">
-  <!-- highlight.js 库 -->
-  <script src="./node_modules/highlight.js/lib/common.js"></script>
   <style>
     :root {
       --bg-color: #fafafa;
@@ -718,10 +716,100 @@
   <script src="./src/modules/chat.js"></script>
   <script src="./icons.js"></script>
   <script src="./static/libs/jszip.min.js"></script>
-  <script src="./node_modules/xml2js/lib/xml2js.js"></script>
   <script src="./static/libs/docx-preview.js"></script>
-  <script src="./node_modules/markdown-it/dist/markdown-it.min.js"></script>
-  <script src="./node_modules/highlight.js/lib/index.js"></script>
+  <script data-asset-src="node_modules/markdown-it/dist/markdown-it.min.js"></script>
+  <script>
+    (async () => {
+      const resolveAsset = window.fsAPI && typeof window.fsAPI.getAssetPathSync === 'function'
+        ? (relative) => {
+            try {
+              return window.fsAPI.getAssetPathSync(relative) || '';
+            } catch (error) {
+              console.warn('解析资源路径失败:', relative, error);
+              return '';
+            }
+          }
+        : null;
+
+      const toFsPath = (maybeFileUrl) => {
+        if (!maybeFileUrl) {
+          return '';
+        }
+        if (maybeFileUrl.startsWith('file://')) {
+          try {
+            return decodeURIComponent(new URL(maybeFileUrl).pathname);
+          } catch (error) {
+            console.warn('解析 file:// URL 失败:', maybeFileUrl, error);
+            return '';
+          }
+        }
+        return maybeFileUrl;
+      };
+
+      const fileExists = async (fsPath) => {
+        if (!fsPath || !window.fsAPI || typeof window.fsAPI.fileExists !== 'function') {
+          return false;
+        }
+        try {
+          return await window.fsAPI.fileExists(fsPath);
+        } catch (error) {
+          console.warn('检查资源存在性失败:', fsPath, error);
+          return false;
+        }
+      };
+
+      if (!resolveAsset) {
+        console.warn('未能获取资源解析器，跳过可选的 node_modules 资源加载。');
+        return;
+      }
+
+      const styleLinks = Array.from(document.querySelectorAll('link[data-asset-href]'));
+      for (const link of styleLinks) {
+        const target = link.getAttribute('data-asset-href');
+        const resolved = target ? resolveAsset(target) : '';
+        const fsPath = toFsPath(resolved);
+        const exists = await fileExists(fsPath);
+        if (resolved && exists) {
+          link.href = resolved;
+        } else {
+          console.warn('无法解析样式资源或文件不存在:', target);
+          link.remove();
+        }
+      }
+
+      const placeholders = Array.from(document.querySelectorAll('script[data-asset-src]'));
+      for (const placeholder of placeholders) {
+        const target = placeholder.getAttribute('data-asset-src');
+        const resolved = target ? resolveAsset(target) : '';
+        const fsPath = toFsPath(resolved);
+        const exists = await fileExists(fsPath);
+
+        if (!resolved || !exists) {
+          console.warn('脚本资源文件不存在或解析失败:', target);
+          placeholder.remove();
+          continue;
+        }
+
+        await new Promise((resolve) => {
+          const script = document.createElement('script');
+          Array.from(placeholder.attributes).forEach((attr) => {
+            if (attr.name === 'data-asset-src') {
+              return;
+            }
+            script.setAttribute(attr.name, attr.value);
+          });
+          script.src = resolved;
+          script.onload = () => resolve(true);
+          script.onerror = () => {
+            console.warn('脚本资源加载失败:', resolved);
+            resolve(false);
+          };
+          placeholder.parentNode.insertBefore(script, placeholder);
+          placeholder.remove();
+        });
+      }
+    })();
+  </script>
   <script src="./static/libs/pptx-preview.umd.js"></script>
   <script src="./renderer/modules/loadingOverlay.js"></script>
   <script src="./renderer/modules/uploadStatus.js"></script>

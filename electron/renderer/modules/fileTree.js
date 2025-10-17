@@ -208,6 +208,204 @@
 
   const assetUrlCache = new Map();
 
+  const backendProgressState = {
+    fileTasks: new Map(),
+    folderTasks: new Map(),
+    pdfTasks: new Map() // tracks in-flight PDF deep-parse progress keyed by task id
+  };
+
+  let backendStatusListenerBound = false;
+
+  function normalizeProgressKey(value) {
+    if (!value) {
+      return null;
+    }
+    return String(value)
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/^\.+\//, '')
+      .replace(/^\/+/, '');
+  }
+
+  function extractFileName(pathValue) {
+    if (!pathValue) {
+      return '';
+    }
+    const normalized = String(pathValue).replace(/\\/g, '/');
+    const segments = normalized.split('/');
+    return segments[segments.length - 1] || normalized;
+  }
+
+  async function getTrackingRelativePath(pathValue) {
+    const candidates = [];
+    if (pathValue) {
+      candidates.push(pathValue);
+    }
+
+    const resolved = resolveProjectAbsolutePathSync(pathValue);
+    if (resolved && resolved !== pathValue) {
+      candidates.push(resolved);
+    }
+
+    for (const candidate of candidates) {
+      try {
+        const relative = await toProjectRelativePath(candidate);
+        if (relative) {
+          return relative;
+        }
+      } catch (error) {
+        console.warn('获取项目相对路径失败:', error);
+      }
+    }
+
+    if (resolved) {
+      return computeRelativeFromRuntime(resolved) || resolved;
+    }
+
+    return pathValue;
+  }
+
+  function buildFolderOperationKey(operation, folderPathValue) {
+    const normalizedFolder = normalizeProgressKey(folderPathValue);
+    if (!operation || !normalizedFolder) {
+      return null;
+    }
+    return `${operation}:${normalizedFolder}`;
+  }
+
+  function ensureBackendStatusListener() {
+    if (backendStatusListenerBound) {
+      return;
+    }
+
+    document.addEventListener('backendStatus', (event) => {
+      const payload = event?.detail;
+      if (!payload || typeof payload !== 'object') {
+        return;
+      }
+
+      if (payload.event === 'document_upload') {
+        handleDocumentUploadProgress(payload);
+      } else if (payload.event === 'folder_operation') {
+        handleFolderOperationProgress(payload);
+      } else if (payload.event === 'pdf_parse') {
+        handlePdfParseProgress(payload);
+      }
+    });
+
+    backendStatusListenerBound = true;
+  }
+
+  function handleDocumentUploadProgress(payload) {
+    const key = normalizeProgressKey(payload.file_path || payload.relative_path);
+    if (!key) {
+      return;
+    }
+    const task = backendProgressState.fileTasks.get(key);
+    if (!task) {
+      return;
+    }
+
+    const progress = typeof payload.progress === 'number' ? payload.progress : 0;
+    const message = payload.message || task.message || `正在挂载 ${task.displayName || ''}`;
+    const stageText = payload.stage || task.stage || '';
+
+    dependencies.setLoadingOverlayProgress(progress, {
+      message,
+      stage: stageText || undefined
+    });
+
+    const status = payload.status || 'running';
+    if (status !== 'running') {
+      backendProgressState.fileTasks.delete(key);
+    }
+  }
+
+  function handleFolderOperationProgress(payload) {
+    const key = buildFolderOperationKey(payload.operation, payload.folder_path);
+    if (!key) {
+      return;
+    }
+    const task = backendProgressState.folderTasks.get(key);
+    if (!task) {
+      return;
+    }
+
+    const progress = typeof payload.progress === 'number' ? payload.progress : 0;
+    const total = Number.isFinite(payload.total) ? payload.total : task.total;
+    const completed = Number.isFinite(payload.completed) ? payload.completed : task.completed;
+
+    if (Number.isFinite(total)) {
+      task.total = total;
+    }
+    if (Number.isFinite(completed)) {
+      task.completed = completed;
+    }
+
+    let stageParts = [];
+    if (Number.isFinite(task.completed) && Number.isFinite(task.total) && task.total > 0) {
+      stageParts.push(`进度 ${Math.min(task.completed, task.total)}/${task.total}`);
+    }
+
+    if (payload.last_file) {
+      const lastName = extractFileName(payload.last_file);
+      if (lastName) {
+        const statusLabel = payload.last_file_success === false || payload.last_file_status === 'error'
+          ? '失败'
+          : '完成';
+        stageParts.push(`${lastName} ${statusLabel}`);
+      }
+    }
+
+    let status = payload.status || 'running';
+    if (status !== 'running') {
+      if (status === 'success') {
+        stageParts = ['全部完成'];
+      } else if (status === 'partial') {
+        const failed = Number.isFinite(payload.failed) ? payload.failed : 0;
+        stageParts = [`完成，失败 ${failed}`];
+      } else if (status === 'failed') {
+        stageParts = ['操作失败'];
+      }
+    }
+
+    dependencies.setLoadingOverlayProgress(progress, {
+      message: task.message || '正在处理文件夹…',
+      stage: stageParts.join(' · ') || undefined
+    });
+
+    if (status !== 'running') {
+      backendProgressState.folderTasks.delete(key);
+    }
+  }
+
+  function handlePdfParseProgress(payload) {
+    const taskId = payload.task_id || payload.taskId;
+    if (!taskId) {
+      return;
+    }
+    const task = backendProgressState.pdfTasks.get(taskId);
+    if (!task) {
+      return;
+    }
+
+    const progress = typeof payload.progress === 'number' ? payload.progress : 0;
+    const message = payload.message || task.message || '正在解析 PDF…';
+    const stageText = payload.stage || task.stage || '';
+
+    task.message = message;
+    task.stage = stageText;
+    dependencies.setLoadingOverlayProgress(progress, {
+      message,
+      stage: stageText || undefined
+    });
+
+    const status = (payload.status || '').toLowerCase();
+    if (status && status !== 'processing' && status !== 'running') {
+      backendProgressState.pdfTasks.delete(taskId);
+    }
+  }
+
   const getAssetUrl = (relativePath) => {
     if (!relativePath) {
       return '';
@@ -515,9 +713,24 @@
   }
 
   async function mountFolder(folderPath) {
-    dependencies.showLoadingOverlay('正在挂载文件夹…');
+    ensureBackendStatusListener();
+    const overlayMessage = '正在挂载文件夹…';
+    dependencies.setLoadingOverlayProgress(0.05, {
+      message: overlayMessage,
+      stage: '准备中'
+    });
+    let folderOperationKey = null;
     try {
       const normalizedPath = await ensureProjectAbsolutePath(folderPath);
+      const relativeTracking = await getTrackingRelativePath(normalizedPath);
+      folderOperationKey = buildFolderOperationKey('mount_folder', relativeTracking);
+      if (folderOperationKey) {
+        backendProgressState.folderTasks.set(folderOperationKey, {
+          message: overlayMessage,
+          total: 0,
+          completed: 0
+        });
+      }
       const response = await fetch('http://localhost:8000/api/document/mount-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -531,14 +744,32 @@
     } catch (error) {
       dependencies.showAlert(`挂载失败: ${error.message || error}`, 'error');
     } finally {
+      if (folderOperationKey) {
+        backendProgressState.folderTasks.delete(folderOperationKey);
+      }
       dependencies.hideLoadingOverlay();
     }
   }
 
   async function remountFolder(folderPath) {
-    dependencies.showLoadingOverlay('正在重新挂载文件夹…');
+    ensureBackendStatusListener();
+    const overlayMessage = '正在重新挂载文件夹…';
+    dependencies.setLoadingOverlayProgress(0.05, {
+      message: overlayMessage,
+      stage: '准备中'
+    });
+    let folderOperationKey = null;
     try {
       const normalizedPath = await ensureProjectAbsolutePath(folderPath);
+      const relativeTracking = await getTrackingRelativePath(normalizedPath);
+      folderOperationKey = buildFolderOperationKey('remount_folder', relativeTracking);
+      if (folderOperationKey) {
+        backendProgressState.folderTasks.set(folderOperationKey, {
+          message: overlayMessage,
+          total: 0,
+          completed: 0
+        });
+      }
       const response = await fetch('http://localhost:8000/api/document/remount-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -552,14 +783,32 @@
     } catch (error) {
       dependencies.showAlert(`重新挂载失败: ${error.message || error}`, 'error');
     } finally {
+      if (folderOperationKey) {
+        backendProgressState.folderTasks.delete(folderOperationKey);
+      }
       dependencies.hideLoadingOverlay();
     }
   }
 
   async function unmountFolder(folderPath) {
-    dependencies.showLoadingOverlay('正在取消挂载文件夹…');
+    ensureBackendStatusListener();
+    const overlayMessage = '正在取消挂载文件夹…';
+    dependencies.setLoadingOverlayProgress(0.05, {
+      message: overlayMessage,
+      stage: '准备中'
+    });
+    let folderOperationKey = null;
     try {
       const normalizedPath = await ensureProjectAbsolutePath(folderPath);
+      const relativeTracking = await getTrackingRelativePath(normalizedPath);
+      folderOperationKey = buildFolderOperationKey('unmount_folder', relativeTracking);
+      if (folderOperationKey) {
+        backendProgressState.folderTasks.set(folderOperationKey, {
+          message: overlayMessage,
+          total: 0,
+          completed: 0
+        });
+      }
       const response = await fetch('http://localhost:8000/api/document/unmount-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -573,6 +822,9 @@
     } catch (error) {
       dependencies.showAlert(`取消挂载失败: ${error.message || error}`, 'error');
     } finally {
+      if (folderOperationKey) {
+        backendProgressState.folderTasks.delete(folderOperationKey);
+      }
       dependencies.hideLoadingOverlay();
     }
   }
@@ -628,22 +880,30 @@
       if (!response.ok) {
         throw new Error(payload.detail || payload.error || `HTTP错误 ${response.status}`);
       }
-      dependencies.setLoadingOverlayIndeterminate({
-        message: '正在解析 PDF…',
-        stage: payload.stage || payload.message || '正在解析'
-      });
+      const progressValue = typeof payload.progress === 'number' ? payload.progress : null;
+      const message = payload.message || '正在解析 PDF…';
+      const stageLabel = payload.stage || payload.message || '正在解析';
+
+      dependencies.setLoadingOverlayProgress(
+        progressValue == null ? 0 : progressValue,
+        {
+          message,
+          stage: stageLabel
+        }
+      );
       if (payload.status === 'success') {
+        backendProgressState.pdfTasks.delete(taskId);
         return payload;
       }
       if (payload.status === 'error') {
+        backendProgressState.pdfTasks.delete(taskId);
         throw new Error(payload.message || payload.detail || 'PDF解析失败');
       }
     }
   }
 
   async function handlePdfParseSuccess(result) {
-    const markdownPath = result.markdown_path ? `\n位置：${result.markdown_path}` : '';
-    dependencies.showSuccessModal(`PDF解析成功${markdownPath}`.trim());
+    dependencies.showSuccessModal('PDF解析成功');
     setTimeout(async () => {
       try {
         const explorer = getExplorerModule();
@@ -871,10 +1131,13 @@
   }
 
   async function parsePdfToMarkdown(filePath) {
-    dependencies.setLoadingOverlayIndeterminate({
-      message: '正在解析 PDF…',
-      stage: '正在解析 PDF…'
+    ensureBackendStatusListener();
+    const overlayMessage = '正在解析 PDF…';
+    dependencies.setLoadingOverlayProgress(0.05, {
+      message: overlayMessage,
+      stage: '准备中'
     });
+    let taskId = null;
     try {
       dependencies.closeAllModals();
       const requestPath = await ensureProjectAbsolutePath(filePath);
@@ -888,17 +1151,30 @@
         throw new Error(result.detail || result.error || `HTTP错误 ${response.status}`);
       }
       if (result.status === 'processing' && result.task_id) {
-        const finalResult = await pollPdfParseStatus(result.task_id);
-        dependencies.setLoadingOverlayIndeterminate({
-          message: '正在解析 PDF…',
-          stage: finalResult.stage || '解析完成'
+        taskId = result.task_id;
+        backendProgressState.pdfTasks.set(taskId, {
+          message: overlayMessage,
+          filePath: requestPath,
+          displayName: extractFileName(filePath)
         });
+        const finalResult = await pollPdfParseStatus(result.task_id);
+        backendProgressState.pdfTasks.delete(result.task_id);
+        dependencies.setLoadingOverlayProgress(
+          typeof finalResult.progress === 'number' ? finalResult.progress : 1,
+          {
+            message: overlayMessage,
+            stage: finalResult.stage || '解析完成'
+          }
+        );
         await handlePdfParseSuccess(finalResult);
       } else if (result.status === 'success') {
-        dependencies.setLoadingOverlayIndeterminate({
-          message: '正在解析 PDF…',
-          stage: result.stage || '解析完成'
-        });
+        dependencies.setLoadingOverlayProgress(
+          typeof result.progress === 'number' ? result.progress : 1,
+          {
+            message: overlayMessage,
+            stage: result.stage || '解析完成'
+          }
+        );
         await handlePdfParseSuccess(result);
       } else if (result.status === 'error') {
         throw new Error(result.message || 'PDF解析失败');
@@ -906,6 +1182,7 @@
         throw new Error(result.message || '未知的解析状态');
       }
     } catch (error) {
+      backendProgressState.pdfTasks.delete(taskId);
       dependencies.showModal({
         type: 'error',
         title: 'PDF解析失败',
@@ -913,23 +1190,30 @@
         showCancel: false
       });
     } finally {
+      backendProgressState.pdfTasks.delete(taskId);
       dependencies.hideLoadingOverlay();
     }
   }
 
   async function uploadFile(filePath) {
+    ensureBackendStatusListener();
     const isPdfFile = filePath.toLowerCase().endsWith('.pdf');
     const overlayMessage = isPdfFile ? '正在挂载 PDF…' : '正在挂载…';
-    if (isPdfFile) {
-      dependencies.setLoadingOverlayIndeterminate({
-        message: overlayMessage,
-        stage: '正在解析 PDF…'
-      });
-    } else {
-      dependencies.showLoadingOverlay(overlayMessage);
-    }
+    dependencies.setLoadingOverlayProgress(0.05, {
+      message: overlayMessage,
+      stage: '准备中'
+    });
 
     const uploadPath = await ensureProjectAbsolutePath(filePath);
+    const trackingRelative = await getTrackingRelativePath(uploadPath);
+    const progressKey = normalizeProgressKey(trackingRelative);
+    if (progressKey) {
+      backendProgressState.fileTasks.set(progressKey, {
+        message: overlayMessage,
+        stage: '准备中',
+        displayName: extractFileName(filePath)
+      });
+    }
 
     let fileSizeBytes = null;
     if (typeof global.fsAPI?.getFileInfo === 'function') {
@@ -978,6 +1262,9 @@
     } catch (error) {
       dependencies.showAlert(`上传失败: ${error.message || error}`, 'error');
     } finally {
+      if (progressKey) {
+        backendProgressState.fileTasks.delete(progressKey);
+      }
       dependencies.hideLoadingOverlay();
       if (fileItem) {
         const indicator = fileItem.querySelector('.upload-indicator');
@@ -1816,6 +2103,7 @@
     if (!ensureElements()) {
       return;
     }
+    ensureBackendStatusListener();
     bindRootEvents();
     bindClipboardShortcuts();
     if (state.fileTreeContainer) {

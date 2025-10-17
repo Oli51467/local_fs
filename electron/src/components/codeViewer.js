@@ -752,13 +752,11 @@ class CodeViewer {
   addThemeSelector(tabId) {
     // 检查contentContainer是否存在
     if (!this.contentContainer) {
-      console.warn('contentContainer未初始化，跳过添加主题选择器');
       return;
     }
     
     const header = this.contentContainer.querySelector(`[data-tab-id="${tabId}"] .code-viewer-header`);
     if (!header) {
-      console.warn('未找到代码查看器头部，跳过添加主题选择器');
       return;
     }
 
@@ -890,10 +888,23 @@ class CodeViewer {
     const languageName = this.getLanguageName(ext);
 
     const container = document.querySelector('.code-viewer-container');
-    if (container) {
-      container.querySelector('.file-name').textContent = fileName;
-      container.querySelector('.file-size').textContent = fileSize;
-      container.querySelector('.language-mode').textContent = languageName;
+    if (!container) {
+      console.warn('代码查看器容器未初始化，跳过文件信息更新');
+      return;
+    }
+
+    const nameEl = container.querySelector('.file-name');
+    const sizeEl = container.querySelector('.file-size');
+    const langEl = container.querySelector('.language-mode');
+
+    if (nameEl) {
+      nameEl.textContent = fileName;
+    }
+    if (sizeEl) {
+      sizeEl.textContent = fileSize;
+    }
+    if (langEl) {
+      langEl.textContent = languageName;
     }
   }
 
