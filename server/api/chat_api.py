@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import textwrap
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple
@@ -7,9 +8,11 @@ from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+import numpy as np
 
 from config.config import ServerConfig
 from service.bm25s_service import BM25SService
+from service.clip_embedding_service import CLIPEmbeddingService, get_clip_embedding_service
 from service.embedding_service import EmbeddingService
 from service.faiss_service import FaissManager
 from service.llm_client import LLMClientError, SiliconFlowClient
@@ -27,8 +30,8 @@ embedding_service: Optional[EmbeddingService] = None
 bm25s_service: Optional[BM25SService] = None
 reranker_service: Optional[RerankerService] = None
 llm_client: Optional[SiliconFlowClient] = None
+clip_embedding_service: Optional[CLIPEmbeddingService] = None
 
-MAX_HISTORY_MESSAGES = 8
 MAX_CHUNK_CHARS = 800
 
 DENSE_RECALL_MULTIPLIER = 10
@@ -41,10 +44,12 @@ LEXICAL_RECALL_MAX = 250
 
 MERGED_CANDIDATE_LIMIT = 500
 RERANK_CANDIDATE_LIMIT = 150
+CLIP_CANDIDATE_LIMIT = 220
 
-RERANK_FUSION_WEIGHT = 0.6
-DENSE_FUSION_WEIGHT = 0.25
+RERANK_FUSION_WEIGHT = 0.45
+DENSE_FUSION_WEIGHT = 0.3
 LEXICAL_FUSION_WEIGHT = 0.15
+CLIP_FUSION_WEIGHT = 0.1
 
 MIN_COMPONENT_SCORE = 0.4
 MIN_FINAL_SCORE = 0.45
@@ -53,6 +58,9 @@ DENSE_STRONG_THRESHOLD = 0.6
 LEXICAL_STRONG_THRESHOLD = 0.5
 FINAL_STRONG_THRESHOLD = 0.62
 RELATIVE_SCORE_KEEP = 0.75
+CLIP_STRONG_THRESHOLD = 0.58
+CLIP_TEXT_TRUNCATE = 512
+REFERENCE_SNIPPET_MAX_CHARS = 320
 class RetrievedChunk(BaseModel):
     document_id: int
     filename: str
@@ -73,6 +81,9 @@ class RetrievedChunk(BaseModel):
     dense_rank: Optional[int] = None
     lexical_rank: Optional[int] = None
     rerank_rank: Optional[int] = None
+    clip_score: Optional[float] = None
+    clip_score_normalized: Optional[float] = None
+    clip_rank: Optional[int] = None
 
 
 class ChatMessageModel(BaseModel):
@@ -93,6 +104,9 @@ class ReferenceDocument(BaseModel):
     project_relative_path: Optional[str] = None
     score: Optional[float] = None
     chunk_indices: List[int] = Field(default_factory=list)
+    reference_id: str = Field(default='')
+    snippet: Optional[str] = None
+    selected: Optional[bool] = None
 
 
 class ModelSelection(BaseModel):
@@ -160,6 +174,18 @@ def _ensure_dependencies(require_llm: bool = False) -> None:
         raise HTTPException(status_code=503, detail="Chat service is not ready")
     if require_llm and llm_client is None:
         raise HTTPException(status_code=503, detail="LLM service is not available")
+
+
+def _ensure_clip_service() -> Optional[CLIPEmbeddingService]:
+    global clip_embedding_service
+    if clip_embedding_service is not None:
+        return clip_embedding_service
+    try:
+        clip_embedding_service = get_clip_embedding_service()
+    except Exception as exc:  # pragma: no cover - optional dependency
+        logger.warning("CLIP embedding service unavailable: %s", exc)
+        clip_embedding_service = None
+    return clip_embedding_service
 
 
 def _generate_conversation_title(question: str) -> str:
@@ -258,6 +284,9 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             'rerank_norm': None,
             'dense_rank': None,
             'lexical_rank': None,
+            'clip_score': None,
+            'clip_norm': None,
+            'clip_rank': None,
             'sources': set(),  # type: Set[str]
         }
         candidate_map[vector_id] = candidate
@@ -331,10 +360,48 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
     if not candidates:
         return []
 
+    clip_service = _ensure_clip_service()
+    if clip_service is not None:
+        try:
+            query_clip_vectors = clip_service.encode_texts([question])
+        except Exception as exc:  # pragma: no cover - optional path
+            logger.debug("Failed to encode query with CLIP: %s", exc)
+            query_clip_vectors = []
+        if query_clip_vectors:
+            query_clip_vec = np.array(query_clip_vectors[0], dtype=np.float32)
+            clip_payload: List[Tuple[int, str]] = []
+            for idx, candidate in enumerate(candidates[:CLIP_CANDIDATE_LIMIT]):
+                content = candidate.get('content') or ''
+                trimmed = str(content).strip()
+                if not trimmed:
+                    continue
+                clip_payload.append((idx, trimmed[:CLIP_TEXT_TRUNCATE]))
+            if clip_payload:
+                try:
+                    clip_texts = [text for _, text in clip_payload]
+                    clip_vectors = clip_service.encode_texts(clip_texts)
+                except Exception as exc:  # pragma: no cover - optional path
+                    logger.debug("Failed to encode candidate passages with CLIP: %s", exc)
+                    clip_vectors = []
+                if clip_vectors:
+                    doc_matrix = np.array(clip_vectors, dtype=np.float32)
+                    if doc_matrix.ndim == 1:
+                        doc_matrix = doc_matrix.reshape(1, -1)
+                    if doc_matrix.size and doc_matrix.shape[1] == query_clip_vec.shape[0]:
+                        scores = doc_matrix @ query_clip_vec
+                        for order, (candidate_idx, _) in enumerate(clip_payload):
+                            candidate = candidates[candidate_idx]
+                            score = float(scores[order])
+                            normalized = max(0.0, min(1.0, (score + 1.0) / 2.0))
+                            candidate['clip_score'] = score
+                            candidate['clip_norm'] = normalized
+                            candidate['clip_rank'] = order + 1
+                            candidate['sources'].add('clip')
     for candidate in candidates:
         emb_norm = candidate.get('embedding_norm')
         bm_norm = candidate.get('bm25_norm')
-        candidate['pre_score'] = (emb_norm or 0.0) + (bm_norm or 0.0)
+        clip_norm = candidate.get('clip_norm')
+        candidate['pre_score'] = (emb_norm or 0.0) + (bm_norm or 0.0) + (clip_norm or 0.0)
 
     candidates.sort(
         key=lambda item: (
@@ -378,19 +445,23 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
         emb_norm = candidate.get('embedding_norm')
         bm_norm = candidate.get('bm25_norm')
         rr_norm = candidate.get('rerank_norm')
+        clip_norm = candidate.get('clip_norm')
 
         weight_rerank = RERANK_FUSION_WEIGHT if rr_norm is not None else 0.0
         weight_dense = DENSE_FUSION_WEIGHT if emb_norm is not None else 0.0
         weight_lex = LEXICAL_FUSION_WEIGHT if bm_norm is not None else 0.0
+        weight_clip = CLIP_FUSION_WEIGHT if clip_norm is not None else 0.0
 
-        weight_sum = weight_rerank + weight_dense + weight_lex
+        weight_sum = weight_rerank + weight_dense + weight_lex + weight_clip
         if weight_sum <= 0.0:
-            final_score = emb_norm or bm_norm or 0.0
+            fallback_components = [comp for comp in (rr_norm, emb_norm, bm_norm, clip_norm) if comp is not None]
+            final_score = max(fallback_components) if fallback_components else 0.0
         else:
             final_score = (
                 (rr_norm or 0.0) * weight_rerank +
                 (emb_norm or 0.0) * weight_dense +
-                (bm_norm or 0.0) * weight_lex
+                (bm_norm or 0.0) * weight_lex +
+                (clip_norm or 0.0) * weight_clip
             ) / weight_sum
 
         candidate['final_score'] = final_score
@@ -402,6 +473,8 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             score_breakdown['dense'] = emb_norm
         if bm_norm is not None:
             score_breakdown['lexical'] = bm_norm
+        if clip_norm is not None:
+            score_breakdown['clip'] = clip_norm
 
         score_weights = {}
         if weight_sum > 0:
@@ -411,6 +484,8 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
                 score_weights['dense'] = weight_dense / weight_sum
             if weight_lex > 0:
                 score_weights['lexical'] = weight_lex / weight_sum
+            if weight_clip > 0:
+                score_weights['clip'] = weight_clip / weight_sum
 
         ranked.append(
             RetrievedChunk(
@@ -432,7 +507,10 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
                 score_weights=score_weights or None,
                 dense_rank=candidate.get('dense_rank'),
                 lexical_rank=candidate.get('lexical_rank'),
-                rerank_rank=candidate.get('rerank_rank')
+                rerank_rank=candidate.get('rerank_rank'),
+                clip_score=candidate.get('clip_score'),
+                clip_score_normalized=clip_norm,
+                clip_rank=candidate.get('clip_rank')
             )
         )
 
@@ -441,7 +519,8 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             chunk.score,
             chunk.rerank_score_normalized or 0.0,
             chunk.embedding_score_normalized or 0.0,
-            chunk.bm25_score or 0.0
+            chunk.bm25_score or 0.0,
+            chunk.clip_score_normalized or 0.0
         ),
         reverse=True
     )
@@ -450,7 +529,8 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
         components = [
             chunk.embedding_score_normalized,
             chunk.bm25_score,
-            chunk.rerank_score_normalized
+            chunk.rerank_score_normalized,
+            chunk.clip_score_normalized
         ]
         scored_components = [comp for comp in components if comp is not None]
         if not scored_components:
@@ -470,8 +550,12 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             chunk.bm25_score is not None
             and chunk.bm25_score >= MIN_COMPONENT_SCORE
         )
+        clip_ok = (
+            chunk.clip_score_normalized is not None
+            and chunk.clip_score_normalized >= MIN_COMPONENT_SCORE
+        )
 
-        if rerank_ok:
+        if rerank_ok or clip_ok:
             primary_signal = True
         elif dense_ok and lexical_ok:
             primary_signal = True
@@ -490,9 +574,11 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
     top_rerank = top_chunk.rerank_score_normalized or 0.0
     top_dense = top_chunk.embedding_score_normalized or 0.0
     top_lexical = top_chunk.bm25_score or 0.0
+    top_clip = top_chunk.clip_score_normalized or 0.0
 
     strong_top = (
         top_rerank >= RERANK_STRONG_THRESHOLD
+        or top_clip >= CLIP_STRONG_THRESHOLD
         or (top_dense >= DENSE_STRONG_THRESHOLD and top_lexical >= LEXICAL_STRONG_THRESHOLD)
         or top_chunk.score >= FINAL_STRONG_THRESHOLD
     )
@@ -507,13 +593,14 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             continue
 
         rerank_confident = (chunk.rerank_score_normalized or 0.0) >= (RERANK_STRONG_THRESHOLD * 0.9)
+        clip_confident = (chunk.clip_score_normalized or 0.0) >= (CLIP_STRONG_THRESHOLD * 0.9)
         dense_lexical_confident = (
             (chunk.embedding_score_normalized or 0.0) >= DENSE_STRONG_THRESHOLD
             and (chunk.bm25_score or 0.0) >= (LEXICAL_STRONG_THRESHOLD * 0.9)
         )
         final_confident = chunk.score >= FINAL_STRONG_THRESHOLD
 
-        if rerank_confident or dense_lexical_confident or final_confident:
+        if rerank_confident or clip_confident or dense_lexical_confident or final_confident:
             confident_chunks.append(chunk)
 
     if not confident_chunks:
@@ -523,7 +610,7 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
 
 
 def _build_references_from_chunks(chunks: List[RetrievedChunk]) -> List[ReferenceDocument]:
-    references: Dict[str, ReferenceDocument] = {}
+    reference_map: Dict[str, Dict[str, Any]] = {}
 
     for chunk in chunks:
         raw_path = (chunk.file_path or '').strip()
@@ -566,51 +653,191 @@ def _build_references_from_chunks(chunks: List[RetrievedChunk]) -> List[Referenc
                 project_relative = normalized_path or None
 
         chunk_index = chunk.chunk_index if isinstance(chunk.chunk_index, int) else None
+        snippet = (chunk.content or '').strip()
+        if snippet:
+            snippet = textwrap.shorten(snippet, width=REFERENCE_SNIPPET_MAX_CHARS, placeholder='...')
 
-        if key not in references:
-            indices = [chunk_index] if chunk_index is not None else []
-            references[key] = ReferenceDocument(
-                document_id=document_id,
-                filename=filename,
-                file_path=file_path,
-                display_name=filename,
-                absolute_path=absolute_path,
-                project_relative_path=project_relative,
-                score=chunk.score,
-                chunk_indices=indices,
-            )
-        else:
-            reference = references[key]
-            if chunk_index is not None:
-                reference.chunk_indices.append(chunk_index)
-            if chunk.score > (reference.score or float('-inf')):
-                reference.score = chunk.score
-            # prefer known document id if previously None
-            if reference.document_id is None and document_id is not None:
-                reference.document_id = document_id
-            if not reference.absolute_path and absolute_path:
-                reference.absolute_path = absolute_path
-            if not reference.project_relative_path and project_relative:
-                reference.project_relative_path = project_relative
+        entry = reference_map.setdefault(
+            key,
+            {
+                'document': ReferenceDocument(
+                    document_id=document_id,
+                    filename=filename,
+                    file_path=file_path,
+                    display_name=filename,
+                    absolute_path=absolute_path,
+                    project_relative_path=project_relative,
+                    score=chunk.score,
+                    chunk_indices=[chunk_index] if chunk_index is not None else [],
+                ),
+                'snippets': [],
+                'scores': [],
+            }
+        )
 
-    return list(references.values())
+        reference = entry['document']
+        if chunk_index is not None and chunk_index not in reference.chunk_indices:
+            reference.chunk_indices.append(chunk_index)
+        if chunk.score > (reference.score or float('-inf')):
+            reference.score = chunk.score
+        if reference.document_id is None and document_id is not None:
+            reference.document_id = document_id
+        if not reference.absolute_path and absolute_path:
+            reference.absolute_path = absolute_path
+        if not reference.project_relative_path and project_relative:
+            reference.project_relative_path = project_relative
+        if snippet:
+            entry['snippets'].append(snippet)
+        entry['scores'].append(chunk.score)
+
+    references: List[ReferenceDocument] = []
+    for entry in reference_map.values():
+        reference = entry['document']
+        snippets = entry.get('snippets') or []
+        if snippets and not reference.snippet:
+            reference.snippet = snippets[0]
+        # Deduplicate and sort chunk indices
+        if reference.chunk_indices:
+            reference.chunk_indices = sorted({idx for idx in reference.chunk_indices if isinstance(idx, int)})
+        references.append(reference)
+
+    references.sort(key=lambda ref: ref.score or 0.0, reverse=True)
+    for idx, reference in enumerate(references, start=1):
+        reference.reference_id = f"文档-{idx}"
+        reference.selected = False
+    return references
 
 
-def _format_chunks_for_prompt(chunks: List[RetrievedChunk]) -> str:
-    if not chunks:
+def _normalize_path(value: Optional[str]) -> str:
+    if not value:
+        return ''
+    return str(value).replace('\\', '/').strip()
+
+
+def _reference_matches_chunk(reference: ReferenceDocument, chunk: RetrievedChunk) -> bool:
+    if reference.document_id is not None and reference.document_id >= 0:
+        if chunk.document_id == reference.document_id:
+            return True
+    ref_variants = {
+        _normalize_path(reference.file_path),
+        _normalize_path(reference.project_relative_path),
+        _normalize_path(reference.absolute_path),
+    }
+    chunk_path = _normalize_path(chunk.file_path)
+    if chunk_path and chunk_path in ref_variants:
+        return True
+    return False
+
+
+def _collect_reference_chunks_backend(reference: ReferenceDocument, chunks: List[RetrievedChunk]) -> List[RetrievedChunk]:
+    matched = [chunk for chunk in chunks if _reference_matches_chunk(reference, chunk)]
+    if matched:
+        return matched
+    # fallback: match by filename when no explicit path
+    ref_name = (reference.filename or '').strip().lower()
+    if not ref_name:
+        return []
+    return [chunk for chunk in chunks if (chunk.filename or '').strip().lower() == ref_name]
+
+
+def _format_reference_material(references: List[ReferenceDocument], chunks: List[RetrievedChunk]) -> str:
+    if not references:
         return ''
 
-    formatted_segments: List[str] = []
-    for idx, chunk in enumerate(chunks, start=1):
-        content = (chunk.content or '').strip()
-        if not content:
+    entries: List[str] = []
+    for reference in references:
+        matched_chunks = _collect_reference_chunks_backend(reference, chunks)
+        snippets: List[str] = []
+        for chunk in matched_chunks[:2]:
+            snippet = (chunk.content or '').strip()
+            if snippet:
+                snippets.append(textwrap.shorten(snippet, width=REFERENCE_SNIPPET_MAX_CHARS, placeholder='...'))
+        if not snippets and reference.snippet:
+            snippets.append(reference.snippet)
+        if not snippets:
+            snippets.append('（未提供片段摘录）')
+        snippet_lines = [
+            f"- 片段{idx + 1}: {textwrap.dedent(text).strip()}"
+            for idx, text in enumerate(snippets)
+        ]
+        entry = "\n".join([
+            f"[{reference.reference_id}] {reference.display_name or reference.filename or '未命名文件'}",
+            *snippet_lines
+        ])
+        entries.append(entry.strip())
+
+    return '\n\n'.join(entries)
+
+
+REFERENCE_LINE_PATTERN = re.compile(r'^\s*参考文档\s*[:：]\s*(?P<value>.+?)\s*$', re.IGNORECASE)
+REFERENCE_NONE_TOKENS = {'无', 'none', 'null', '暂无', '无引用', '无参考', '无资料'}
+
+
+def _normalize_reference_value(value: str) -> str:
+    stripped = value.strip()
+    stripped = stripped.replace('。', '').replace('.', '').strip()
+    return stripped
+
+
+def _apply_reference_selection(
+    content: str,
+    references: List[ReferenceDocument]
+) -> Tuple[str, List[ReferenceDocument], List[str]]:
+    lines = content.splitlines()
+    selected_ids: List[str] = []
+    matched_index: Optional[int] = None
+
+    for idx in range(len(lines) - 1, -1, -1):
+        line = lines[idx].strip()
+        match = REFERENCE_LINE_PATTERN.match(line)
+        if not match:
             continue
-        if len(content) > MAX_CHUNK_CHARS:
-            content = content[:MAX_CHUNK_CHARS] + '...'
-        formatted_segments.append(
-            f"[资料 {idx}]（来源：{chunk.filename or '未知文件'}）\n{textwrap.dedent(content)}"
-        )
-    return '\n\n'.join(formatted_segments)
+        matched_index = idx
+        raw_value = match.group('value') or ''
+        normalized_value = _normalize_reference_value(raw_value)
+        if not normalized_value or normalized_value.lower() in REFERENCE_NONE_TOKENS:
+            selected_ids = []
+        else:
+            tokens = re.split(r'[，,；;、\s]+', normalized_value)
+            interim: List[str] = []
+            for token in tokens:
+                token_norm = token.strip().upper()
+                if not token_norm:
+                    continue
+                if token_norm.lower() in REFERENCE_NONE_TOKENS:
+                    interim = []
+                    break
+                interim.append(token_norm)
+            selected_ids = interim
+        break
+
+    if matched_index is not None:
+        lines.pop(matched_index)
+
+    clean_content = "\n".join(lines).strip()
+    if not clean_content:
+        clean_content = content.strip()
+
+    valid_lookup: Dict[str, str] = {
+        reference.reference_id.upper(): reference.reference_id
+        for reference in references
+        if reference.reference_id
+    }
+
+    canonical_ids: List[str] = []
+    for token in selected_ids:
+        mapped = valid_lookup.get(token)
+        if mapped and mapped not in canonical_ids:
+            canonical_ids.append(mapped)
+
+    selected_refs: List[ReferenceDocument] = []
+    for reference in references:
+        is_selected = reference.reference_id in canonical_ids
+        reference.selected = is_selected
+        if is_selected:
+            selected_refs.append(reference)
+
+    return clean_content, selected_refs, canonical_ids
 
 
 def _build_llm_messages(
@@ -618,10 +845,12 @@ def _build_llm_messages(
     conversation_messages: List[Dict[str, Any]],
     user_message_id: int,
     chunks: List[RetrievedChunk],
+    references: List[ReferenceDocument],
     selection: ModelSelection
 ) -> List[Dict[str, str]]:
     system_prompt = (
         "你是一名资深的企业知识助手，会综合提供的资料与自身掌握的通用知识回答问题。\n"
+        "始终以用户当前提出的问题为核心进行分析；历史对话仅作为理解语境的参考，必要时可引用，但不得喧宾夺主。\n"
         "当提供了参考资料时要优先基于资料内容进行分析并给出贴合语境的总结；"
         "当未提供任何参考资料时，也需要依靠你的知识储备完整作答，不要刻意强调资料缺失。\n"
         "请始终使用 Markdown 输出，结构清晰、分层表达。"
@@ -629,40 +858,50 @@ def _build_llm_messages(
 
     messages: List[Dict[str, str]] = [{'role': 'system', 'content': system_prompt}]
 
-    history: List[Dict[str, str]] = []
+    history_segments: List[str] = []
     for message in conversation_messages:
         if message.get('id') == user_message_id:
             continue
         role = message.get('role')
-        content = message.get('content')
+        content = (message.get('content') or '').strip()
         if role not in {'user', 'assistant'} or not content:
             continue
-        history.append({'role': role, 'content': content})
+        display_role = '用户' if role == 'user' else '助手'
+        snippet = content[:500] + ('…' if len(content) > 500 else '')
+        history_segments.append(f"{display_role}：{snippet}")
 
-    if history:
-        history = history[-MAX_HISTORY_MESSAGES:]
-        messages.extend(history)
+    context_parts: List[str] = []
 
-    knowledge_block = _format_chunks_for_prompt(chunks)
-    if knowledge_block:
-        knowledge_text = f"以下资料可供参考：\n{knowledge_block}\n\n"
+    reference_material = _format_reference_material(references, chunks)
+    if reference_material:
+        knowledge_text = (
+            "以下是与用户问题可能相关的文档资料（编号已给出，若引用请基于编号确认来源）：\n"
+            f"{reference_material}\n\n"
+        )
         citation_instruction = (
-            "引用资料时请以自然语言描述来源（例如提及文档名称、章节主题），"
-            "不要在回答中输出任何参考编号或标注（例如 [1]、(1)、[资料 1]），也不要展示资料的 ID 或完整文件路径。"
+            "如果你在答案中参考了上述任何文档，请在回答末尾另起一行，严格使用“参考文档: 文档-1,文档-3”的格式列出你真正使用过的文档编号，按重要性排序且不要重复。"
+            "如果未使用任何文档，请在该行写“参考文档: 无”。除了这一行，不要在正文中输出诸如 [1]、(1) 或其他编号引用。"
         )
     else:
         knowledge_text = (
             "当前没有检索到任何外部参考资料。请直接依据你掌握的行业常识、经验与通用知识体系给出详尽、可靠的回答。"
             "可以在需要时做出合理推断，但若为推测请在回答中简要说明依据。\n\n"
         )
-        citation_instruction = (
-            "请勿在回答中提及资料缺失，也不要生成任何引用编号或来源描述，直接给出你的专业解答。"
+        citation_instruction = "回答末尾请添加一行“参考文档: 无”。"
+    context_parts.append(knowledge_text)
+
+    if history_segments:
+        history_text = (
+            "历史对话记录如下（仅供理解语境，若无助于回答请忽略）：\n"
+            + "\n".join(history_segments)
+            + "\n\n"
         )
+        context_parts.append(history_text)
 
     user_prompt = (
-        f"{knowledge_text}"
-        f"用户问题：{question}\n\n"
-        "请基于上述资料（如有）给出严谨、结构化的回答，必要时补充自身知识。\n"
+        f"{''.join(context_parts)}"
+        f"请聚焦以下最新问题，历史对话仅作参考：\n用户问题：{question}\n\n"
+        "若参考资料包含答案，请据此总结；若参考资料缺失或不足，请运用自身专业知识完整作答。\n"
         f"{citation_instruction}"
     )
     messages.append({'role': 'user', 'content': user_prompt})
@@ -721,7 +960,9 @@ def _prepare_chat_context(
         'top_k': top_k,
         'model': selection_data,
         'chunks': [chunk.dict() for chunk in chunks],
-        'references': [reference.dict() for reference in references],
+        'available_references': [reference.dict() for reference in references],
+        'references': [],
+        'selected_reference_ids': [],
         'reference_mode': 'retrieval' if references else 'llm_only',
     }
 
@@ -737,6 +978,7 @@ def _prepare_chat_context(
         conversation_messages,
         user_message_id,
         chunks,
+        references,
         selection
     )
 
@@ -818,6 +1060,13 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
         final_content = ''.join(buffer_parts).strip()
         if not final_content:
             final_content = '很抱歉，目前无法根据提供的资料给出答案。'
+
+        available_refs: List[ReferenceDocument] = context['references']
+        final_content, selected_refs, selected_ids = _apply_reference_selection(final_content, available_refs)
+        assistant_metadata['selected_reference_ids'] = selected_ids
+        assistant_metadata['available_references'] = [reference.dict() for reference in available_refs]
+        assistant_metadata['references'] = [reference.dict() for reference in selected_refs]
+        assistant_metadata['reference_mode'] = 'retrieval' if selected_refs else 'llm_only'
 
         sqlite_manager.update_chat_message(
             context['assistant_message_id'],
@@ -906,6 +1155,13 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     if usage_info:
         context['assistant_metadata']['usage'] = usage_info
 
+    available_refs: List[ReferenceDocument] = context['references']
+    final_content, selected_refs, selected_ids = _apply_reference_selection(final_content, available_refs)
+    context['assistant_metadata']['selected_reference_ids'] = selected_ids
+    context['assistant_metadata']['available_references'] = [reference.dict() for reference in available_refs]
+    context['assistant_metadata']['references'] = [reference.dict() for reference in selected_refs]
+    context['assistant_metadata']['reference_mode'] = 'retrieval' if selected_refs else 'llm_only'
+
     sqlite_manager.update_chat_message(
         context['assistant_message_id'],
         content=final_content,
@@ -921,12 +1177,14 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     if assistant_message is None:
         raise HTTPException(status_code=500, detail="Failed to create assistant message")
 
+    selected_references = [reference for reference in context['references'] if reference.selected]
+
     return ChatResponse(
         conversation_id=context['conversation_id'],
         messages=[ChatMessageModel(**message) for message in messages],
         assistant_message=ChatMessageModel(**assistant_message),
         chunks=context['chunks'],
-        references=context['references'],
+        references=selected_references,
     )
 
 

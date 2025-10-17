@@ -1225,8 +1225,9 @@ async def upload_document(request: FileUploadRequest):
         if not file_path.is_file():
             raise HTTPException(status_code=400, detail=f"路径不是文件: {request.file_path}")
         
-        # 2. 获取项目根目录
-        project_root = ServerConfig.PROJECT_ROOT
+        # 2. 获取项目根目录并标准化路径
+        project_root = ServerConfig.PROJECT_ROOT.resolve()
+        file_path = file_path.resolve()
         
         # 验证文件是否在项目根目录内
         try:
@@ -2309,19 +2310,19 @@ async def reupload_document(request: ReuploadDocumentRequest):
         if not file_path.is_file():
             raise HTTPException(status_code=400, detail=f"路径不是文件: {request.file_path}")
         
-        # 2. 获取项目根目录
-        project_root = ServerConfig.PROJECT_ROOT
+        # 2. 获取项目根目录并标准化路径
+        project_root = ServerConfig.PROJECT_ROOT.resolve()
+        file_path = file_path.resolve()
         
         # 验证文件是否在项目根目录内
         try:
-            file_path.relative_to(project_root)
+            relative_file_path = str(file_path.relative_to(project_root))
         except ValueError:
             raise HTTPException(status_code=400, detail=f"文件必须在项目根目录内: {project_root}")
         
         # 获取文件名和类型
         filename = file_path.name
         file_type = file_path.suffix.lower().lstrip('.')
-        relative_file_path = str(file_path.relative_to(project_root))
         logger.info(f"文件信息: 名称={filename}, 类型={file_type}, 相对路径={relative_file_path}")
         
         # 3. 计算文件哈希值

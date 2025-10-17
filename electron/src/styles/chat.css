@@ -662,6 +662,19 @@
   transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
 
+.chat-reference-chunk.is-static {
+  cursor: default;
+  border-style: solid;
+  pointer-events: none;
+}
+
+.chat-reference-chunk.is-static:hover,
+.chat-reference-chunk.is-static:focus-visible {
+  border-color: rgba(148, 163, 184, 0.35);
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.9);
+}
+
 .chat-reference-chunk-label {
   font-size: 12px;
   font-weight: 600;
@@ -942,19 +955,97 @@
 }
 
 .chat-bubble .chat-markdown-body pre {
-  background-color: rgba(0, 0, 0, 0.05) !important;
-  border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.3) !important;
-  padding: 12px 14px;
-  margin: 10px 0;
+  background: #f8fafc !important;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.25) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.65), 0 1px 2px rgba(15, 23, 42, 0.06);
+  padding: 14px 16px;
+  margin: 12px 0;
   white-space: pre;
+  overflow-x: auto;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-.chat-bubble .chat-markdown-body code {
-  background-color: rgba(0, 0, 0, 0.06) !important;
-  padding: 0.15em 0.35em;
-  border-radius: 4px;
+.chat-bubble .chat-markdown-body pre code {
+  background: transparent !important;
+  padding: 0;
+  border-radius: 0;
   font-size: 13px;
+  line-height: 1.6;
+  font-family: 'Fira Code', 'JetBrains Mono', 'Menlo', monospace;
+  color: inherit;
+  display: block;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs {
+  color: #0f172a;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-comment,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-quote {
+  color: #64748b;
+  font-style: italic;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-keyword,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-selector-tag,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-literal,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-name {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-built_in,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-template-variable,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-meta,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-meta .hljs-keyword,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-class .hljs-title {
+  color: #0ea5e9;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-string,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-attr,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-attribute {
+  color: #047857;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-number,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-symbol,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-bullet,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-addition {
+  color: #b45309;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-title,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-title.function_,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-function {
+  color: #7c3aed;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-doctag,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-meta .hljs-string,
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-regexp {
+  color: #db2777;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-strong {
+  font-weight: 700;
+}
+
+.chat-bubble .chat-markdown-body pre code.hljs .hljs-emphasis {
+  font-style: italic;
+}
+
+.chat-bubble .chat-markdown-body :not(pre) > code {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+  border: 1px solid rgba(37, 99, 235, 0.12);
+  color: #1e3a8a;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.95em;
+  font-family: 'Fira Code', 'JetBrains Mono', 'Menlo', monospace;
+  white-space: pre-wrap;
 }
 
 .chat-bubble .chat-markdown-body table {
@@ -1002,6 +1093,9 @@
   background: #f5f5f5;
   color: var(--text-color);
   margin-left: 0; /* 与输入框左侧对齐 */
+  width: 100%;
+  max-width: 100%;
+  display: block;
 }
 
 .chat-message.user .chat-bubble {
@@ -1230,6 +1324,32 @@
   pointer-events: none;
 }
 
+#chat-send-btn .icon-stop {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+#chat-send-btn.is-stop {
+  background: #dc2626;
+  box-shadow: 0 12px 24px rgba(220, 38, 38, 0.28);
+}
+
+#chat-send-btn.is-stop:hover:not([disabled]) {
+  background: #b91c1c;
+  box-shadow: 0 16px 34px rgba(185, 28, 28, 0.36);
+}
+
+#chat-send-btn.is-stop:active:not([disabled]) {
+  transform: translateY(-50%) scale(0.98);
+}
+
+#chat-send-btn.is-stop[disabled] {
+  opacity: 0.8;
+  cursor: wait;
+  box-shadow: none;
+}
+
 .dark-mode #chat-history-container {
   background: var(--tree-bg);
 }
@@ -1282,18 +1402,90 @@
   color: rgba(203, 213, 225, 0.72);
 }
 
-.dark-mode .chat-bubble .chat-markdown-body pre {
-  background-color: rgba(22, 32, 52, 0.8) !important;
-  border-color: rgba(148, 163, 184, 0.35) !important;
+.dark-mode #chat-send-btn.is-stop {
+  background: #f87171;
+  box-shadow: 0 12px 24px rgba(239, 68, 68, 0.28);
+  color: #0f172a;
 }
 
-.dark-mode .chat-bubble .chat-markdown-body code {
-  background-color: rgba(51, 65, 85, 0.7) !important;
-  color: rgba(191, 219, 254, 0.9) !important;
+.dark-mode #chat-send-btn.is-stop:hover:not([disabled]) {
+  background: #ef4444;
+  box-shadow: 0 18px 36px rgba(248, 113, 113, 0.4);
+}
+
+.dark-mode #chat-send-btn.is-stop[disabled] {
+  background: #b91c1c;
+  box-shadow: none;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre {
+  background: #0f172a !important;
+  border: 1px solid rgba(94, 106, 133, 0.45) !important;
+  box-shadow: inset 0 0 0 1px rgba(30, 41, 59, 0.85);
+  color: #e2e8f0;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre code {
+  color: inherit;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs {
+  color: #e2e8f0;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-comment,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-quote {
+  color: #94a3b8;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-keyword,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-selector-tag,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-literal,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-name {
+  color: #93c5fd;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-built_in,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-template-variable,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-meta,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-meta .hljs-keyword,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-class .hljs-title {
+  color: #67e8f9;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-string,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-attr,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-attribute {
+  color: #34d399;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-number,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-symbol,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-bullet,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-addition {
+  color: #fbbf24;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-title,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-title.function_,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-function {
+  color: #d8b4fe;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-doctag,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-meta .hljs-string,
+.dark-mode .chat-bubble .chat-markdown-body pre code.hljs .hljs-regexp {
+  color: #f472b6;
+}
+
+.dark-mode .chat-bubble .chat-markdown-body :not(pre) > code {
+  background-color: rgba(56, 189, 248, 0.24) !important;
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #e0f2fe;
 }
 
 .dark-mode .chat-bubble .chat-markdown-body blockquote {
-  border-left-color: rgba(191, 219, 254, 0.45);
+  border-left-color: rgba(191, 219, 254, 0.4);
 }
 
 .dark-mode #chat-input {

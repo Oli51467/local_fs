@@ -91,6 +91,16 @@ class ChatModule {
     this.chatModelButtonTextEl = document.getElementById('chat-model-button-text');
     this.chatModelDropdownEl = document.getElementById('chat-model-dropdown');
 
+    this.sendBtnDefaultContent = this.chatSendBtn ? this.chatSendBtn.innerHTML : '';
+    this.sendBtnDefaultAriaLabel = this.chatSendBtn
+      ? (this.chatSendBtn.getAttribute('aria-label') || '发送消息')
+      : '发送消息';
+    this.sendBtnStopContent = (
+      '<svg class="icon-stop" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+      + '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"></rect>'
+      + '</svg>'
+    );
+
     this.currentConversationId = null;
     this.conversations = [];
     this.messages = [];
@@ -111,6 +121,9 @@ class ChatModule {
     this.markdownStyleRefs = new Set();
     this.unsubscribeModelRegistry = null;
     this.modelModuleListenerRetryScheduled = false;
+    this.isStreaming = false;
+    this.activeRequestController = null;
+    this.abortRequested = false;
 
     if (window.fsAPI && typeof window.fsAPI.onSettingsUpdated === 'function') {
       window.fsAPI.onSettingsUpdated((config) => {
@@ -119,6 +132,7 @@ class ChatModule {
     }
 
     this.tryAttachModelModuleListener();
+    this.updateSendButtonState();
   }
 
   async init() {
@@ -134,14 +148,18 @@ class ChatModule {
 
   bindEvents() {
     if (this.chatSendBtn) {
-      this.chatSendBtn.addEventListener('click', () => this.handleSend());
+      this.chatSendBtn.addEventListener('click', () => this.handleSendClick());
     }
 
     if (this.chatInputEl) {
       this.chatInputEl.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
-          this.handleSend();
+          if (this.isStreaming) {
+            this.handleAbortStreaming();
+          } else {
+            this.handleSend();
+          }
         }
       });
 
@@ -186,6 +204,47 @@ class ChatModule {
     document.addEventListener('click', this.handleDocumentClick);
     document.addEventListener('keydown', this.handleDocumentKeydown);
     document.addEventListener('modelRegistryChanged', this.modelRegistryHandler);
+  }
+
+  updateSendButtonState() {
+    if (!this.chatSendBtn) {
+      return;
+    }
+    if (this.isStreaming) {
+      this.chatSendBtn.innerHTML = this.sendBtnStopContent;
+      this.chatSendBtn.setAttribute('aria-label', '终止回答');
+      this.chatSendBtn.classList.add('is-stop');
+      this.chatSendBtn.disabled = Boolean(this.abortRequested);
+    } else {
+      this.chatSendBtn.innerHTML = this.sendBtnDefaultContent;
+      this.chatSendBtn.setAttribute('aria-label', this.sendBtnDefaultAriaLabel);
+      this.chatSendBtn.classList.remove('is-stop');
+      this.chatSendBtn.disabled = Boolean(this.pendingRequest);
+    }
+  }
+
+  handleSendClick() {
+    if (this.isStreaming) {
+      this.handleAbortStreaming();
+    } else {
+      this.handleSend();
+    }
+  }
+
+  handleAbortStreaming() {
+    if (!this.isStreaming || this.abortRequested) {
+      return;
+    }
+    this.abortRequested = true;
+    if (this.activeRequestController && typeof this.activeRequestController.abort === 'function') {
+      try {
+        this.activeRequestController.abort();
+      } catch (error) {
+        console.debug('终止请求失败:', error);
+      }
+    }
+    this.setStatus('正在终止回答…', 'info');
+    this.updateSendButtonState();
   }
 
   tryAttachModelModuleListener() {
@@ -549,11 +608,21 @@ class ChatModule {
     await this.init();
     await this.refreshAvailableModels();
     await this.refreshConversations();
-    if (this.conversations.length && this.currentConversationId === null) {
-      this.openConversation(this.conversations[0].id);
-    } else if (this.currentConversationId === null) {
+
+    const hasStreaming = Boolean(this.streamingState && Array.isArray(this.messages) && this.messages.length);
+    if (hasStreaming) {
+      this.renderMessages();
+      this.updateStreamingBubble();
+    } else if (this.currentConversationId !== null
+        && this.currentConversationId !== undefined
+        && (!Array.isArray(this.messages) || !this.messages.length)) {
+      await this.openConversation(this.currentConversationId);
+    } else if (this.conversations.length && (this.currentConversationId === null || this.currentConversationId === undefined)) {
+      await this.openConversation(this.conversations[0].id);
+    } else if (!Array.isArray(this.messages) || !this.messages.length) {
       this.startNewConversation();
     }
+
     this.autoResizeTextarea();
     this.showChatPage();
   }
@@ -598,6 +667,9 @@ class ChatModule {
   }
 
   startNewConversation() {
+    if (this.streamingState) {
+      this.streamingState = null;
+    }
     this.currentConversationId = null;
     this.messages = [];
     this.renderMessages();
@@ -865,6 +937,7 @@ class ChatModule {
       const data = await response.json();
       this.currentConversationId = data.conversation.id;
       this.messages = this.normalizeMessageList(data.messages);
+      this.ensureStreamingMessageRetained(conversationId);
       this.renderMessages();
       const conversationSummary = data.conversation ? { ...data.conversation } : null;
       if (conversationSummary) {
@@ -900,10 +973,47 @@ class ChatModule {
     }
   }
 
+  ensureStreamingMessageRetained(targetConversationId = this.currentConversationId) {
+    if (!this.streamingState || !this.streamingState.message) {
+      return;
+    }
+
+    if (!Array.isArray(this.messages)) {
+      this.messages = [];
+    }
+
+    const streamingId = this.streamingState.messageId || this.streamingState.message.id;
+    if (!streamingId) {
+      return;
+    }
+
+    const stateKey = Object.prototype.hasOwnProperty.call(this.streamingState, 'conversationKey')
+      ? this.streamingState.conversationKey
+      : undefined;
+
+    const resolvedTarget = targetConversationId !== undefined
+      ? targetConversationId
+      : this.currentConversationId;
+    const targetKey = resolvedTarget === null || resolvedTarget === undefined
+      ? 'pending'
+      : `id:${resolvedTarget}`;
+
+    if (stateKey && stateKey !== targetKey) {
+      return;
+    }
+
+    const exists = this.messages.some((message) => String(message?.id) === String(streamingId));
+    if (!exists) {
+      this.messages.push(this.streamingState.message);
+    }
+  }
+
   renderMessages() {
     if (!this.chatMessagesEl) {
       return;
     }
+
+    this.ensureStreamingMessageRetained();
 
     this.chatMessagesEl.innerHTML = '';
 
@@ -1284,15 +1394,19 @@ class ChatModule {
       anchor.setAttribute('target', '_blank');
       anchor.setAttribute('rel', 'noopener noreferrer');
     });
-    if (window.hljs && typeof window.hljs.highlightElement === 'function') {
-      root.querySelectorAll('pre code').forEach((block) => {
+    const codeBlocks = root.querySelectorAll('pre code');
+    codeBlocks.forEach((block) => {
+      if (window.hljs && typeof window.hljs.highlightElement === 'function') {
         try {
           window.hljs.highlightElement(block);
         } catch (error) {
           console.debug('代码高亮失败:', error);
         }
-      });
-    }
+      }
+      if (!block.classList.contains('hljs')) {
+        block.classList.add('hljs');
+      }
+    });
   }
 
   trimMarkdownWhitespace(root) {
@@ -1543,7 +1657,9 @@ class ChatModule {
     if (!Array.isArray(raw) || !raw.length) {
       return [];
     }
-    return raw.filter((item) => item && typeof item === 'object');
+    return raw
+      .filter((item) => item && typeof item === 'object')
+      .filter((item) => (item.selected === undefined) || Boolean(item.selected));
   }
 
   renderReferenceSection(references, metadata) {
@@ -1607,7 +1723,8 @@ class ChatModule {
     const docButton = document.createElement('button');
     docButton.type = 'button';
     docButton.className = 'chat-reference-name';
-    docButton.textContent = reference.display_name || reference.filename || '未命名文件';
+    const displayName = reference.display_name || reference.filename || '未命名文件';
+    docButton.textContent = reference.reference_id ? `${reference.reference_id} · ${displayName}` : displayName;
     docButton.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1619,7 +1736,16 @@ class ChatModule {
 
     const meta = document.createElement('span');
     meta.className = 'chat-reference-meta';
-    meta.textContent = chunkCount ? `${chunkCount} 个片段` : '未找到片段';
+    const metaParts = [];
+    if (reference.score && Number.isFinite(reference.score)) {
+      metaParts.push(`相关性 ${Number(reference.score).toFixed(2)}`);
+    }
+    if (chunkCount) {
+      metaParts.push(`片段 ${chunkCount} 个`);
+    } else if (reference.snippet) {
+      metaParts.push('片段摘要 1 条');
+    }
+    meta.textContent = metaParts.length ? metaParts.join(' · ') : '暂无片段预览';
     header.appendChild(meta);
 
     const chunkContainer = document.createElement('div');
@@ -1674,6 +1800,22 @@ class ChatModule {
 
         chunkContainer.appendChild(chunkBlock);
       });
+    } else if (reference.snippet) {
+      const snippetBlock = document.createElement('div');
+      snippetBlock.className = 'chat-reference-chunk is-static';
+      snippetBlock.setAttribute('tabindex', '-1');
+
+      const snippetLabel = document.createElement('div');
+      snippetLabel.className = 'chat-reference-chunk-label';
+      snippetLabel.textContent = '片段摘要';
+
+      const snippetContent = document.createElement('div');
+      snippetContent.className = 'chat-reference-chunk-content';
+      snippetContent.textContent = this.buildReferenceSnippet(reference.snippet);
+
+      snippetBlock.appendChild(snippetLabel);
+      snippetBlock.appendChild(snippetContent);
+      chunkContainer.appendChild(snippetBlock);
     } else {
       const empty = document.createElement('div');
       empty.className = 'chat-reference-empty';
@@ -2177,6 +2319,10 @@ class ChatModule {
         this.currentConversationId = data.conversation_id;
       }
       if (this.streamingState) {
+        if (typeof data.conversation_id === 'number') {
+          this.streamingState.conversationId = data.conversation_id;
+          this.streamingState.conversationKey = `id:${data.conversation_id}`;
+        }
         if (data.assistant_message_id) {
           this.streamingState.messageId = data.assistant_message_id;
           if (this.streamingState.message) {
@@ -2212,6 +2358,15 @@ class ChatModule {
     }
 
     if (event === 'done') {
+      if (typeof data.conversation_id === 'number') {
+        if (this.streamingState) {
+          this.streamingState.conversationId = data.conversation_id;
+          this.streamingState.conversationKey = `id:${data.conversation_id}`;
+        }
+        if (this.currentConversationId === null || this.currentConversationId === undefined) {
+          this.currentConversationId = data.conversation_id;
+        }
+      }
       if (this.streamingState) {
         const rawContent = typeof data.content === 'string'
           ? data.content
@@ -2289,10 +2444,33 @@ class ChatModule {
     const decoder = new TextDecoder('utf-8', { fatal: false });
     let buffer = '';
     let hadError = false;
+    let aborted = false;
+    const cancelReader = async () => {
+      try {
+        await reader.cancel();
+      } catch (error) {
+        console.debug('取消流式读取失败:', error);
+      }
+    };
 
     while (true) {
-      const { value, done } = await reader.read();
+      let readResult;
+      try {
+        readResult = await reader.read();
+      } catch (error) {
+        if (this.abortRequested || (error && error.name === 'AbortError')) {
+          aborted = true;
+          break;
+        }
+        throw error;
+      }
+      const { value, done } = readResult;
       if (done) {
+        break;
+      }
+      if (this.abortRequested) {
+        aborted = true;
+        await cancelReader();
         break;
       }
       // 增量解码，确保中文等多字节字符不被截断
@@ -2323,16 +2501,29 @@ class ChatModule {
         const result = this.handleStreamEvent(eventPayload);
         if (result === 'error') {
           hadError = true;
-          await reader.cancel();
-          return { hadError };
+          await cancelReader();
+          return { hadError, aborted };
         }
         if (result === 'done') {
-          return { hadError };
+          return { hadError, aborted };
+        }
+        if (this.abortRequested) {
+          aborted = true;
+          await cancelReader();
+          return { hadError, aborted };
         }
         // 继续查找剩余缓冲中的完整事件
         idxLF = buffer.indexOf('\n\n');
         idxCRLF = buffer.indexOf('\r\n\r\n');
       }
+    }
+
+    if (this.abortRequested && !aborted) {
+      aborted = true;
+    }
+
+    if (aborted) {
+      return { hadError, aborted };
     }
 
     // 读取结束后执行最终flush，确保最后一个多字节字符不丢失
@@ -2360,6 +2551,12 @@ class ChatModule {
           if (result === 'error') {
             hadError = true;
           }
+          if (result === 'done' || this.abortRequested) {
+            if (this.abortRequested) {
+              aborted = true;
+            }
+            return { hadError, aborted };
+          }
         }
       }
       idxLF = buffer.indexOf('\n\n');
@@ -2374,10 +2571,13 @@ class ChatModule {
         if (result === 'error') {
           hadError = true;
         }
+        if (result === 'done') {
+          return { hadError, aborted };
+        }
       }
     }
 
-    return { hadError };
+    return { hadError, aborted };
   }
 
   async handleSend() {
@@ -2412,9 +2612,12 @@ class ChatModule {
       return;
     }
 
-    if (this.pendingRequest) {
+    if (this.isStreaming || this.pendingRequest) {
       return;
     }
+
+    this.pendingRequest = true;
+    this.updateSendButtonState();
 
     this.closeModelDropdown();
 
@@ -2432,8 +2635,6 @@ class ChatModule {
       }
     };
 
-    this.pendingRequest = true;
-    this.chatSendBtn.disabled = true;
     if (this.chatInputEl) {
       this.chatInputEl.disabled = true;
     }
@@ -2456,7 +2657,6 @@ class ChatModule {
     };
     this.messages.push(streamingMessage);
 
-    // 先设置流式状态，再渲染消息，以便等待样式正确显示
     this.streamingState = {
       message: streamingMessage,
       messageId: streamingMessage.id,
@@ -2465,12 +2665,15 @@ class ChatModule {
       content: null,
       avatar: null,
       buffer: '',
-      metadata: null
+      metadata: null,
+      conversationId: this.currentConversationId,
+      conversationKey: (this.currentConversationId === null || this.currentConversationId === undefined)
+        ? 'pending'
+        : `id:${this.currentConversationId}`
     };
 
     this.renderMessages();
 
-    // 渲染后再绑定元素引用并刷新等待气泡
     const elements = this.findMessageElements(streamingMessage.id);
     this.streamingState.wrapper = elements.wrapper;
     this.streamingState.bubble = elements.bubble;
@@ -2481,6 +2684,17 @@ class ChatModule {
     this.chatInputEl.value = '';
     this.autoResizeTextarea();
 
+    const controller = new AbortController();
+    this.activeRequestController = controller;
+    this.abortRequested = false;
+
+    this.isStreaming = true;
+    this.pendingRequest = null;
+    this.updateSendButtonState();
+
+    let hadError = false;
+    let aborted = false;
+
     try {
       const response = await fetch(`${this.baseApiUrl}/stream`, {
         method: 'POST',
@@ -2488,7 +2702,8 @@ class ChatModule {
           'Content-Type': 'application/json',
           'Accept': 'text/event-stream'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
 
       if (!response.ok) {
@@ -2496,23 +2711,36 @@ class ChatModule {
         throw new Error(errorText || `发送失败 (${response.status})`);
       }
 
-      const { hadError } = await this.processStreamResponse(response);
+      const { hadError: streamError, aborted: streamAborted } = await this.processStreamResponse(response);
+      hadError = streamError;
+      aborted = streamAborted || this.abortRequested;
 
-    if (hadError) {
-      if (this.streamingState && this.streamingState.message) {
-        streamingMessage.content = this.streamingState.buffer || streamingMessage.content;
-        streamingMessage.metadata = {
-          ...(streamingMessage.metadata || {}),
-          error: true
-        };
-      }
-      this.streamingState = null;
-      this.renderMessages();
-    } else {
-      if (this.streamingState && this.streamingState.message) {
-        streamingMessage.content = this.streamingState.buffer || streamingMessage.content;
-        if (this.streamingState.metadata) {
-          streamingMessage.metadata = this.streamingState.metadata;
+      if (aborted) {
+        if (this.streamingState && this.streamingState.message) {
+          streamingMessage.content = this.streamingState.buffer || streamingMessage.content;
+          streamingMessage.metadata = {
+            ...(streamingMessage.metadata || {}),
+            aborted: true
+          };
+        }
+        this.streamingState = null;
+        this.renderMessages();
+        this.setStatus('回答已终止。', 'info');
+      } else if (hadError) {
+        if (this.streamingState && this.streamingState.message) {
+          streamingMessage.content = this.streamingState.buffer || streamingMessage.content;
+          streamingMessage.metadata = {
+            ...(streamingMessage.metadata || {}),
+            error: true
+          };
+        }
+        this.streamingState = null;
+        this.renderMessages();
+      } else {
+        if (this.streamingState && this.streamingState.message) {
+          streamingMessage.content = this.streamingState.buffer || streamingMessage.content;
+          if (this.streamingState.metadata) {
+            streamingMessage.metadata = this.streamingState.metadata;
           }
         }
         this.streamingState = null;
@@ -2524,33 +2752,50 @@ class ChatModule {
         }
       }
     } catch (error) {
-      console.error('发送消息失败:', error);
-      const message = error?.message || '发送失败，请稍后重试。';
-      this.setStatus(message, 'error');
-      streamingMessage.content = message;
-      streamingMessage.metadata = {
-        ...(streamingMessage.metadata || {}),
-        error: true
-      };
-      this.streamingState = null;
-      this.renderMessages();
-      try {
-        await this.refreshConversations();
-        if (this.currentConversationId !== null && this.currentConversationId !== undefined) {
-          await this.openConversation(this.currentConversationId);
+      if (error?.name === 'AbortError' || this.abortRequested) {
+        aborted = true;
+        if (this.streamingState && this.streamingState.message) {
+          streamingMessage.content = this.streamingState.buffer || streamingMessage.content;
+          streamingMessage.metadata = {
+            ...(streamingMessage.metadata || {}),
+            aborted: true
+          };
         }
-      } catch (refreshError) {
-        console.warn('刷新会话失败:', refreshError);
+        this.streamingState = null;
+        this.renderMessages();
+        this.setStatus('回答已终止。', 'info');
+      } else {
+        console.error('发送消息失败:', error);
+        const message = error?.message || '发送失败，请稍后重试。';
+        this.setStatus(message, 'error');
+        streamingMessage.content = message;
+        streamingMessage.metadata = {
+          ...(streamingMessage.metadata || {}),
+          error: true
+        };
+        this.streamingState = null;
+        this.renderMessages();
+        hadError = true;
+        try {
+          await this.refreshConversations();
+          if (this.currentConversationId !== null && this.currentConversationId !== undefined) {
+            await this.openConversation(this.currentConversationId);
+          }
+        } catch (refreshError) {
+          console.warn('刷新会话失败:', refreshError);
+        }
       }
     } finally {
-      this.chatSendBtn.disabled = false;
+      this.isStreaming = false;
+      this.activeRequestController = null;
+      this.abortRequested = false;
+      this.pendingRequest = null;
       if (this.chatInputEl) {
         this.chatInputEl.disabled = false;
         this.chatInputEl.focus();
       }
-      this.pendingRequest = null;
-      // 不显示“回答已完成”状态提示，保持底部状态为空
-      if (this.chatStatusTextEl) {
+      this.updateSendButtonState();
+      if (!hadError && !aborted && this.chatStatusTextEl) {
         this.chatStatusTextEl.textContent = '';
         delete this.chatStatusTextEl.dataset.statusType;
       }

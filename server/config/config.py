@@ -12,7 +12,7 @@ class ServerConfig:
     PORT = 8000
     DEBUG = True
 
-    PROJECT_ROOT = Path(__file__).parent.parent.parent
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
     BGE_M3_MODEL_PATH = PROJECT_ROOT / "meta" / "embedding" / "bge-m3"
     BGE_RERANKER_MODEL_PATH = PROJECT_ROOT / "meta" / "reranker" / "bge-reranker-v3-m3"
@@ -34,7 +34,7 @@ class ServerConfig:
 class DatabaseConfig:
     """数据库配置"""
 
-    PROJECT_ROOT = Path(__file__).parent.parent.parent
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
     DATABASE_DIR = PROJECT_ROOT / "data"
     SQLITE_DIR = PROJECT_ROOT / "meta" / "sqlite"
