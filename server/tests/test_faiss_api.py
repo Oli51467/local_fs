@@ -148,9 +148,15 @@ class FakeRerankerService:
 
 
 class FakeSQLiteService:
-    def __init__(self, allowed_vectors: Dict[int, Dict[str, Any]], known_docs: Dict[str, Dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        allowed_vectors: Dict[int, Dict[str, Any]],
+        known_docs: Dict[str, Dict[str, Any]],
+        chunk_search_results: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         self._allowed_vectors = allowed_vectors
         self._known_docs = known_docs
+        self._chunk_search_results = chunk_search_results or []
 
     def get_chunk_by_vector_id(self, vector_id: int) -> Optional[Dict[str, Any]]:
         record = self._allowed_vectors.get(vector_id)
@@ -164,9 +170,12 @@ class FakeSQLiteService:
 
     def get_document_by_id(self, document_id: int) -> Optional[Dict[str, Any]]:
         for document in self._known_docs.values():
-            if document.get("id") == document_id:
+            if document.get('id') == document_id:
                 return dict(document)
         return None
+
+    def search_chunks_by_substring(self, query: str) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._chunk_search_results]
 
 
 def create_test_client(
@@ -262,6 +271,68 @@ def test_hybrid_text_search_merges_dense_lexical_and_rerank(monkeypatch):
     assert semantic_entry["filename"] == "doc2.txt"
     assert semantic_entry["metrics"]["semantic"]["embedding_score"] == pytest.approx(0.57)
 
+def test_exact_match_returns_all_chunks(monkeypatch):
+    metadata: List[Dict[str, Any]] = []
+    dense_results = [[]]
+    lexical_results: List[Dict[str, Any]] = []
+    bm25_scores: List[float] = []
+    rerank_scores: List[float] = []
+
+    def _raise_clip_service():
+        raise RuntimeError('clip unavailable')
+
+    monkeypatch.setattr(faiss_api, 'get_clip_embedding_service', _raise_clip_service)
+
+    chunk_search_results = [
+        {
+            'chunk_id': 7001,
+            'document_id': 201,
+            'chunk_index': 0,
+            'content': 'Alpha first paragraph',
+            'vector_id': 10,
+            'filename': 'docA.txt',
+            'file_path': 'docs/docA.txt',
+            'file_type': 'text/plain',
+            'upload_time': '2024-01-02T00:00:00',
+        },
+        {
+            'chunk_id': 7002,
+            'document_id': 202,
+            'chunk_index': 1,
+            'content': 'Second Alpha paragraph',
+            'vector_id': 11,
+            'filename': 'docB.txt',
+            'file_path': 'docs/docB.txt',
+            'file_type': 'text/plain',
+            'upload_time': '2024-01-03T00:00:00',
+        },
+    ]
+
+    client = create_test_client(
+        FakeFaissManager(metadata, dense_results),
+        FakeEmbeddingService(),
+        FakeImageFaissManager(),
+        FakeBM25Service(lexical_results, bm25_scores),
+        FakeRerankerService(rerank_scores),
+        FakeSQLiteService({}, {}, chunk_search_results),
+    )
+
+    response = client.post(
+        '/api/faiss/search',
+        json={'query': 'Alpha', 'top_k': 1},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    exact_results = payload['exact_match']['results']
+    assert len(exact_results) == 2
+    filenames = {item['filename'] for item in exact_results}
+    assert filenames == {'docA.txt', 'docB.txt'}
+
+    combined_results = payload['combined']['results']
+    exact_count = sum(1 for item in combined_results if item['source'] == 'exact')
+    assert exact_count == 2
+
 
 def test_unregistered_documents_are_excluded(monkeypatch):
     metadata = [
@@ -324,13 +395,27 @@ def test_unregistered_documents_are_excluded(monkeypatch):
         }
     }
 
+    chunk_search_results = [
+        {
+            "chunk_id": 5001,
+            "document_id": 101,
+            "chunk_index": 0,
+            "content": metadata[0]["chunk_text"],
+            "vector_id": 0,
+            "filename": "doc1.txt",
+            "file_path": "docs/doc1.txt",
+            "file_type": "text/plain",
+            "upload_time": "2024-01-01T00:00:00",
+        }
+    ]
+
     client = create_test_client(
         FakeFaissManager(metadata, dense_results),
         FakeEmbeddingService(),
         FakeImageFaissManager(),
         FakeBM25Service(lexical_results, bm25_scores),
         FakeRerankerService(rerank_scores),
-        FakeSQLiteService(allowed_vectors, known_docs),
+        FakeSQLiteService(allowed_vectors, known_docs, chunk_search_results),
     )
 
     response = client.post(

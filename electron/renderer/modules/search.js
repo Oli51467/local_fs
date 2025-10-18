@@ -714,8 +714,8 @@
         }
 
         .search-card-chip[data-variant="exact"] {
-          background: rgba(147, 197, 253, 0.28);
-          border-color: rgba(59, 130, 246, 0.35);
+          background: rgba(191, 219, 254, 0.32);
+          border-color: rgba(96, 165, 250, 0.45);
           color: rgba(30, 64, 175, 0.95);
         }
 
@@ -723,6 +723,12 @@
           background: rgba(125, 211, 252, 0.26);
           border-color: rgba(14, 165, 233, 0.35);
           color: rgba(12, 74, 110, 0.95);
+        }
+
+        .search-card-chip[data-variant="hybrid"] {
+          background: rgba(221, 214, 254, 0.32);
+          border-color: rgba(167, 139, 250, 0.45);
+          color: rgba(88, 28, 135, 0.95);
         }
 
         .search-card-chip[data-variant="image"] {
@@ -750,8 +756,13 @@
         }
 
         .dark-mode .search-card-chip[data-variant="exact"] {
-          background: rgba(59, 130, 246, 0.32);
-          border-color: rgba(37, 99, 235, 0.48);
+          background: rgba(96, 165, 250, 0.3);
+          border-color: rgba(37, 99, 235, 0.52);
+        }
+
+        .dark-mode .search-card-chip[data-variant="hybrid"] {
+          background: rgba(167, 139, 250, 0.32);
+          border-color: rgba(192, 132, 252, 0.48);
         }
 
         .dark-mode .search-card-chip[data-variant="semantic"] {
@@ -1164,6 +1175,49 @@
     return 'semantic';
   }
 
+  function resolveSourceChipInfo(result, fallbackVariant) {
+    const fallback = fallbackVariant === 'exact'
+      ? { label: '字符匹配', variant: 'exact' }
+      : { label: '语义检索', variant: 'semantic' };
+
+    if (!result) {
+      return fallback;
+    }
+
+    const sourcesArray = Array.isArray(result.sources) ? result.sources : [];
+    const normalizedSources = Array.from(
+      new Set(
+        sourcesArray
+          .map((source) => String(source || '').toLowerCase())
+          .filter(Boolean)
+      )
+    );
+
+    if (!normalizedSources.length) {
+      return fallback;
+    }
+
+    const hasExactOnly = normalizedSources.length === 1 && normalizedSources[0] === 'exact';
+    if (hasExactOnly) {
+      return { label: '字符匹配', variant: 'exact' };
+    }
+
+    const signalSources = normalizedSources.filter((source) => !['exact', 'semantic'].includes(source));
+    if (signalSources.length >= 2 || (signalSources.length >= 1 && normalizedSources.length >= 2)) {
+      return { label: '混合检索', variant: 'hybrid' };
+    }
+
+    if (normalizedSources.includes('exact')) {
+      return { label: '字符匹配', variant: 'exact' };
+    }
+
+    if (normalizedSources.includes('semantic') || signalSources.length > 0) {
+      return { label: '语义检索', variant: 'semantic' };
+    }
+
+    return fallback;
+  }
+
   function buildSearchCard(result, variant, index) {
     const card = document.createElement('div');
     card.className = 'search-result-card';
@@ -1194,9 +1248,9 @@
       sourceChip.dataset.variant = 'image';
       sourceChip.textContent = '图片';
     } else {
-      sourceChip.dataset.variant = 'source';
-      const sourcesLabel = Array.isArray(result.sources) ? result.sources.join(' + ') : (result.source || variant);
-      sourceChip.textContent = sourcesLabel === 'exact' ? '字符匹配' : sourcesLabel === 'semantic' ? '语义检索' : sourcesLabel.replace('exact', '字符').replace('semantic', '语义');
+      const chipInfo = resolveSourceChipInfo(result, variant);
+      sourceChip.dataset.variant = chipInfo.variant;
+      sourceChip.textContent = chipInfo.label;
     }
     header.appendChild(sourceChip);
 
@@ -1469,10 +1523,6 @@
       }
 
       const parts = [];
-
-      if (metric.rank !== undefined && metric.rank !== null) {
-        parts.push(`Rank #${metric.rank}`);
-      }
 
       const formatScore = (value, digits = 3) => {
         if (value === undefined || value === null) {

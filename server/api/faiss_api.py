@@ -731,80 +731,94 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
             seen_exact: Set[Tuple] = set()
             lowered = query_text.lower()
 
-            for meta in faiss_manager.metadata or []:
-                resolved_meta = resolve_meta(meta)
-                if not resolved_meta:
-                    continue
-                chunk_text = str(resolved_meta.get('chunk_text') or resolved_meta.get('text') or '')
-                filename = str(resolved_meta.get('filename') or '')
-                file_path = str(resolved_meta.get('file_path') or resolved_meta.get('path') or '')
+            chunk_records: List[Dict[str, Any]] = []
+            if sqlite_service is not None:
+                try:
+                    chunk_records = sqlite_service.search_chunks_by_substring(query_text)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("字符匹配查询失败: %s", exc)
+                    chunk_records = []
 
-                best_match: Optional[Dict[str, Any]] = None
-                for field_name, candidate in (
-                    ('chunk_text', chunk_text),
-                    ('filename', filename),
-                    ('file_path', file_path),
-                ):
-                    if not candidate:
-                        continue
-                    candidate_text = str(candidate)
-                    position = candidate_text.lower().find(lowered)
-                    if position == -1:
-                        continue
-                    match_info = {
-                        'field': field_name,
-                        'position': position,
-                        'text': candidate_text,
-                    }
-                    if best_match is None:
-                        best_match = match_info
-                    else:
-                        current_priority = field_priorities.get(best_match['field'], 99)
-                        candidate_priority = field_priorities.get(field_name, 99)
-                        if candidate_priority < current_priority:
-                            best_match = match_info
-                        elif candidate_priority == current_priority and position < best_match['position']:
-                            best_match = match_info
-                        elif (
-                            candidate_priority == current_priority
-                            and position == best_match['position']
-                            and len(candidate_text) < len(best_match['text'])
-                        ):
-                            best_match = match_info
+            def append_match(meta_source: Dict[str, Any], field_name: str, candidate_text: Any) -> None:
+                if not candidate_text:
+                    return
+                candidate_text_str = str(candidate_text)
+                position = candidate_text_str.lower().find(lowered)
+                if position == -1:
+                    return
 
-                if best_match is None or best_match['field'] == 'filename':
-                    continue
-
-                key = build_chunk_key(resolved_meta)
+                meta = dict(meta_source)
+                key = build_chunk_key(meta)
                 if key in seen_exact:
-                    continue
-                seen_exact.add(key)
+                    return
 
                 match_length = len(query_text)
-                match_preview = build_match_preview(best_match['text'], best_match['position'], match_length)
+                match_preview = build_match_preview(candidate_text_str, position, match_length)
                 rank = len(exact_results) + 1
                 result = build_result(
-                    resolved_meta,
+                    meta,
                     'exact',
                     {
                         'rank': rank,
-                        'match_position': best_match['position'],
-                        'match_field': best_match['field'],
+                        'match_position': position,
+                        'match_field': field_name,
                         'match_length': match_length,
                         'match_preview': match_preview,
                         'match_score': 1.0,
                     },
                 )
                 exact_results.append(result)
+                seen_exact.add(key)
 
-                if chunk_text.strip().lower() == lowered:
-                    perfect_matches.append(result)
+                if field_name == 'chunk_text':
+                    chunk_value = str(meta.get('chunk_text') or meta.get('text') or '').strip().lower()
+                    if chunk_value == lowered:
+                        perfect_matches.append(result)
+
+            for record in chunk_records:
+                chunk_text = str(record.get('content') or '')
+                meta_payload: Dict[str, Any] = {
+                    'document_id': record.get('document_id'),
+                    'filename': record.get('filename') or '',
+                    'file_path': record.get('file_path') or '',
+                    'file_type': record.get('file_type'),
+                    'chunk_index': record.get('chunk_index'),
+                    'chunk_text': chunk_text,
+                    'vector_id': record.get('vector_id'),
+                    'chunk_id': record.get('chunk_id'),
+                }
+                append_match(meta_payload, 'chunk_text', chunk_text)
+
+            include_chunk_text_from_metadata = not chunk_records
+            for meta in faiss_manager.metadata or []:
+                resolved_meta = resolve_meta(meta)
+                if not resolved_meta:
+                    continue
+                if include_chunk_text_from_metadata:
+                    append_match(
+                        resolved_meta,
+                        'chunk_text',
+                        resolved_meta.get('chunk_text') or resolved_meta.get('text') or '',
+                    )
+                append_match(resolved_meta, 'filename', resolved_meta.get('filename') or '')
+                append_match(
+                    resolved_meta,
+                    'file_path',
+                    resolved_meta.get('file_path') or resolved_meta.get('path') or '',
+                )
 
             return exact_results, perfect_matches
 
         exact_results, perfect_exact_matches = perform_exact_match()
         if perfect_exact_matches:
-            exact_results = perfect_exact_matches[:top_k]
+            perfect_keys = {build_chunk_key(item) for item in perfect_exact_matches}
+            remaining_exact = [
+                item for item in exact_results if build_chunk_key(item) not in perfect_keys
+            ]
+            exact_results = perfect_exact_matches + remaining_exact
+
+        for idx, exact_entry in enumerate(exact_results, start=1):
+            exact_entry['rank'] = idx
 
         semantic_results: List[Dict[str, Any]] = []
         text_candidates: List[Dict[str, Any]] = []
@@ -1220,6 +1234,9 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
 
         filtered_candidates = [candidate for candidate in text_candidates if _candidate_passes(candidate)]
 
+        desired_limit = max(top_k, 6)
+        selected_candidates: List[Dict[str, Any]] = []
+
         if filtered_candidates:
             top_candidate = filtered_candidates[0]
             if _is_strong_candidate(top_candidate):
@@ -1233,11 +1250,24 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 ]
                 if not confident_candidates:
                     confident_candidates = [top_candidate]
-                filtered_candidates = confident_candidates
+                selected_candidates = confident_candidates
             else:
-                filtered_candidates = []
+                selected_candidates = filtered_candidates[:desired_limit]
 
-        selected_candidates = filtered_candidates[:top_k]
+        if len(selected_candidates) < desired_limit:
+            for candidate in text_candidates:
+                if candidate in selected_candidates:
+                    continue
+                final_score = candidate.get('final_score') or 0.0
+                if final_score >= max(TEXT_MIN_FINAL_SCORE - 0.05, 0.35):
+                    selected_candidates.append(candidate)
+                if len(selected_candidates) >= desired_limit:
+                    break
+
+        if not selected_candidates and text_candidates:
+            selected_candidates = text_candidates[:min(len(text_candidates), desired_limit)]
+        else:
+            selected_candidates = selected_candidates[:desired_limit]
         seen_semantic_keys: Set[Tuple] = set()
         for candidate in selected_candidates:
             key = build_chunk_key(candidate.get('meta', {}))

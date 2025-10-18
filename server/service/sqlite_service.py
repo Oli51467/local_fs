@@ -460,6 +460,58 @@ class SQLiteManager:
                 }
             return None
 
+    def search_chunks_by_substring(self, query: str) -> List[Dict[str, Any]]:
+        """检索包含指定子串的全部文档块。"""
+        if not query:
+            return []
+
+        # 处理通配符，避免用户输入影响 LIKE 模式
+        escaped = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+        pattern = f"%{escaped}%"
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT
+                        dc.id AS chunk_id,
+                        dc.document_id,
+                        dc.chunk_index,
+                        dc.content,
+                        dc.vector_id,
+                        d.filename,
+                        d.file_path,
+                        d.file_type,
+                        d.upload_time
+                    FROM document_chunks dc
+                    JOIN documents d ON d.id = dc.document_id
+                    WHERE dc.content LIKE ? ESCAPE '\\' COLLATE NOCASE
+                    ORDER BY d.upload_time DESC, dc.chunk_index
+                    """,
+                    (pattern,)
+                )
+            except Exception as exc:
+                logger.warning("搜索文档块时出错: %s", exc)
+                return []
+
+            rows = cursor.fetchall()
+            results: List[Dict[str, Any]] = []
+            for row in rows:
+                results.append({
+                    'chunk_id': row['chunk_id'],
+                    'document_id': row['document_id'],
+                    'chunk_index': row['chunk_index'],
+                    'content': row['content'],
+                    'vector_id': row['vector_id'],
+                    'filename': row['filename'],
+                    'file_path': row['file_path'],
+                    'file_type': row['file_type'],
+                    'upload_time': row['upload_time'],
+                })
+            return results
+
     def get_documents_by_paths(self, file_paths: List[str]) -> List[str]:
         """批量根据文件路径获取已存在的文档路径"""
         if not file_paths:
