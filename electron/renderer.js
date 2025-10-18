@@ -246,9 +246,9 @@ const dragStyles = `
     border: 1px solid #007acc;
     background-color: rgba(0, 122, 204, 0.1) !important;
   }
-  #file-tree.drag-over-root {
-    background-color: rgba(0, 122, 204, 0.05) !important;
-    border: 2px dashed #007acc !important;
+  #file-tree-container.drag-over-root {
+    background-color: rgba(255, 255, 255, 0.75) !important;
+    border: 1px dashed rgba(148, 163, 184, 0.6) !important;
   }
 `;
 

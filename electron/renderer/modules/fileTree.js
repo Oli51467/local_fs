@@ -9,6 +9,7 @@
     draggedElement: null,
     draggedPath: null,
     dropIndicator: null,
+    rootOverlay: null,
     copyShortcutListener: null,
     pasteShortcutListener: null,
     arrowNavigationListener: null,
@@ -204,6 +205,103 @@
 
     const absolute = resolveProjectAbsolutePathSync(pathValue);
     return computeRelativeFromRuntime(absolute);
+  }
+
+  function toFileUrl(pathValue) {
+    if (!pathValue) {
+      return '';
+    }
+    let normalized = String(pathValue).replace(/\\/g, '/');
+    if (/^[A-Za-z]:/.test(normalized)) {
+      normalized = `/${normalized}`;
+    }
+    return `file://${encodeURI(normalized)}`;
+  }
+
+  function isExternalDragEvent(event) {
+    const dt = event?.dataTransfer;
+    if (!dt) {
+      return false;
+    }
+    if (state.draggedElement) {
+      return false;
+    }
+    if (dt.files && dt.files.length > 0) {
+      return true;
+    }
+    const types = Array.from(dt.types || []);
+    return types.includes('Files') || types.includes('text/uri-list');
+  }
+
+  function getExternalPathsFromEvent(event) {
+    const dt = event?.dataTransfer;
+    if (!dt) {
+      return [];
+    }
+    if (state.draggedElement) {
+      return [];
+    }
+    const paths = new Set();
+    if (dt.files && dt.files.length > 0) {
+      Array.from(dt.files).forEach((file) => {
+        if (file?.path) {
+          paths.add(file.path);
+        }
+      });
+    }
+    try {
+      const uriList = dt.getData('text/uri-list');
+      if (uriList) {
+        uriList
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line && !line.startsWith('#') && line.startsWith('file:'))
+          .forEach((uri) => {
+            try {
+              const url = new URL(uri);
+              if (url.protocol === 'file:') {
+                let pathname = decodeURIComponent(url.pathname || '');
+                if (/^\/[A-Za-z]:/.test(pathname)) {
+                  pathname = pathname.replace(/^\//, '');
+                }
+                paths.add(pathname);
+              }
+            } catch (parseError) {
+              // ignore invalid uri
+            }
+          });
+      }
+    } catch (error) {
+      // ignore getData errors (some browsers may throw)
+    }
+    return Array.from(paths);
+  }
+
+  async function importExternalFiles(targetDirectory, externalPaths) {
+    if (!externalPaths || externalPaths.length === 0) {
+      return;
+    }
+    try {
+      const normalizedTarget = await ensureProjectAbsolutePath(targetDirectory);
+      const response = await window.fsAPI.importFiles(normalizedTarget, externalPaths);
+      if (!response?.success) {
+        const message = response?.error || '导入失败';
+        dependencies.showAlert(message, 'error');
+        return;
+      }
+      const results = Array.isArray(response.results) ? response.results : [];
+      const failed = results.filter((item) => item && item.success === false);
+      if (failed.length === results.length && failed.length > 0) {
+        dependencies.showAlert(failed[0].error || '导入失败', 'error');
+      } else if (failed.length > 0) {
+        dependencies.showAlert(`部分文件导入失败 (${failed.length}/${results.length})`, 'warning');
+      } else {
+        dependencies.showAlert('文件导入成功', 'success');
+      }
+      await loadFileTree();
+    } catch (error) {
+      dependencies.showAlert(`导入失败: ${error.message || error}`, 'error');
+    }
   }
 
   const assetUrlCache = new Map();
@@ -508,11 +606,17 @@
     if (state.fileTreeEl) {
       state.fileTreeEl.classList.remove('drag-over-root');
     }
+    if (state.fileTreeContainer) {
+      state.fileTreeContainer.classList.remove('drag-over-root');
+    }
     document.querySelectorAll('.file-item').forEach((item) => {
       item.classList.remove('drag-over', 'drag-over-folder');
     });
     if (state.dropIndicator) {
       state.dropIndicator.style.display = 'none';
+      state.dropIndicator.style.height = '2px';
+      state.dropIndicator.style.backgroundColor = state.dropIndicator.dataset.defaultBg || '#007acc';
+      state.dropIndicator.style.border = state.dropIndicator.dataset.defaultBorder || 'none';
     }
   }
 
@@ -528,9 +632,60 @@
         'z-index: 1000',
         'display: none'
       ].join(';');
+      state.dropIndicator.dataset.defaultBg = '#007acc';
+      state.dropIndicator.dataset.defaultBorder = 'none';
       document.body.appendChild(state.dropIndicator);
     }
     return state.dropIndicator;
+  }
+
+  function ensureRootOverlay() {
+    if (state.rootOverlay || !state.fileTreeContainer) {
+      return state.rootOverlay;
+    }
+    const container = state.fileTreeContainer;
+    const computedPosition = window.getComputedStyle(container).position;
+    if (computedPosition === 'static') {
+      container.dataset.originalPosition = 'static';
+      container.style.position = 'relative';
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'file-tree-root-overlay';
+    overlay.style.cssText = [
+      'position: absolute',
+      'top: 0',
+      'left: 0',
+      'right: 0',
+      'bottom: 0',
+      'border: 1px dashed rgba(148, 163, 184, 0.9)',
+      'background: rgba(255, 255, 255, 0.75)',
+      'pointer-events: none',
+      'border-radius: 6px',
+      'display: none',
+      'z-index: 1000'
+    ].join(';');
+    container.appendChild(overlay);
+    state.rootOverlay = overlay;
+    return overlay;
+  }
+
+  function showRootOverlay() {
+    const overlay = ensureRootOverlay();
+    if (overlay) {
+      overlay.style.display = 'block';
+    }
+    if (state.fileTreeContainer) {
+      state.fileTreeContainer.classList.add('drag-over-root');
+    }
+  }
+
+  function hideRootOverlay() {
+    if (state.rootOverlay) {
+      state.rootOverlay.style.display = 'none';
+    }
+    if (state.fileTreeContainer) {
+      state.fileTreeContainer.classList.remove('drag-over-root');
+    }
   }
 
   function addDragAndDropSupport(element, node, isFolder) {
@@ -541,8 +696,19 @@
       state.draggedPath = node.path;
       element.style.opacity = '0.5';
       if (event.dataTransfer) {
+        const fileUrl = toFileUrl(node.path);
+        if (fileUrl) {
+          try {
+            event.dataTransfer.setData('text/uri-list', fileUrl);
+            if (!isFolder) {
+              event.dataTransfer.setData('DownloadURL', `application/octet-stream:${node.name || ''}:${fileUrl}`);
+            }
+          } catch (setDataError) {
+            // ignore failures to set drag data for external targets
+          }
+        }
         event.dataTransfer.setData('text/plain', node.path);
-        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.effectAllowed = 'copyMove';
       }
       ensureDropIndicator();
     });
@@ -554,6 +720,14 @@
 
     element.addEventListener('dragenter', (event) => {
       event.preventDefault();
+      if (isExternalDragEvent(event)) {
+        hideRootOverlay();
+        element.classList.add(isFolder ? 'drag-over-folder' : 'drag-over');
+        if (state.dropIndicator) {
+          state.dropIndicator.style.display = 'none';
+        }
+        return;
+      }
       if (state.draggedElement && state.draggedElement !== element) {
         element.classList.add(isFolder ? 'drag-over-folder' : 'drag-over');
       }
@@ -561,6 +735,17 @@
 
     element.addEventListener('dragover', (event) => {
       event.preventDefault();
+      if (isExternalDragEvent(event)) {
+        hideRootOverlay();
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = 'copy';
+        }
+        element.classList.add(isFolder ? 'drag-over-folder' : 'drag-over');
+        if (state.dropIndicator) {
+          state.dropIndicator.style.display = 'none';
+        }
+        return;
+      }
       if (!state.draggedElement || state.draggedElement === element || !state.draggedPath) {
         return;
       }
@@ -575,12 +760,19 @@
         indicator.style.display = 'none';
         return;
       }
-      const rect = element.getBoundingClientRect();
-      const elementMiddle = rect.top + rect.height / 2;
-      indicator.style.display = 'block';
-      indicator.style.left = `${rect.left}px`;
-      indicator.style.width = `${rect.width}px`;
-      indicator.style.top = event.clientY < elementMiddle ? `${rect.top - 1}px` : `${rect.bottom - 1}px`;
+      if (state.draggedElement) {
+        indicator.style.height = '2px';
+        indicator.style.backgroundColor = indicator.dataset.defaultBg || '#007acc';
+        indicator.style.border = indicator.dataset.defaultBorder || 'none';
+        const rect = element.getBoundingClientRect();
+        const elementMiddle = rect.top + rect.height / 2;
+        indicator.style.display = 'block';
+        indicator.style.left = `${rect.left}px`;
+        indicator.style.width = `${rect.width}px`;
+        indicator.style.top = event.clientY < elementMiddle ? `${rect.top - 1}px` : `${rect.bottom - 1}px`;
+      } else {
+        indicator.style.display = 'none';
+      }
     });
 
     element.addEventListener('dragleave', (event) => {
@@ -596,6 +788,19 @@
       const indicator = state.dropIndicator;
       if (indicator) {
         indicator.style.display = 'none';
+      }
+
+      const externalPaths = getExternalPathsFromEvent(event);
+      if (externalPaths.length > 0) {
+        const targetPath = isFolder
+          ? node.path
+          : (() => {
+              const separatorIndex = Math.max(node.path.lastIndexOf('/'), node.path.lastIndexOf('\\'));
+              return separatorIndex > -1 ? node.path.slice(0, separatorIndex) : node.path;
+            })();
+        await importExternalFiles(targetPath || state.dataRootPath || node.path, externalPaths);
+        clearDragState();
+        return;
       }
 
       const currentDraggedPath = state.draggedPath;
@@ -2033,32 +2238,81 @@
         createContextMenu(event.pageX, event.pageY, null, true);
       });
     }
-    state.fileTreeEl.addEventListener('dragenter', (event) => {
+    const handleRootDragEnter = (event) => {
       event.preventDefault();
-      if (state.draggedElement && state.draggedPath) {
-        state.fileTreeEl.classList.add('drag-over-root');
+      if (!isExternalDragEvent(event)) {
+        return;
       }
-    });
-    state.fileTreeEl.addEventListener('dragover', (event) => {
+      const targetItem = event.target instanceof Element ? event.target.closest('.file-item[data-path]') : null;
+      if (targetItem) {
+        hideRootOverlay();
+        return;
+      }
+      showRootOverlay();
+      if (state.dropIndicator) {
+        state.dropIndicator.style.display = 'none';
+      }
+    };
+
+    const handleRootDragOver = (event) => {
       event.preventDefault();
+      const external = isExternalDragEvent(event);
       if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = 'move';
+        event.dataTransfer.dropEffect = external ? 'copy' : 'move';
       }
-      if (state.draggedElement && state.draggedPath) {
-        state.fileTreeEl.classList.add('drag-over-root');
-        if (state.dropIndicator) {
-          state.dropIndicator.style.display = 'none';
-        }
+      if (!external) {
+        hideRootOverlay();
+        return;
       }
-    });
-    state.fileTreeEl.addEventListener('dragleave', (event) => {
-      if (!state.fileTreeEl.contains(event.relatedTarget)) {
-        state.fileTreeEl.classList.remove('drag-over-root');
+      const targetItem = event.target instanceof Element ? event.target.closest('.file-item[data-path]') : null;
+      if (targetItem) {
+        hideRootOverlay();
+        return;
       }
-    });
-    state.fileTreeEl.addEventListener('drop', async (event) => {
+      showRootOverlay();
+      if (state.dropIndicator) {
+        state.dropIndicator.style.display = 'none';
+      }
+    };
+
+    const handleRootDragLeave = (event) => {
+      const related = event.relatedTarget;
+      const withinTree = related && (state.fileTreeEl?.contains(related) || state.fileTreeContainer?.contains(related));
+      if (!withinTree) {
+        hideRootOverlay();
+      }
+    };
+
+    state.fileTreeEl.addEventListener('dragenter', handleRootDragEnter);
+    state.fileTreeEl.addEventListener('dragover', handleRootDragOver);
+    state.fileTreeEl.addEventListener('dragleave', handleRootDragLeave);
+    if (state.fileTreeContainer) {
+      state.fileTreeContainer.addEventListener('dragenter', handleRootDragEnter);
+      state.fileTreeContainer.addEventListener('dragover', handleRootDragOver);
+      state.fileTreeContainer.addEventListener('dragleave', handleRootDragLeave);
+    }
+    const handleRootDrop = async (event) => {
       event.preventDefault();
-      state.fileTreeEl.classList.remove('drag-over-root');
+      event.stopPropagation();
+      hideRootOverlay();
+      const externalPaths = getExternalPathsFromEvent(event);
+      if (externalPaths.length > 0) {
+        let targetRoot = state.dataRootPath || (global.fileTreeData && global.fileTreeData.path);
+        if (!targetRoot) {
+          try {
+            const tree = await global.fsAPI.getFileTree();
+            if (tree && tree.path) {
+              targetRoot = tree.path;
+              state.dataRootPath = tree.path;
+            }
+          } catch (resolveError) {
+            console.warn('解析文件树根路径失败:', resolveError);
+          }
+        }
+        await importExternalFiles(targetRoot, externalPaths);
+        clearDragState();
+        return;
+      }
       const currentDraggedPath = state.draggedPath;
       clearDragState();
       if (!currentDraggedPath) {
@@ -2096,7 +2350,12 @@
       } catch (error) {
         dependencies.showAlert(`移动到根目录时出错: ${error.message || error}`, 'error');
       }
-    });
+    };
+
+    state.fileTreeEl.addEventListener('drop', handleRootDrop);
+    if (state.fileTreeContainer) {
+      state.fileTreeContainer.addEventListener('drop', handleRootDrop);
+    }
   }
 
   function initFileTree() {
