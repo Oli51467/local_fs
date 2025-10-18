@@ -1707,15 +1707,7 @@ class ChatModule {
     const header = document.createElement('div');
     header.className = 'chat-reference-header';
 
-    const toggleButton = document.createElement('button');
-    toggleButton.type = 'button';
-    toggleButton.className = 'chat-reference-toggle';
-    toggleButton.setAttribute('aria-expanded', 'false');
-
-    const toggleIcon = document.createElement('span');
-    toggleIcon.className = 'chat-reference-toggle-icon';
-    toggleButton.appendChild(toggleIcon);
-    header.appendChild(toggleButton);
+    // 移除箭头图标，不再插入 toggle 按钮；改为点击整个头部区域进行展开/收起
 
     const textWrapper = document.createElement('div');
     textWrapper.className = 'chat-reference-texts';
@@ -1759,19 +1751,19 @@ class ChatModule {
         item.classList.remove('is-collapsed');
         chunkContainer.hidden = false;
         chunkContainer.style.display = 'flex';
-        toggleButton.setAttribute('aria-expanded', 'true');
       } else {
         item.classList.add('is-collapsed');
         item.classList.remove('is-expanded');
         chunkContainer.hidden = true;
         chunkContainer.style.display = 'none';
-        toggleButton.setAttribute('aria-expanded', 'false');
       }
     };
 
-    toggleButton.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
+    // 支持点击头部进行展开/收起
+    header.addEventListener('click', (event) => {
+      // 点击文件名或右侧元信息不触发展开/收起
+      if (event.target.closest('.chat-reference-name')) return;
+      if (event.target.closest('.chat-reference-meta')) return;
       const expanded = !item.classList.contains('is-expanded');
       setExpanded(expanded);
     });
@@ -1854,6 +1846,30 @@ class ChatModule {
       const targetPath = await this.resolveReferencePath(reference, chunks);
       if (!targetPath) {
         this.setStatus('无法定位参考资料路径。', 'warning');
+        return;
+      }
+
+      // 在跳转前检查文件是否存在，不存在则在底部显示红色错误并拒绝跳转
+      try {
+        const exists = typeof window.fsAPI?.fileExists === 'function'
+          ? await window.fsAPI.fileExists(targetPath)
+          : true;
+        if (!exists) {
+          if (this.chatStatusTextEl) {
+            this.chatStatusTextEl.textContent = '该文件已不存在';
+            this.chatStatusTextEl.dataset.statusType = 'error';
+          } else {
+            this.appendSystemErrorToChat('该文件已不存在');
+          }
+          return;
+        }
+      } catch (e) {
+        if (this.chatStatusTextEl) {
+          this.chatStatusTextEl.textContent = '该文件已不存在';
+          this.chatStatusTextEl.dataset.statusType = 'error';
+        } else {
+          this.appendSystemErrorToChat('该文件已不存在');
+        }
         return;
       }
 

@@ -136,7 +136,7 @@
 }
 
 .file-item-file .file-name {
-  margin-left: 12px;
+  margin-left: 0;
 }
 
 .file-name-text {
@@ -159,10 +159,24 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-right: 4px;
-  font-size: 10px;
-  color: #888;
+  width: 8px;
+  height: 8px;
+  margin-right: 0;
+  color: #9aa0a6; /* 浅灰色 */
   transition: transform 0.2s ease;
+  flex: 0 0 auto;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.file-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+  height: 8px;
+  margin-right: 0;
+  color: #9aa0a6; /* 与箭头一致的淡灰色 */
   flex: 0 0 auto;
   overflow: visible;
   white-space: nowrap;
@@ -197,7 +211,7 @@
 .folder-arrow {
   cursor: pointer;
   transition: transform 0.2s ease;
-  margin-right: 2px;
+  margin-right: 0;
 }
 
 .folder-arrow:hover {
@@ -319,29 +333,30 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
-  border: 1px solid var(--tree-border);
-  background: rgba(148, 163, 184, 0.15);
+  border: none;
+  background: transparent;
   color: var(--text-color);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 0.15s ease, transform 0.15s ease;
 }
 
 .search-history-clear-btn:hover {
-  border-color: var(--accent-color);
   color: var(--accent-color);
+  background: transparent;
+  transform: scale(1.04);
 }
 
 .dark-mode .search-history-clear-btn {
-  border-color: rgba(71, 85, 105, 0.6);
-  background: rgba(71, 85, 105, 0.4);
+  border: none;
+  background: transparent;
 }
 
 .dark-mode .search-history-clear-btn:hover {
-  border-color: rgba(96, 165, 250, 0.9);
   color: rgba(148, 197, 255, 0.95);
+  background: transparent;
 }
 
 .search-history-list {
@@ -399,6 +414,26 @@
 #search-input::placeholder {
   color: var(--text-color);
   opacity: 0.6;
+}
+
+/* 文件树空状态占位样式 */
+.file-tree-empty-placeholder {
+  padding: 48px;
+  border: 1px dashed var(--border-light);
+  border-radius: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  margin: 0;
+  margin-top: -5px; /* 顶部对齐 */
+  width: calc(100% + 20px);
+  margin-left: -10px;
+  margin-right: -10px;
+  box-sizing: border-box;
+}
+
+.dark-mode .file-tree-empty-placeholder {
+  border-color: #3c3c3c;
 }
 
 /* 右键菜单样式 */

@@ -75,6 +75,7 @@ class PptViewer {
         background: transparent;
         text-align: center;
         padding-left: 0;
+        padding-top: 0;
       }
 
       .pptx-loading,
@@ -82,10 +83,15 @@ class PptViewer {
         display: flex;
         justify-content: center;
         align-items: center;
-        height: 200px;
+        height: 100%;
         font-size: 16px;
         color: #666;
         text-align: center;
+      }
+
+      .pptx-loading {
+        flex-direction: column;
+        gap: 8px;
       }
 
       .pptx-error {
@@ -94,7 +100,7 @@ class PptViewer {
 
       /* pptx-preview库生成的幻灯片样式优化 */
       .pptx-content .ppt-slide {
-        margin: 20px auto;
+        margin: 0 auto 20px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.2);
         border-radius: 8px;
         overflow: hidden;
@@ -119,6 +125,13 @@ class PptViewer {
       .pptx-content > div {
         display: inline-block;
         text-align: left;
+      }
+
+      /* 保证加载指示器不被上面规则覆盖 */
+      .pptx-content > .pptx-loading {
+        display: flex !important;
+        width: 100%;
+        height: 100%;
       }
 
       /* PPTX容器样式 - 自定义垂直滚动条为1px粗度 */
@@ -231,14 +244,16 @@ class PptViewer {
       pptxContainer.className = 'pptx-viewer pptx-container';
       pptxContainer.innerHTML = `
         <div class="pptx-content" id="pptx-content-${tabId}">
-          <div class="pptx-loading">正在解析PPTX文件，请稍候...</div>
+          <div class="pptx-loading" role="status" aria-live="polite">
+            <div class="loading-spinner"></div>
+            <p class="loading-text">加载中</p>
+          </div>
         </div>
       `;
       
       contentElement.appendChild(pptxContainer);
       
-      // 使用pptx-preview库解析并渲染PPTX内容
-      await this.renderPptxWithPreview(tabId, content.buffer, content.fileName);
+      // 保持加载指示器，渲染由 openPptxFile 调用触发
       
     } catch (error) {
       console.error('创建PPTX查看器失败:', error);
@@ -274,9 +289,6 @@ class PptViewer {
         throw new Error('找不到PPTX内容容器');
       }
       
-      // 清空加载提示
-      contentDiv.innerHTML = '';
-      
       // 使用pptx-preview解析并渲染PPTX
       // 获取容器的实际尺寸
       const containerRect = contentDiv.getBoundingClientRect();
@@ -293,6 +305,12 @@ class PptViewer {
       
       // 调用preview方法渲染PPTX内容
       await previewer.preview(buffer);
+      
+      // 渲染完成后移除加载指示器
+      const loadingEl = contentDiv.querySelector('.pptx-loading');
+      if (loadingEl) {
+        loadingEl.remove();
+      }
       
       // 返回状态信息
       return {

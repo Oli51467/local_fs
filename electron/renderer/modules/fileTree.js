@@ -657,7 +657,7 @@
       'left: 0',
       'right: 0',
       'bottom: 0',
-      'border: 1px dashed rgba(148, 163, 184, 0.9)',
+      'border: 1px dashed rgba(96, 165, 250, 0.9)',
       'background: rgba(255, 255, 255, 0.75)',
       'pointer-events: none',
       'border-radius: 6px',
@@ -845,7 +845,6 @@
   }
 
   async function unmountDocument(filePath, isFolder) {
-    dependencies.showLoadingOverlay(isFolder ? '正在取消挂载文件夹…' : '正在取消挂载…');
     try {
       dependencies.closeAllModals();
       const absolutePath = await ensureProjectAbsolutePath(filePath);
@@ -906,7 +905,6 @@
         showCancel: false
       });
     } finally {
-      dependencies.hideLoadingOverlay();
       const fileItem = document.querySelector(`[data-path="${filePath}"]`);
       if (fileItem) {
         const indicator = fileItem.querySelector('.upload-indicator');
@@ -952,7 +950,6 @@
       if (folderOperationKey) {
         backendProgressState.folderTasks.delete(folderOperationKey);
       }
-      dependencies.hideLoadingOverlay();
     }
   }
 
@@ -996,24 +993,11 @@
   }
 
   async function unmountFolder(folderPath) {
-    ensureBackendStatusListener();
-    const overlayMessage = '正在取消挂载文件夹…';
-    dependencies.setLoadingOverlayProgress(0.05, {
-      message: overlayMessage,
-      stage: '准备中'
-    });
     let folderOperationKey = null;
     try {
       const normalizedPath = await ensureProjectAbsolutePath(folderPath);
       const relativeTracking = await getTrackingRelativePath(normalizedPath);
-      folderOperationKey = buildFolderOperationKey('unmount_folder', relativeTracking);
-      if (folderOperationKey) {
-        backendProgressState.folderTasks.set(folderOperationKey, {
-          message: overlayMessage,
-          total: 0,
-          completed: 0
-        });
-      }
+      folderOperationKey = null;
       const response = await fetch('http://localhost:8000/api/document/unmount-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1034,7 +1018,7 @@
     }
   }
 
-  function handleFolderOperationResult(title, data) {
+  function handleFolderOperationResult(title, data, options = {}) {
     const failed = data.failed || 0;
     const statusKey = data.status || (failed > 0 ? 'partial' : 'success');
     if (data.folder && typeof dependencies.refreshFolderUploadIndicators === 'function') {
@@ -1051,6 +1035,18 @@
     } else if (statusKey === 'partial') {
       modalType = 'warning';
       message = '操作完成，部分项目未成功处理。';
+    }
+
+    if (statusKey === 'success' && options.suppressSuccessModal) {
+      setTimeout(async () => {
+        const explorer = getExplorerModule();
+        if (explorer && typeof explorer.refreshFileTree === 'function') {
+          await explorer.refreshFileTree();
+        } else {
+          await loadFileTree();
+        }
+      }, 300);
+      return;
     }
 
     dependencies.showModal({
@@ -2014,12 +2010,12 @@
     if (isExpanded) {
       state.expandedFolders.delete(node.path);
       childContainer.style.display = 'none';
-      arrow.style.transform = 'rotate(0deg)';
+      if (arrow) { arrow.style.transform = 'rotate(0deg)'; }
       folderIcon.innerHTML = getFileIcon(node.name, true, false);
     } else {
       state.expandedFolders.add(node.path);
       childContainer.style.display = 'block';
-      arrow.style.transform = 'rotate(90deg)';
+      if (arrow) { arrow.style.transform = 'rotate(90deg)'; }
       folderIcon.innerHTML = getFileIcon(node.name, true, true);
       if (typeof dependencies.updateFolderUploadStatus === 'function') {
         dependencies.updateFolderUploadStatus(nodeRelativePath);
@@ -2092,18 +2088,26 @@
     if (node.children) {
       div.classList.add('folder-item');
       const isExpanded = state.expandedFolders.has(node.path);
-      const arrow = document.createElement('span');
-      arrow.textContent = '▶';
-      arrow.className = 'folder-arrow';
-      arrow.style.transform = isExpanded ? 'rotate(90deg)' : 'rotate(0deg)';
-      contentDiv.appendChild(arrow);
 
       const nameWrapper = document.createElement('span');
       nameWrapper.className = 'file-name';
+
+      // 还原更小的浅灰色开放式箭头（两段线）
+      const arrow = document.createElement('span');
+      arrow.className = 'folder-arrow';
+      arrow.style.color = '#9aa0a6';
+      arrow.innerHTML = `
+        <svg width="8" height="8" viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <polyline points="2,1 8,5 2,9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      `;
+      nameWrapper.appendChild(arrow);
+
       const folderIcon = document.createElement('span');
       folderIcon.className = 'file-icon-wrapper';
       folderIcon.innerHTML = getFileIcon(node.name, true, isExpanded);
       nameWrapper.appendChild(folderIcon);
+
       const nameSpan = document.createElement('span');
       nameSpan.className = 'file-name-text';
       nameSpan.textContent = node.name;
@@ -2118,9 +2122,13 @@
       childContainer.dataset.parent = node.path;
       childContainer.dataset.parentRelative = nodeRelativePath;
       childContainer.style.display = isExpanded ? 'block' : 'none';
-      arrow.style.transform = isExpanded ? 'rotate(90deg)' : 'rotate(0deg)';
       node.children.forEach((child) => renderTree(child, childContainer, false, depth + 1));
       container.appendChild(childContainer);
+
+      // 初始化箭头方向
+      if (arrow) {
+        arrow.style.transform = isExpanded ? 'rotate(90deg)' : 'rotate(0deg)';
+      }
 
       if (isExpanded && typeof dependencies.updateFolderUploadStatus === 'function') {
         dependencies.updateFolderUploadStatus(nodeRelativePath);
@@ -2146,8 +2154,19 @@
     } else {
       div.classList.add('file-item-file');
       div.dataset.fileName = node.name;
+
       const nameWrapper = document.createElement('span');
       nameWrapper.className = 'file-name';
+      // 文件圆点，颜色淡灰，与箭头垂直对齐
+      const fileDot = document.createElement('span');
+      fileDot.className = 'file-dot';
+      fileDot.innerHTML = `
+        <svg width="8" height="8" viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="5" cy="5" r="2.5" fill="currentColor" />
+        </svg>
+      `;
+      nameWrapper.appendChild(fileDot);
+
       const fileIconWrapper = document.createElement('span');
       fileIconWrapper.className = 'file-icon-wrapper';
       fileIconWrapper.innerHTML = getFileIcon(node.name, false);
@@ -2204,6 +2223,38 @@
       if (Array.isArray(tree.children)) {
         tree.children.forEach((child) => renderTree(child, state.fileTreeEl, true, 0));
       }
+      // 空状态占位：当没有任何文件/文件夹时显示提示
+      if (!Array.isArray(tree.children) || tree.children.length === 0) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-tree-empty-placeholder';
+        placeholder.textContent = '你可以新建或导入文件📃';
+        placeholder.style.cursor = 'pointer';
+        placeholder.setAttribute('role', 'button');
+        placeholder.tabIndex = 0;
+        // 顶对齐：确保占位框贴顶部并覆盖可视宽度
+        // 具体宽度与边距由 CSS 控制，这里只确保不出现额外空隙
+        placeholder.style.marginTop = '-5px';
+        // 点击导入：调用 ExplorerModule.importFiles（打开本地文件夹）
+        const explorer = getExplorerModule();
+        const handleImport = () => {
+          if (explorer && typeof explorer.importFiles === 'function') {
+            explorer.importFiles();
+          }
+        };
+        placeholder.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          handleImport();
+        });
+        placeholder.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            handleImport();
+          }
+        });
+        state.fileTreeEl.appendChild(placeholder);
+      }
       if (typeof dependencies.updateFolderUploadStatus === 'function') {
         await dependencies.updateFolderUploadStatus('data');
       }
@@ -2240,14 +2291,12 @@
     }
     const handleRootDragEnter = (event) => {
       event.preventDefault();
-      if (!isExternalDragEvent(event)) {
-        return;
-      }
       const targetItem = event.target instanceof Element ? event.target.closest('.file-item[data-path]') : null;
       if (targetItem) {
         hideRootOverlay();
         return;
       }
+      // 显示根目录虚线边框（支持内部拖拽和外部拖拽）
       showRootOverlay();
       if (state.dropIndicator) {
         state.dropIndicator.style.display = 'none';
@@ -2260,15 +2309,12 @@
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = external ? 'copy' : 'move';
       }
-      if (!external) {
-        hideRootOverlay();
-        return;
-      }
       const targetItem = event.target instanceof Element ? event.target.closest('.file-item[data-path]') : null;
       if (targetItem) {
         hideRootOverlay();
         return;
       }
+      // 在非目标项区域显示根目录虚线边框（内部/外部拖拽均支持）
       showRootOverlay();
       if (state.dropIndicator) {
         state.dropIndicator.style.display = 'none';

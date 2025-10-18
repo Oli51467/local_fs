@@ -781,6 +781,8 @@
   color: #000000;
   font-size: 24px;
   font-weight: bold;
+  width: 100%;
+  min-height: calc(100vh - var(--chat-banner-height) - 140px);
 }
 
 .chat-message-header {

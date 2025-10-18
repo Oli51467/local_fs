@@ -338,13 +338,6 @@ class ExplorerModule {
     contentDiv.style.gap = '4px';
     
     if (isFolder) {
-      // 添加箭头图标（文件夹）
-      const arrow = document.createElement('span');
-      arrow.textContent = '▶';
-      arrow.style.fontSize = '8px';
-      arrow.style.color = '#888';
-      contentDiv.appendChild(arrow);
-      
       // 添加文件夹图标
       const folderIcon = document.createElement('span');
       folderIcon.innerHTML = getFileTreeIcon('', true);
@@ -363,21 +356,50 @@ class ExplorerModule {
       fileIcon.style.fontSize = '10px';
       fileIcon.style.width = '12px';
       fileIcon.style.height = '12px';
-      fileIcon.style.marginLeft = '11px'; // 与文件夹箭头对齐
       contentDiv.appendChild(fileIcon);
     }
     
     contentDiv.appendChild(input);
     inputContainer.appendChild(contentDiv);
     
-    // 插入到容器中
-    container.appendChild(inputContainer);
+    // 插入前：如果存在空占位框，移除之，并将输入框置顶
+    const rootTree = document.getElementById('file-tree');
+    if (rootTree) {
+      const ph = rootTree.querySelector('.file-tree-empty-placeholder');
+      if (ph) ph.remove();
+    }
+    // 插入到容器顶部
+    if (container.firstChild) {
+      container.insertBefore(inputContainer, container.firstChild);
+    } else {
+      container.appendChild(inputContainer);
+    }
     
     // 自动聚焦
     input.focus();
     
     // 处理输入完成
     let isCompleting = false;
+    const restorePlaceholderIfEmpty = () => {
+      const rootTree = document.getElementById('file-tree');
+      if (!rootTree) return;
+      const hasItems = rootTree.querySelector('.file-item');
+      if (!hasItems) {
+        const ph = document.createElement('div');
+        ph.className = 'file-tree-empty-placeholder';
+        ph.textContent = '你可以新建或导入文件📃';
+        ph.style.cursor = 'pointer';
+        ph.setAttribute('role', 'button');
+        ph.tabIndex = 0;
+        ph.style.marginTop = '-5px';
+        const handleImport = () => this.importFiles();
+        ph.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); handleImport(); });
+        ph.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); handleImport(); }
+        });
+        rootTree.appendChild(ph);
+      }
+    };
     const handleComplete = async () => {
       if (isCompleting) return; // 防止重复执行
       isCompleting = true;
@@ -397,6 +419,7 @@ class ExplorerModule {
         }
       }
       inputContainer.remove();
+      if (!name) restorePlaceholderIfEmpty();
     };
     
     // 回车确认
@@ -407,6 +430,7 @@ class ExplorerModule {
         handleComplete();
       } else if (e.key === 'Escape') {
         inputContainer.remove();
+        restorePlaceholderIfEmpty();
       }
     });
     
@@ -421,12 +445,22 @@ class ExplorerModule {
 
   // 加载文件树
   async loadFileTree() {
+    const fileTreeModule = window.RendererModules && window.RendererModules.fileTree;
+    if (fileTreeModule && typeof fileTreeModule.loadFileTree === 'function') {
+      await fileTreeModule.loadFileTree();
+      return;
+    }
     try {
       const tree = await window.fsAPI.getFileTree();
       window.fileTreeData = tree;
       this.fileTreeEl.innerHTML = '';
       if (tree && tree.children) {
         tree.children.forEach(child => renderTree(child, this.fileTreeEl, false, 0));
+      } else {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-tree-empty-placeholder';
+        placeholder.textContent = '你可以新建或导入文件📃';
+        this.fileTreeEl.appendChild(placeholder);
       }
       const rootContainer = document.getElementById('file-tree');
       if (rootContainer) {
@@ -452,28 +486,35 @@ class ExplorerModule {
   // 导入文件功能
   async importFiles() {
     try {
+      // 在打开选择器之前锁定当前选中路径，防止根容器点击清空
+      let selectedPath;
+      const domSelectedBefore = document.querySelector('.selected[data-path]');
+      if (domSelectedBefore && domSelectedBefore.dataset && domSelectedBefore.dataset.path) {
+        selectedPath = domSelectedBefore.dataset.path;
+        // 同步到模块状态，保证下一次取值一致
+        this.setSelectedItemPath(selectedPath);
+      } else if (this.selectedItemPath) {
+        selectedPath = this.selectedItemPath;
+      }
+
       const result = await window.fsAPI.selectFiles();
       if (result && result.success && result.filePaths && result.filePaths.length > 0) {
-        // 确定目标路径
+        // 预判选择项类型（文件/文件夹）
+        let hasDirectory = false;
+        try {
+          const infos = await Promise.all(result.filePaths.map(p => window.fsAPI.getFileInfo(p)));
+          hasDirectory = infos.some(res => res && res.success && res.info && res.info.isDirectory);
+        } catch (e) {
+          console.warn('获取选择项类型失败:', e);
+        }
+
+        // 目标路径：优先使用之前锁定的选中路径（仅限文件夹），否则回退根目录
         let targetPath;
-        if (this.selectedItemPath) {
-      const selectedElement = findElementByPath(this.selectedItemPath);
-          if (selectedElement && selectedElement.classList.contains('folder-item')) {
-            targetPath = this.selectedItemPath;
-          } else {
-            // 如果选中的是文件，获取其父目录路径
-            const filePath = this.selectedItemPath;
-            const lastSlashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
-            if (lastSlashIndex > 0) {
-              targetPath = filePath.substring(0, lastSlashIndex);
-            } else {
-              // 如果文件在根目录，获取根目录路径
-              const tree = await window.fsAPI.getFileTree();
-              targetPath = tree.path;
-            }
-          }
+        if (selectedPath && this.isSelectedItemFolder(selectedPath)) {
+          // 只有选中的是文件夹时，导入到该文件夹
+          targetPath = selectedPath;
         } else {
-          // 如果没有选中项，导入到根目录
+          // 选中的是文件或没有选中项，导入到根目录
           const tree = await window.fsAPI.getFileTree();
           targetPath = tree.path;
         }
@@ -499,25 +540,28 @@ class ExplorerModule {
             // 如果所有文件都是因为在data目录下而被拒绝，显示简单提示
             showAlert('无法导入该文件夹，不能导入系统数据目录下的文件', 'warning');
           } else {
-            // 否则显示详细统计
-            let message = `成功导入 ${successCount} 个文件`;
-            if (failCount > 0) {
-              message += `，失败 ${failCount} 个`;
+            // 成功提示仅在包含文件夹时显示；文件导入只提示失败
+            if (hasDirectory) {
+              let message = `成功导入 ${successCount} 个文件/文件夹`;
+              if (failCount > 0) {
+                message += `，失败 ${failCount} 个`;
+              }
+              showAlert(message, failCount > 0 ? 'warning' : 'success');
+            } else if (failCount > 0) {
+              showAlert(`导入失败 ${failCount} 个文件`, 'error');
             }
-            showAlert(message, 'info');
           }
-        } catch (error) {
-          console.error('导入文件失败:', error);
-          showAlert(`导入文件失败: ${error.message}`, 'error');
-          return;
+
+          // 刷新文件树显示导入结果
+          await this.refreshFileTree();
+        } catch (importError) {
+          console.error('导入过程出错:', importError);
+          showAlert('导入过程出错', 'error');
         }
-        
-        // 刷新文件树
-        await this.loadFileTree();
       }
     } catch (error) {
-      console.error('导入文件失败:', error);
-      showAlert(`导入文件失败: ${error.message}`, 'error');
+      console.error('选择文件出错:', error);
+      showAlert('选择文件出错', 'error');
     }
   }
 
