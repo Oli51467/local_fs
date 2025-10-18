@@ -495,7 +495,7 @@
 #chat-messages {
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 24px;
   max-width: 720px; /* 与输入框宽度保持一致，便于左右对齐 */
   margin: 0 auto;
   width: 100%;
@@ -516,10 +516,17 @@
   align-items: flex-start;
 }
 
+.chat-reference-separator {
+  width: 100%;
+  border-top: 1px solid var(--border-light);
+  margin-top: 4px;
+  margin-bottom: 4px;
+  pointer-events: none;
+}
+
 .chat-reference-section {
   align-self: stretch;
   margin-left: 0;
-  margin-top: 32px;
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid var(--border-light);
@@ -878,10 +885,12 @@
   position: relative;
 }
 
+/* 基础复制按钮定位：在气泡底部，具体左右侧由角色规则控制 */
 .chat-copy-button {
   position: absolute;
-  bottom: -24px;
-  right: 0;
+  bottom: 0;
+  right: auto;
+  left: auto;
   width: 28px;
   height: 28px;
   border: none;
@@ -896,6 +905,7 @@
   pointer-events: none;
   transition: opacity 0.15s ease, color 0.15s ease;
   cursor: pointer;
+  z-index: 2;
 }
 
 .chat-copy-button svg {
@@ -904,7 +914,24 @@
   pointer-events: none;
 }
 
+/* 助手消息：按钮在气泡外右侧边的底部 */
+.chat-message.assistant .chat-copy-button {
+  right: -24px;
+  left: auto;
+  bottom: 0;
+}
+
+/* 用户消息：按钮在气泡外左侧边的底部 */
+.chat-message.user .chat-copy-button {
+  left: -24px;
+  right: auto;
+  bottom: 0;
+}
+
+/* 悬停展示：不仅气泡悬停显示，整个消息悬停也显示，确保从气泡移动到按钮不消失 */
 .chat-bubble.has-copy:hover .chat-copy-button,
+.chat-message:hover .chat-copy-button,
+.chat-copy-button:hover,
 .chat-copy-button:focus-visible,
 .chat-copy-button.is-copied {
   opacity: 1;

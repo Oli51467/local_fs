@@ -1627,25 +1627,52 @@ class ChatModule {
     if (!wrapper) {
       return;
     }
-    const existing = wrapper.querySelector('.chat-reference-section');
+    const existingSection = wrapper.querySelector('.chat-reference-section');
     const references = this.extractReferences(metadata);
+    // 若无参考资料，移除参考区与分割线
     if (!references.length) {
-      if (existing && existing.parentElement) {
-        existing.parentElement.removeChild(existing);
+      if (existingSection && existingSection.parentElement) {
+        existingSection.parentElement.removeChild(existingSection);
+      }
+      const existingSeparator = wrapper.querySelector('.chat-reference-separator');
+      if (existingSeparator && existingSeparator.parentElement) {
+        existingSeparator.parentElement.removeChild(existingSeparator);
       }
       return;
     }
     const section = this.renderReferenceSection(references, metadata);
     if (!section) {
-      if (existing && existing.parentElement) {
-        existing.parentElement.removeChild(existing);
+      if (existingSection && existingSection.parentElement) {
+        existingSection.parentElement.removeChild(existingSection);
+      }
+      const existingSeparator = wrapper.querySelector('.chat-reference-separator');
+      if (existingSeparator && existingSeparator.parentElement) {
+        existingSeparator.parentElement.removeChild(existingSeparator);
       }
       return;
     }
-    if (existing && existing.parentElement) {
-      existing.replaceWith(section);
+
+    // 确保分割线存在
+    let separator = wrapper.querySelector('.chat-reference-separator');
+    if (!separator) {
+      separator = document.createElement('div');
+      separator.className = 'chat-reference-separator';
+    }
+
+    // 更新参考区
+    if (existingSection && existingSection.parentElement) {
+      existingSection.replaceWith(section);
     } else {
       wrapper.appendChild(section);
+    }
+
+    // 将分割线插入到参考区之前
+    if (separator.parentElement !== wrapper) {
+      wrapper.insertBefore(separator, section);
+    } else {
+      if (separator.nextElementSibling !== section) {
+        wrapper.insertBefore(separator, section);
+      }
     }
   }
 

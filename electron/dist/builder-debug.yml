@@ -112,9 +112,9 @@ nsis:
       !insertmacro MUI_LANGUAGE "Vietnamese"
     !macroend
 
+    !include "/private/var/folders/qq/h6nmcjm114j06f05fgv203hh0000gn/T/t-KRURnR/1-messages.nsh"
+    !include "/private/var/folders/qq/h6nmcjm114j06f05fgv203hh0000gn/T/t-KRURnR/0-messages.nsh"
     !addplugindir /x86-unicode "/Users/dingjianan/Library/Caches/electron-builder/nsis/nsis-resources-3.4.1/plugins/x86-unicode"
-    !include "/private/var/folders/qq/h6nmcjm114j06f05fgv203hh0000gn/T/t-SYqCcD/0-messages.nsh"
-    !include "/private/var/folders/qq/h6nmcjm114j06f05fgv203hh0000gn/T/t-SYqCcD/1-messages.nsh"
 
     Var newStartMenuLink
     Var oldStartMenuLink

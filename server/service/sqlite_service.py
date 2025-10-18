@@ -97,19 +97,6 @@ class SQLiteManager:
                 )
             """)
 
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS chat_messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conversation_id INTEGER NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    metadata TEXT,
-                    created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
-                )
-            """)
-
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_time)")
 
             cursor.execute("PRAGMA table_info(conversations)")
@@ -133,53 +120,6 @@ class SQLiteManager:
                 "INSERT OR IGNORE INTO message_registry (id, last_message_id) VALUES (1, 0)"
             )
 
-            cursor.execute(
-                "SELECT COUNT(*) FROM conversations WHERE messages_json IS NOT NULL AND messages_json != '[]'"
-            )
-            populated_conversations = cursor.fetchone()[0]
-            if populated_conversations == 0:
-                cursor.execute(
-                    """
-                    SELECT id, conversation_id, role, content, metadata, created_time
-                    FROM chat_messages
-                    ORDER BY conversation_id ASC, created_time ASC, id ASC
-                    """
-                )
-                rows = cursor.fetchall()
-                if rows:
-                    conversations_payload = {}
-                    last_message_id = 0
-                    for row in rows:
-                        conv_id = row['conversation_id']
-                        try:
-                            metadata = json.loads(row['metadata']) if row['metadata'] else None
-                        except json.JSONDecodeError:
-                            metadata = None
-                        message = {
-                            'id': row['id'],
-                            'conversation_id': conv_id,
-                            'role': row['role'],
-                            'content': row['content'],
-                            'metadata': metadata,
-                            'created_time': row['created_time']
-                        }
-                        conversations_payload.setdefault(conv_id, []).append(message)
-                        last_message_id = max(last_message_id, row['id'])
-
-                    for conv_id, messages in conversations_payload.items():
-                        cursor.execute(
-                            """
-                            UPDATE conversations
-                            SET messages_json = ?, message_seq = ?, updated_time = COALESCE(updated_time, CURRENT_TIMESTAMP)
-                            WHERE id = ?
-                            """,
-                            (json.dumps(messages, ensure_ascii=False), len(messages), conv_id)
-                        )
-
-                    cursor.execute(
-                        "UPDATE message_registry SET last_message_id = ? WHERE id = 1",
-                        (last_message_id,)
-                    )
             
             conn.commit()
     
@@ -1328,7 +1268,6 @@ class SQLiteManager:
                 cursor = conn.cursor()
                 
                 # 删除所有数据（保留表结构）
-                cursor.execute("DELETE FROM chat_messages")
                 cursor.execute("DELETE FROM conversations")
                 cursor.execute("DELETE FROM document_chunks")
                 cursor.execute("DELETE FROM document_images")
@@ -1337,7 +1276,7 @@ class SQLiteManager:
                 
                 # 重置自增ID
                 cursor.execute(
-                    "DELETE FROM sqlite_sequence WHERE name IN ('documents', 'document_chunks', 'document_images', 'conversations', 'chat_messages')"
+                    "DELETE FROM sqlite_sequence WHERE name IN ('documents', 'document_chunks', 'document_images', 'conversations')"
                 )
                 
                 conn.commit()
