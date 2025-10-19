@@ -22,7 +22,8 @@ class DatabaseModule {
     const rank = this.imageVectorState ? this.imageVectorState.offset + index + 1 : index + 1;
     const documentName = record?.filename || '未命名文档';
     const documentPath = record?.file_path || '';
-    const truncatedPath = documentPath ? this.truncateMiddleText(documentPath, 60) : '';
+    const displayPath = documentPath ? this.getDisplayPathAfterData(documentPath) : '';
+    const truncatedPath = displayPath ? this.truncateMiddleText(displayPath, 60) : '';
     const formatLabel = record?.image_format ? String(record.image_format).toUpperCase() : 'IMG';
     const hasResolution = Number.isFinite(record?.width) && Number.isFinite(record?.height);
     const resolutionLabel = hasResolution
@@ -60,7 +61,7 @@ class DatabaseModule {
         <div class="image-card-body">
           <div class="image-card-header">
             <div class="image-card-title" title="${this.escapeHtml(documentName)}">${this.escapeHtml(documentName)}</div>
-            ${documentPath ? `<div class="image-card-path" title="${this.escapeHtml(documentPath)}">${this.escapeHtml(truncatedPath)}</div>` : ''}
+            ${displayPath ? `<div class="image-card-path" title="${this.escapeHtml(displayPath)}">${this.escapeHtml(truncatedPath)}</div>` : ''}
           </div>
           <div class="image-card-meta">
             ${this.buildImageMetaItem('序号', `#${rank}`)}
@@ -110,92 +111,14 @@ class DatabaseModule {
       });
     });
 
-    // SQLite数据库事件
-    document.getElementById('test-db-connection').addEventListener('click', () => {
-      this.testConnection();
-    });
+    // SQLite 页面：自动模式，无需手动按钮
 
-    document.getElementById('get-all-tables').addEventListener('click', () => {
-      this.getAllTables();
-    });
+    // Faiss 手动事件已移除，改为自动加载类型与点击展示数据
 
-    document.getElementById('query-table').addEventListener('click', () => {
-      this.queryTableData();
-    });
-
-    document.getElementById('table-select').addEventListener('change', (e) => {
-      this.selectedTable = e.target.value;
-    });
-
-    // 删除所有数据按钮事件
-    document.getElementById('delete-all-data').addEventListener('click', () => {
-      this.deleteAllTableData();
-    });
-
-    // 清空SQLite数据按钮事件
-    document.getElementById('cleanup-sqlite-data').addEventListener('click', () => {
-      this.cleanupSQLiteData();
-    });
-
-    // 清空Faiss向量按钮事件
-    document.getElementById('cleanup-faiss-vectors').addEventListener('click', () => {
-      this.cleanupFaissVectors();
-    });
-
-    // Faiss数据库事件
-    document.getElementById('test-faiss-connection').addEventListener('click', () => {
-      this.testFaissConnection();
-    });
-
-    document.getElementById('get-faiss-statistics').addEventListener('click', () => {
-      this.getFaissStatistics();
-    });
-
-    document.getElementById('query-vectors').addEventListener('click', () => {
-      this.queryVectorData();
-    });
-
-    document.getElementById('vector-type-select').addEventListener('change', (e) => {
-      this.selectedVectorType = e.target.value;
-    });
-
-    // 图片向量事件
-    const imageSearchInput = document.getElementById('image-vector-search');
-    const imageSearchButton = document.getElementById('search-image-vectors');
-    const imageResetButton = document.getElementById('reset-image-vector-search');
+    // 图片向量事件（移除搜索，保留分页与每页数量）
     const pageSizeSelect = document.getElementById('image-vector-page-size');
     const prevButton = document.getElementById('image-vector-prev');
     const nextButton = document.getElementById('image-vector-next');
-
-    if (imageSearchButton) {
-      imageSearchButton.addEventListener('click', () => {
-        this.imageVectorState.search = (imageSearchInput?.value || '').trim();
-        this.imageVectorState.offset = 0;
-        this.loadImageVectors();
-      });
-    }
-
-    if (imageSearchInput) {
-      imageSearchInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          this.imageVectorState.search = (imageSearchInput.value || '').trim();
-          this.imageVectorState.offset = 0;
-          this.loadImageVectors();
-        }
-      });
-    }
-
-    if (imageResetButton) {
-      imageResetButton.addEventListener('click', () => {
-        if (imageSearchInput) {
-          imageSearchInput.value = '';
-        }
-        this.imageVectorState.search = '';
-        this.imageVectorState.offset = 0;
-        this.loadImageVectors();
-      });
-    }
 
     if (pageSizeSelect) {
       pageSizeSelect.addEventListener('change', (event) => {
@@ -262,11 +185,11 @@ class DatabaseModule {
     // 显示数据库页面
     document.getElementById('database-page').style.display = 'block';
     
-    // 根据当前tab自动测试连接
+    // 根据当前tab自动加载
     if (this.currentTab === 'sqlite') {
       this.testConnection();
     } else if (this.currentTab === 'faiss') {
-      this.testFaissConnection();
+      this.loadFaissTypes();
     } else if (this.currentTab === 'image-vectors') {
       this.loadImageVectors();
     }
@@ -287,49 +210,44 @@ class DatabaseModule {
 
     this.currentTab = tabName;
 
-    // 自动测试连接
+    // 自动加载
     if (tabName === 'sqlite') {
       this.testConnection();
     } else if (tabName === 'faiss') {
-      this.testFaissConnection();
+      this.loadFaissTypes();
     } else if (tabName === 'image-vectors') {
       this.loadImageVectors();
     }
   }
 
   async testConnection() {
-    const statusEl = document.getElementById('db-status');
-    statusEl.textContent = '正在测试数据库连接...';
-    statusEl.className = 'status-indicator status-info';
+    const tablesContent = document.getElementById('tables-content');
+    if (tablesContent) {
+      tablesContent.innerHTML = '<div class="loading">正在连接数据库...</div>';
+    }
 
     try {
       const response = await fetch(`${this.baseUrl}/api/database/test-connection`);
       const data = await response.json();
 
       if (response.ok && data.status === 'success') {
-        statusEl.textContent = '连接成功！';
-        statusEl.className = 'status-indicator status-success';
-        
         // 连接成功后自动获取表列表
-        setTimeout(() => this.getAllTables(), 500);
+        setTimeout(() => this.getAllTables(), 300);
       } else {
         throw new Error(data.detail || '连接失败');
       }
     } catch (error) {
       console.error('数据库连接测试失败:', error);
-      statusEl.textContent = `连接失败: ${error.message}`;
-      statusEl.className = 'status-indicator status-error';
+      if (tablesContent) {
+        tablesContent.innerHTML = `<div class="error-message">连接失败: ${error.message}</div>`;
+      }
     }
   }
 
   async getAllTables() {
     const tablesContent = document.getElementById('tables-content');
-    const tableSelect = document.getElementById('table-select');
     
     tablesContent.innerHTML = '<div class="loading">正在获取表列表...</div>';
-    
-    // 清空表选择器
-    tableSelect.innerHTML = '<option value="">选择表...</option>';
 
     try {
       const response = await fetch(`${this.baseUrl}/api/database/tables`);
@@ -338,7 +256,6 @@ class DatabaseModule {
       if (response.ok && data.status === 'success') {
         this.currentTables = data.tables;
         this.renderTables(data.tables);
-        this.populateTableSelect(data.tables);
       } else {
         throw new Error(data.detail || '获取表列表失败');
       }
@@ -372,25 +289,10 @@ class DatabaseModule {
         
         const tableName = item.dataset.table;
         this.selectedTable = tableName;
-        document.getElementById('table-select').value = tableName;
-        
-        // 显示删除按钮
-        document.getElementById('delete-all-data').style.display = 'inline-block';
         
         // 自动查询表数据
         this.queryTableData();
       });
-    });
-  }
-
-  populateTableSelect(tables) {
-    const tableSelect = document.getElementById('table-select');
-    
-    tables.forEach(table => {
-      const option = document.createElement('option');
-      option.value = table;
-      option.textContent = table;
-      tableSelect.appendChild(option);
     });
   }
 
@@ -470,122 +372,6 @@ class DatabaseModule {
     return div.innerHTML;
   }
 
-  async deleteAllTableData() {
-    if (!confirm('确定要删除所有数据吗？此操作将清空SQLite数据库和Faiss向量数据库中的所有数据，且不可恢复。')) {
-      return;
-    }
-
-    const tableDataContent = document.getElementById('table-data-content');
-    tableDataContent.innerHTML = '<div class="loading">正在删除所有数据...</div>';
-
-    try {
-      const response = await fetch(`${this.baseUrl}/api/cleanup/all`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.status === 'completed') {
-        tableDataContent.innerHTML = `<div class="success-message">${data.message}</div>`;
-        // 重新获取表列表和统计信息
-        setTimeout(() => {
-          this.getAllTables();
-          this.testConnection();
-          this.testFaissConnection();
-        }, 1500);
-        
-        // 触发全局事件，通知其他模块数据已更新
-        this.notifyDataUpdate('all');
-        
-      } else {
-        throw new Error(data.detail || '删除失败');
-      }
-    } catch (error) {
-      console.error('删除所有数据失败:', error);
-      tableDataContent.innerHTML = `<div class="error-message">删除失败: ${error.message}</div>`;
-    }
-  }
-
-  async cleanupSQLiteData() {
-    if (!confirm('确定要清空SQLite数据库中的所有数据吗？此操作将删除所有文档和分块数据，但保留表结构。')) {
-      return;
-    }
-
-    const tableDataContent = document.getElementById('table-data-content');
-    tableDataContent.innerHTML = '<div class="loading">正在清空SQLite数据...</div>';
-
-    try {
-      const response = await fetch(`${this.baseUrl}/api/cleanup/sqlite-data`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.status === 'success') {
-        tableDataContent.innerHTML = `<div class="success-message">${data.message}</div>`;
-        // 重新获取表列表和数据
-        setTimeout(() => {
-          this.getAllTables();
-          this.queryTableData();
-        }, 1500);
-        
-        // 触发全局事件，通知其他模块数据已更新
-        this.notifyDataUpdate('sqlite');
-        
-      } else {
-        throw new Error(data.detail || '清空失败');
-      }
-    } catch (error) {
-      console.error('清空SQLite数据失败:', error);
-      tableDataContent.innerHTML = `<div class="error-message">清空失败: ${error.message}</div>`;
-    }
-  }
-
-  async cleanupFaissVectors() {
-    if (!confirm('确定要清空Faiss向量数据库中的所有向量吗？此操作将删除所有向量数据，但保留索引结构。')) {
-      return;
-    }
-
-    const vectorsDataContent = document.getElementById('vectors-data-content');
-    vectorsDataContent.innerHTML = '<div class="loading">正在清空Faiss向量...</div>';
-
-    try {
-      const response = await fetch(`${this.baseUrl}/api/cleanup/faiss-vectors`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.status === 'success') {
-        vectorsDataContent.innerHTML = `<div class="success-message">${data.message}</div>`;
-        // 重新获取统计信息
-        setTimeout(() => this.getFaissStatistics(), 1500);
-        // 清空当前显示的向量数据，避免用户看到旧数据
-        const vectorsTableContent = document.getElementById('vectors-data-content');
-        if (vectorsTableContent && vectorsTableContent.innerHTML.includes('vectors-table')) {
-          vectorsTableContent.innerHTML = '<p>Faiss向量已清空，请重新查询</p>';
-        }
-        
-        // 触发全局事件，通知其他模块数据已更新
-        this.notifyDataUpdate('faiss');
-        
-      } else {
-        throw new Error(data.detail || '清空失败');
-      }
-    } catch (error) {
-      console.error('清空Faiss向量失败:', error);
-      vectorsDataContent.innerHTML = `<div class="error-message">清空失败: ${error.message}</div>`;
-    }
-  }
 
   // 工具方法：格式化JSON
   formatJson(obj) {
@@ -822,14 +608,13 @@ class DatabaseModule {
 
     this.pendingImageVectorReload = false;
 
-    const statusEl = document.getElementById('image-vectors-status');
-    const tableEl = document.getElementById('image-vector-table');
+    const filesEl = document.getElementById('image-files-content');
+    const imagesEl = document.getElementById('image-images-content');
     const statsEl = document.getElementById('image-vector-stats-content');
     const pageInfoEl = document.getElementById('image-vector-page-info');
     const pageSizeSelect = document.getElementById('image-vector-page-size');
-    const searchInput = document.getElementById('image-vector-search');
 
-    if (!statusEl || !tableEl) {
+    if (!filesEl || !imagesEl) {
       return;
     }
 
@@ -837,15 +622,14 @@ class DatabaseModule {
       pageSizeSelect.value = String(this.imageVectorState.limit);
     }
 
-    if (searchInput && searchInput !== document.activeElement) {
-      searchInput.value = this.imageVectorState.search;
-    }
-
     this.imageVectorState.loading = true;
 
-    statusEl.textContent = '正在加载图片向量信息...';
-    statusEl.className = 'status-indicator status-info';
-    tableEl.innerHTML = '<div class="loading">正在查询图片向量数据...</div>';
+    if (filesEl) {
+      filesEl.innerHTML = '<div class="loading">正在加载文件列表...</div>';
+    }
+    if (imagesEl) {
+      imagesEl.innerHTML = '<div class="loading">正在查询图片向量数据...</div>';
+    }
     if (statsEl) {
       statsEl.innerHTML = '';
     }
@@ -854,34 +638,63 @@ class DatabaseModule {
     }
 
     try {
-      const params = new URLSearchParams();
-      params.append('limit', String(this.imageVectorState.limit));
-      params.append('offset', String(this.imageVectorState.offset));
-      if (this.imageVectorState.search) {
-        params.append('search', this.imageVectorState.search);
+      // 默认显示全部：服务端最大500/页，循环拉取直至结束
+      const allRecords = [];
+      const limit = 500; // 与服务端限制保持一致
+      let offset = 0;
+      let total = 0;
+      let statsFromFirstResponse = null;
+
+      while (true) {
+        const params = new URLSearchParams();
+        params.append('limit', String(limit));
+        params.append('offset', String(offset));
+
+        const response = await fetch(`${this.baseUrl}/api/database/image-vectors?${params.toString()}`);
+        const data = await response.json();
+
+        if (!response.ok || data.status !== 'success') {
+          throw new Error(data.detail || '获取图片向量信息失败');
+        }
+
+        const pageRecords = Array.isArray(data.records) ? data.records : [];
+        allRecords.push(...pageRecords);
+        total = typeof data.total === 'number' ? data.total : Math.max(total, offset + pageRecords.length);
+        if (!statsFromFirstResponse && data.stats) {
+          statsFromFirstResponse = data.stats;
+        }
+
+        if (pageRecords.length < limit) {
+          break;
+        }
+        offset += limit;
+        if (total && offset >= total) {
+          break;
+        }
       }
 
-      const response = await fetch(`${this.baseUrl}/api/database/image-vectors?${params.toString()}`);
-      const data = await response.json();
+      this.imageVectorState.total = total || allRecords.length;
+      this.imageVectorState.limit = limit;
+      this.imageVectorState.offset = 0;
+      this.imageVectorRecords = allRecords;
 
-      if (!response.ok || data.status !== 'success') {
-        throw new Error(data.detail || '获取图片向量信息失败');
+      this.renderImageFileList(allRecords);
+      const firstFileKey = this.getFirstFileKey(allRecords);
+      if (firstFileKey) {
+        this.renderImagesForFile(firstFileKey);
+      } else {
+        imagesEl.innerHTML = '<div class="image-card-empty">暂无图片向量数据</div>';
       }
 
-      this.imageVectorState.total = data.total || 0;
-      this.renderImageVectorTable(data.records || []);
-      this.renderImageVectorStats(data.stats || null);
-      this.updateImagePagination();
-
-      const recordCount = Array.isArray(data.records) ? data.records.length : 0;
-      statusEl.textContent = `已加载 ${recordCount} 条图片向量记录`;
-      statusEl.className = 'status-indicator status-success';
+      this.renderImageVectorStats(statsFromFirstResponse || null);
+      // 已取消分页控件，默认显示全部
       this.imageVectorsInitialized = true;
     } catch (error) {
       console.error('获取图片向量信息失败:', error);
-      statusEl.textContent = `获取图片向量信息失败: ${error.message}`;
-      statusEl.className = 'status-indicator status-error';
-      tableEl.innerHTML = `<div class="error-message">${this.escapeHtml(error.message || '加载失败')}</div>`;
+      imagesEl.innerHTML = `<div class="error-message">${this.escapeHtml(error.message || '加载失败')}</div>`;
+      if (filesEl) {
+        filesEl.innerHTML = '';
+      }
       if (statsEl) {
         statsEl.innerHTML = '';
       }
@@ -923,8 +736,116 @@ class DatabaseModule {
     statsEl.innerHTML = items.join('');
   }
 
+  // 根据记录渲染左侧文件列表
+  renderImageFileList(records) {
+    const filesEl = document.getElementById('image-files-content');
+    if (!filesEl) {
+      return;
+    }
+    if (!Array.isArray(records) || records.length === 0) {
+      filesEl.innerHTML = '<div class="image-card-empty">暂无文件</div>';
+      return;
+    }
+
+    const fileMap = new Map();
+    records.forEach((rec) => {
+      const key = this.getFileKey(rec);
+      const displayLabel = this.getDisplayPathAfterData(key);
+      const entry = fileMap.get(key) || { label: displayLabel, count: 0 };
+      entry.count += 1;
+      fileMap.set(key, entry);
+    });
+
+    const itemsHtml = Array.from(fileMap.entries()).map(([key, meta]) => {
+      const truncated = this.truncateMiddleText(meta.label, 64);
+      return `<div class="table-item" data-file="${this.escapeHtml(key)}" style="display:flex;align-items:center;justify-content:space-between;">
+        <span class="table-item-name">${this.escapeHtml(truncated)}</span>
+        <span class="table-item-count" style="color:var(--text-muted)">${this.escapeHtml(String(meta.count))}</span>
+      </div>`;
+    }).join('');
+
+    filesEl.innerHTML = itemsHtml;
+
+    Array.from(filesEl.querySelectorAll('.table-item')).forEach((el) => {
+      el.addEventListener('click', () => {
+        const selectedKey = el.getAttribute('data-file');
+        if (selectedKey) {
+          this.renderImagesForFile(selectedKey);
+        }
+      });
+    });
+  }
+
+  // 获取记录的文件键
+  getFileKey(record) {
+    if (!record) return '未知文件';
+    const path = record.file_path || record.storage_path || '';
+    const name = record.filename || '';
+    return path || name || '未知文件';
+  }
+
+  // 仅用于显示：提取 data 目录后的相对路径
+  getDisplayPathAfterData(text) {
+    if (!text) return '未知文件';
+    const str = String(text);
+    const lower = str.toLowerCase();
+
+    // 支持多种情况：'/data/', '\\data\\', 'data/', 'data\\'
+    const tokens = ['/data/', '\\data\\', 'data/', 'data\\'];
+    let startIdx = -1;
+
+    for (const token of tokens) {
+      const pos = lower.indexOf(token);
+      if (pos >= 0) {
+        // 确保是路径边界：前一位为空或为分隔符
+        const isBoundary = pos === 0 || lower[pos - 1] === '/' || lower[pos - 1] === '\\';
+        if (isBoundary) {
+          startIdx = pos + token.length;
+          break;
+        }
+      }
+    }
+
+    return startIdx >= 0 ? str.substring(startIdx) : str;
+  }
+
+  // 获取第一个文件键
+  getFirstFileKey(records) {
+    if (!Array.isArray(records) || records.length === 0) return null;
+    for (const rec of records) {
+      const key = this.getFileKey(rec);
+      if (key) return key;
+    }
+    return null;
+  }
+
+  // 点击文件后渲染右侧图片列表
+  renderImagesForFile(fileKey) {
+    const imagesEl = document.getElementById('image-images-content');
+    if (!imagesEl) {
+      return;
+    }
+    const records = Array.isArray(this.imageVectorRecords)
+      ? this.imageVectorRecords.filter(r => this.getFileKey(r) === fileKey)
+      : [];
+    this.renderImageVectorTable(records);
+
+    // 简单高亮选中项
+    const filesEl = document.getElementById('image-files-content');
+    if (filesEl) {
+      Array.from(filesEl.querySelectorAll('.table-item')).forEach((el) => {
+        if (el.getAttribute('data-file') === fileKey) {
+          el.classList.add('active');
+        } else {
+          el.classList.remove('active');
+        }
+      });
+    }
+  }
+
+  // 渲染图片卡片到右侧容器
   renderImageVectorTable(records) {
-    const container = document.getElementById('image-vector-table');
+    const container = document.getElementById('image-images-content');
     if (!container) {
       return;
     }
@@ -967,130 +888,83 @@ class DatabaseModule {
   }
 
   // Faiss数据库相关方法
-  async testFaissConnection() {
-    const statusEl = document.getElementById('faiss-status');
-    statusEl.innerHTML = '<span class="status-loading">正在测试Faiss连接...</span>';
 
-    try {
-      const response = await fetch(`${this.baseUrl}/api/faiss/test-connection`);
-      const data = await response.json();
-
-      if (response.ok) {
-        statusEl.innerHTML = `
-          <span class="status-success">✓ Faiss连接成功</span>
-          <div class="connection-info">
-            <p>向量总数: ${data.total_vectors}</p>
-            <p>向量维度: ${data.dimension}</p>
-            <p>索引类型: ${data.index_type}</p>
-          </div>
-        `;
-      } else {
-        statusEl.innerHTML = `<span class="status-error">✗ 连接失败: ${data.detail}</span>`;
-      }
-    } catch (error) {
-      statusEl.innerHTML = `<span class="status-error">✗ 连接错误: ${error.message}</span>`;
+  async loadFaissTypes() {
+    const typesContent = document.getElementById('faiss-types-content');
+    const vectorsContent = document.getElementById('vectors-data-content');
+    if (typesContent) {
+      typesContent.innerHTML = '<div class="loading">正在加载向量类型...</div>';
     }
-  }
-
-  async getFaissStatistics() {
-    const statusEl = document.getElementById('faiss-status');
-    const contentEl = document.getElementById('statistics-content');
-    
-    statusEl.innerHTML = '<span class="status-loading">正在获取统计信息...</span>';
+    if (vectorsContent) {
+      vectorsContent.innerHTML = '';
+    }
 
     try {
       const response = await fetch(`${this.baseUrl}/api/faiss/statistics`);
       const data = await response.json();
 
-      if (response.ok) {
-        statusEl.innerHTML = '<span class="status-success">✓ 统计信息获取成功</span>';
-        this.renderFaissStatistics(data);
-        this.populateVectorTypeSelect(data.type_statistics);
-      } else {
-        statusEl.innerHTML = `<span class="status-error">✗ 获取失败: ${data.detail}</span>`;
-        contentEl.innerHTML = '<p>获取统计信息失败</p>';
+      if (!response.ok) {
+        throw new Error(data.detail || '获取向量类型失败');
       }
+
+      const typeStats = data.type_statistics || {};
+      const types = Object.keys(typeStats);
+      this.renderFaissTypes(types, typeStats);
     } catch (error) {
-      statusEl.innerHTML = `<span class="status-error">✗ 请求错误: ${error.message}</span>`;
-      contentEl.innerHTML = '<p>请求统计信息时发生错误</p>';
-    }
-  }
-
-  renderFaissStatistics(data) {
-    const contentEl = document.getElementById('statistics-content');
-    
-    let html = `
-      <div class="statistics-grid">
-        <div class="stat-item">
-          <strong>向量总数:</strong> ${data.total_vectors}
-        </div>
-        <div class="stat-item">
-          <strong>元数据数量:</strong> ${data.metadata_count}
-        </div>
-        <div class="stat-item">
-          <strong>向量维度:</strong> ${data.dimension}
-        </div>
-        <div class="stat-item">
-          <strong>索引路径:</strong> ${data.index_path}
-        </div>
-        <div class="stat-item">
-          <strong>元数据路径:</strong> ${data.metadata_path}
-        </div>
-      </div>
-    `;
-
-    if (data.type_statistics && Object.keys(data.type_statistics).length > 0) {
-      html += '<h4>按类型统计:</h4><div class="type-stats">';
-      for (const [type, count] of Object.entries(data.type_statistics)) {
-        html += `<div class="type-stat-item"><strong>${type}:</strong> ${count}</div>`;
-      }
-      html += '</div>';
-    }
-
-    contentEl.innerHTML = html;
-  }
-
-  populateVectorTypeSelect(typeStats) {
-    const selectEl = document.getElementById('vector-type-select');
-    selectEl.innerHTML = '<option value="">选择向量类型...</option>';
-    
-    if (typeStats && Object.keys(typeStats).length > 0) {
-      for (const type of Object.keys(typeStats)) {
-        const option = document.createElement('option');
-        option.value = type;
-        option.textContent = `${type} (${typeStats[type]})`;
-        selectEl.appendChild(option);
+      console.error('加载向量类型失败:', error);
+      if (typesContent) {
+        typesContent.innerHTML = `<div class=\"error-message\">${this.escapeHtml(error.message || '加载失败')}</div>`;
       }
     }
   }
 
-  async queryVectorData() {
-    if (!this.selectedVectorType) {
-      showAlert('请先选择向量类型', 'warning');
+  renderFaissTypes(types, typeStats = {}) {
+    const typesContent = document.getElementById('faiss-types-content');
+    if (!typesContent) return;
+
+    if (!types || types.length === 0) {
+      typesContent.innerHTML = '<div class="loading">暂无向量类型</div>';
       return;
     }
 
-    const statusEl = document.getElementById('faiss-status');
+    const items = types.map(t => {
+      const count = typeof typeStats[t] === 'number' ? ` <span class="table-subtext">(${typeStats[t]})</span>` : '';
+      return `<div class="table-item" data-type="${this.escapeHtml(t)}">${this.escapeHtml(t)}${count}</div>`;
+    }).join('');
+
+    typesContent.innerHTML = items;
+
+    typesContent.querySelectorAll('.table-item').forEach(item => {
+      item.addEventListener('click', () => {
+        typesContent.querySelectorAll('.table-item').forEach(i => i.classList.remove('selected'));
+        item.classList.add('selected');
+        const type = item.getAttribute('data-type');
+        this.selectedVectorType = type;
+        this.loadFaissVectorsByType(type);
+      });
+    });
+  }
+
+  async loadFaissVectorsByType(type) {
     const contentEl = document.getElementById('vectors-data-content');
-    
-    statusEl.innerHTML = '<span class="status-loading">正在查询向量数据...</span>';
-
+    if (contentEl) {
+      contentEl.innerHTML = '<div class="loading">正在加载向量数据...</div>';
+    }
     try {
-      const response = await fetch(`${this.baseUrl}/api/faiss/vectors/by-type/${this.selectedVectorType}?limit=50`);
+      const response = await fetch(`${this.baseUrl}/api/faiss/vectors/by-type/${encodeURIComponent(type)}?limit=50`);
       const data = await response.json();
-
-      if (response.ok) {
-        statusEl.innerHTML = `<span class="status-success">✓ 查询成功，共 ${data.total_count} 条记录</span>`;
-        this.renderVectorData(data.vectors);
-      } else {
-        statusEl.innerHTML = `<span class="status-error">✗ 查询失败: ${data.detail}</span>`;
-        contentEl.innerHTML = '<p>查询向量数据失败</p>';
+      if (!response.ok) {
+        throw new Error(data.detail || '查询失败');
       }
+      this.renderVectorData(data.vectors || []);
     } catch (error) {
-      statusEl.innerHTML = `<span class="status-error">✗ 请求错误: ${error.message}</span>`;
-      contentEl.innerHTML = '<p>请求向量数据时发生错误</p>';
+      console.error('查询向量失败:', error);
+      if (contentEl) {
+        contentEl.innerHTML = `<div class=\"error-message\">${this.escapeHtml(error.message || '请求失败')}</div>`;
+      }
     }
   }
+
 
   renderVectorData(vectors) {
     const contentEl = document.getElementById('vectors-data-content');
@@ -1102,17 +976,12 @@ class DatabaseModule {
 
     let html = '<div class="vectors-table">';
     html += '<table><thead><tr>';
-    html += '<th>向量ID</th><th>类型</th><th>文件名</th><th>内容</th><th>其他信息</th>';
+    html += '<th>向量ID</th><th>类型</th><th>文件名</th><th>内容</th>';
     html += '</tr></thead><tbody>';
 
     vectors.forEach(vector => {
-      // 确定文件类型（优先使用file_type字段）
       const fileType = vector.file_type || 'unknown';
-      
-      // 确定文件名（优先使用filename字段）
       const filename = vector.filename || 'N/A';
-      
-      // 确定内容（优先使用chunk_text，其次使用text字段）
       const content = vector.chunk_text || vector.text || 'N/A';
       
       html += '<tr>';
@@ -1120,15 +989,6 @@ class DatabaseModule {
       html += `<td>${this.escapeHtml(fileType)}</td>`;
       html += `<td>${this.escapeHtml(filename)}</td>`;
       html += `<td>${this.escapeHtml(this.truncateText(content, 100))}</td>`;
-      
-      // 显示其他元数据（只显示核心字段，排除已显示的内容）
-      const otherInfo = [];
-      for (const [key, value] of Object.entries(vector)) {
-        if (!['vector_id', 'file_type', 'filename', 'chunk_text', 'text'].includes(key)) {
-          otherInfo.push(`${key}: ${value}`);
-        }
-      }
-      html += `<td>${this.escapeHtml(otherInfo.join(', ') || 'N/A')}</td>`;
       html += '</tr>';
     });
 

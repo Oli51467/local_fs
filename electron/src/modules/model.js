@@ -75,7 +75,7 @@ class ModelModule {
             modelId: 'Qwen/Qwen3-8B',
             name: 'Qwen/Qwen3-8B',
             description: '硅基流动提供的 Qwen3-8B 通用模型，兼顾推理与创作表现。',
-            tags: ['硅基流动', 'Qwen3', '8B'],
+            tags: ['硅基流动', 'Qwen3系列', '参数量-8B'],
             apiModel: 'Qwen/Qwen3-8B',
             apiKeySetting: 'siliconflwApiKey'
           }
@@ -154,7 +154,7 @@ class ModelModule {
         key: 'pdf_extract_kit',
         name: 'PDF Extract Kit 套件',
         description: '用于PDF解析的离线模型资源。',
-        tags: ['PDF解析', 'OCR'],
+        tags: ['PDF解析', 'OCR识别'],
         status: 'not_downloaded',
         progress: 0,
         downloadedBytes: 0,

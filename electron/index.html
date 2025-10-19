@@ -569,31 +569,20 @@
     <!-- 数据库页面 -->
     <div id="database-page">
       <div class="database-section">
-        <h2>数据库管理</h2>
-
-        <!-- 数据库类型选择tab -->
-        <div class="db-tabs">
-          <button class="db-tab-btn active" data-tab="sqlite">SQLite 数据库</button>
-          <button class="db-tab-btn" data-tab="faiss">Faiss 向量数据库</button>
-          <button class="db-tab-btn" data-tab="image-vectors">图片向量存储</button>
+        <div class="database-header">
+          <h2 class="database-title">数据库管理</h2>
+          <div class="db-tabs">
+            <button class="db-tab-btn active" data-tab="sqlite">文档数据存储</button>
+            <button class="db-tab-btn" data-tab="faiss">向量数据存储</button>
+            <button class="db-tab-btn" data-tab="image-vectors">图像数据存储</button>
+          </div>
         </div>
 
         <!-- SQLite 数据库面板 -->
         <div id="sqlite-panel" class="db-panel active">
-          <div class="database-controls">
-            <button id="test-db-connection" class="db-btn">测试连接</button>
-            <button id="get-all-tables" class="db-btn">获取所有表</button>
-            <div class="table-query-group">
-              <select id="table-select">
-                <option value="">选择表...</option>
-              </select>
-              <button id="query-table" class="db-btn">查询表数据</button>
-            </div>
-          </div>
+          <div class="database-controls"></div>
 
-          <div class="database-status">
-            <div id="db-status" class="status-indicator"></div>
-          </div>
+          <!-- SQLite 状态栏已移除，自动连接与加载表 -->
 
           <div class="database-results">
             <div id="db-tables-list" class="tables-section">
@@ -602,12 +591,7 @@
             </div>
 
             <div id="db-table-data" class="table-data-section">
-              <h3>表数据
-                <button id="delete-all-data" class="db-btn delete-btn"
-                  style="display: none; margin-left: 10px; background-color: #dc3545;">删除所有数据</button>
-                <button id="cleanup-sqlite-data" class="db-btn delete-btn"
-                  style="display: inline-block; margin-left: 10px; background-color: #dc3545;">清空SQLite数据</button>
-              </h3>
+              <h3>表数据</h3>
               <div id="table-data-content"></div>
             </div>
           </div>
@@ -615,32 +599,14 @@
 
         <!-- Faiss 向量数据库面板 -->
         <div id="faiss-panel" class="db-panel">
-          <div class="database-controls">
-            <button id="test-faiss-connection" class="db-btn">测试连接</button>
-            <button id="get-faiss-statistics" class="db-btn">获取统计信息</button>
-            <div class="vector-query-group">
-              <select id="vector-type-select">
-                <option value="">选择向量类型...</option>
-              </select>
-              <button id="query-vectors" class="db-btn">查询向量数据</button>
-            </div>
-          </div>
-
-          <div class="database-status">
-            <div id="faiss-status" class="status-indicator"></div>
-          </div>
-
           <div class="database-results">
-            <div id="faiss-statistics" class="statistics-section">
-              <h3>Faiss 统计信息</h3>
-              <div id="statistics-content"></div>
+            <div id="faiss-types-list" class="tables-section">
+              <h3>向量类型</h3>
+              <div id="faiss-types-content"></div>
             </div>
 
             <div id="faiss-vectors-data" class="vectors-data-section">
-              <h3>向量数据
-                <button id="cleanup-faiss-vectors" class="db-btn delete-btn"
-                  style="display: inline-block; margin-left: 10px; background-color: #dc3545;">清空Faiss向量</button>
-              </h3>
+              <h3>向量数据</h3>
               <div id="vectors-data-content"></div>
             </div>
           </div>
@@ -648,41 +614,17 @@
 
         <!-- 图片向量存储面板 -->
         <div id="image-vectors-panel" class="db-panel">
-          <div class="database-controls image-vector-controls">
-            <div class="image-search-group">
-              <input type="text" id="image-vector-search" placeholder="按文件名、路径或图片名搜索" />
-              <button id="search-image-vectors" class="db-btn">搜索</button>
-              <button id="reset-image-vector-search" class="db-btn secondary-btn">重置</button>
-            </div>
-            <div class="image-page-size">
-              <label for="image-vector-page-size">每页数量:</label>
-              <select id="image-vector-page-size">
-                <option value="25">25</option>
-                <option value="50">50</option>
-                <option value="100" selected>100</option>
-                <option value="200">200</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="database-status">
-            <div id="image-vectors-status" class="status-indicator"></div>
-          </div>
+          <div class="database-controls image-vector-controls"></div>
 
           <div class="database-results image-vector-results">
-            <div id="image-vector-stats" class="statistics-section">
-              <h3>图片向量统计</h3>
-              <div id="image-vector-stats-content" class="image-stats-content"></div>
+
+            <div id="image-files-list" class="tables-section">
+              <h3>图片文件</h3>
+              <div id="image-files-content"></div>
             </div>
 
-            <div id="image-vector-data" class="vectors-data-section">
-              <h3>图片向量列表</h3>
-              <div id="image-vector-table" class="image-vector-table"></div>
-              <div class="image-pagination">
-                <button id="image-vector-prev" class="db-btn secondary-btn">上一页</button>
-                <span id="image-vector-page-info"></span>
-                <button id="image-vector-next" class="db-btn secondary-btn">下一页</button>
-              </div>
+            <div id="image-images-data" class="vectors-data-section">
+              <div id="image-images-content" class="image-vector-table"></div>
             </div>
           </div>
         </div>

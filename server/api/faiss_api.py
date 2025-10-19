@@ -848,26 +848,6 @@ def init_faiss_api(
 
     logger.info("Faiss API initialized")
 
-@router.get("/test-connection")
-async def test_faiss_connection() -> Dict[str, Any]:
-    """测试Faiss数据库连接"""
-    try:
-        if faiss_manager is None:
-            raise HTTPException(status_code=500, detail="Faiss manager not initialized")
-        
-        # 测试基本功能
-        total_vectors = faiss_manager.get_total_vectors()
-        
-        return {
-            "status": "success",
-            "message": "Faiss数据库连接成功",
-            "total_vectors": total_vectors,
-            "dimension": faiss_manager.dimension,
-            "index_type": "IndexFlatIP"
-        }
-    except Exception as e:
-        logger.error(f"Faiss connection test failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"连接失败: {str(e)}")
 
 @router.get("/statistics")
 async def get_faiss_statistics() -> Dict[str, Any]:
@@ -904,35 +884,6 @@ async def get_faiss_statistics() -> Dict[str, Any]:
         logger.error(f"Failed to get Faiss statistics: {str(e)}")
         raise HTTPException(status_code=500, detail=f"获取统计信息失败: {str(e)}")
 
-@router.get("/vectors")
-async def get_all_vectors(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
-    """获取所有向量的元数据"""
-    try:
-        if faiss_manager is None:
-            raise HTTPException(status_code=500, detail="Faiss manager not initialized")
-        
-        total_count = len(faiss_manager.metadata)
-        
-        # 分页获取元数据
-        start_idx = offset
-        end_idx = min(offset + limit, total_count)
-        
-        vectors_data = []
-        for i in range(start_idx, end_idx):
-            if i < len(faiss_manager.metadata):
-                meta = faiss_manager.metadata[i].copy()
-                vectors_data.append(meta)
-        
-        return {
-            "vectors": vectors_data,
-            "total_count": total_count,
-            "limit": limit,
-            "offset": offset,
-            "has_more": end_idx < total_count
-        }
-    except Exception as e:
-        logger.error(f"Failed to get vectors: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"获取向量数据失败: {str(e)}")
 
 @router.post("/search")
 async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
@@ -1735,7 +1686,6 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
 
 
 @router.post("/search-images")
-@router.post("/search-images")
 async def search_images(request: SearchRequest) -> Dict[str, Any]:
     try:
         query_text = (request.query or '').strip()
@@ -1801,21 +1751,3 @@ async def get_vectors_by_type(doc_type: str, limit: int = 100, offset: int = 0) 
     except Exception as e:
         logger.error(f"Failed to get vectors by type: {str(e)}")
         raise HTTPException(status_code=500, detail=f"获取指定类型向量失败: {str(e)}")
-
-@router.delete("/vectors/{vector_id}")
-async def delete_vector(vector_id: int) -> Dict[str, Any]:
-    """删除指定向量（注意：Faiss不支持直接删除，这里只是示例）"""
-    try:
-        if faiss_manager is None:
-            raise HTTPException(status_code=500, detail="Faiss manager not initialized")
-        
-        # Faiss索引不支持直接删除向量，需要重建索引
-        # 这里只是返回提示信息
-        return {
-            "message": "Faiss索引不支持直接删除向量，需要重建索引",
-            "vector_id": vector_id,
-            "suggestion": "如需删除向量，请考虑重建整个索引"
-        }
-    except Exception as e:
-        logger.error(f"Failed to delete vector: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"删除向量失败: {str(e)}")

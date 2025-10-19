@@ -542,7 +542,7 @@ def _build_registry() -> Dict[str, ModelSpec]:
             download_on_startup=False,
             display_name="PDF Extract Kit",
             description="用于PDF解析的离线模型资源。",
-            tags=("PDF解析", "OCR"),
+            tags=("PDF解析", "OCR识别"),
         ),
     }
 
