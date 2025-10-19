@@ -52,8 +52,9 @@ class ModelModule {
     this.systemFetchPending = false;
     this.systemPollingHandle = null;
     this.systemPollingInterval = null;
-    this.systemPollingDelayMs = 30000;
+    this.systemPollingDelayMs = 5000;
     this.systemDownloadRequests = new Set();
+    this.systemUninstallRequests = new Set();
     this.registryListeners = new Set();
 
     this.dependencies = {
@@ -123,9 +124,23 @@ class ModelModule {
       },
       {
         key: 'clip_vit_b_32',
-        name: 'CLIP ViT-B',
-        description: '支持图文向量化的 CLIP 模型，用于图片检索与比对。',
+        name: 'CLIP ViT-B 32',
+        description: '英文优化的标准 CLIP 模型，适用于通用图文检索。',
         tags: ['图像嵌入', '多模态'],
+        status: 'not_downloaded',
+        progress: 0,
+        downloadedBytes: 0,
+        totalBytes: null,
+        message: '点击卡片开始下载模型。',
+        error: null,
+        endpoint: null,
+        updatedAt: now
+      },
+      {
+        key: 'clip_vit_b_32_multilingual',
+        name: 'CLIP ViT-B Multilingual',
+        description: '支持中文等多语言查询的 CLIP 模型，提升图文检索效果。',
+        tags: ['图像嵌入', '多模态', '多语言'],
         status: 'not_downloaded',
         progress: 0,
         downloadedBytes: 0,
@@ -384,6 +399,7 @@ class ModelModule {
       return;
     }
     if (model.status === 'downloaded') {
+      this.confirmUninstallSystemModel(model);
       return;
     }
     if (this.systemDownloadRequests.has(model.key) || model.status === 'downloading') {
@@ -435,6 +451,72 @@ class ModelModule {
     }
   }
 
+  async triggerSystemModelUninstall(key) {
+    if (!key || this.systemUninstallRequests.has(key)) {
+      return;
+    }
+    this.systemUninstallRequests.add(key);
+    this.updateSystemModelPartial(key, {
+      status: 'pending',
+      message: '正在卸载...',
+      error: null
+    });
+    this.renderAllModels();
+    this.updateSystemPollingState({ forceFast: true });
+
+    try {
+      const response = await fetch(`${this.baseApiUrl}/api/models/${encodeURIComponent(key)}/uninstall`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      this.mergeSystemModelStatus(data);
+      if (data && data.status === 'not_downloaded') {
+        this.updateSystemModelPartial(key, { message: '模型已卸载' });
+      }
+      this.renderAllModels();
+      this.updateSystemPollingState();
+    } catch (error) {
+      console.error('卸载模型失败:', error);
+      this.updateSystemModelPartial(key, {
+        status: 'failed',
+        message: '卸载失败，请稍后重试。',
+        error: error?.message || '卸载失败'
+      });
+      this.renderAllModels();
+      this.updateSystemPollingState();
+    } finally {
+      this.systemUninstallRequests.delete(key);
+      this.updateSystemPollingState();
+    }
+  }
+
+  confirmUninstallSystemModel(model) {
+    const doUninstall = () => {
+      this.triggerSystemModelUninstall(model.key);
+    };
+
+    if (typeof window.showModal === 'function') {
+      window.showModal({
+        type: 'warning',
+        title: '卸载系统模型',
+        message: `确定要卸载 ${model.name} 吗？这将删除本地模型数据。`,
+        confirmText: '卸载',
+        cancelText: '取消',
+        showCancel: true,
+        onConfirm: doUninstall
+      });
+      return;
+    }
+
+    if (window.confirm(`确定要卸载 ${model.name} 吗？这将删除本地模型数据。`)) {
+      doUninstall();
+    }
+  }
+
   buildSystemModelCard(model) {
     const card = document.createElement('article');
     card.className = 'model-card system-model-card';
@@ -458,7 +540,8 @@ class ModelModule {
     const header = document.createElement('div');
     header.className = 'system-model-card__header';
     header.appendChild(title);
-    header.appendChild(providerLabel);
+    // 将开发商标签从标题区域移除，移动到标签列表末尾
+    // header.appendChild(providerLabel);
     header.appendChild(statusBadge);
 
     const description = document.createElement('p');
@@ -475,19 +558,32 @@ class ModelModule {
         tagsWrapper.appendChild(tagEl);
       });
     }
+    // 将开发商标签追加到描述标签之后
+    tagsWrapper.appendChild(providerLabel);
 
     card.appendChild(header);
-    card.appendChild(description);
-    if (tagsWrapper.children.length > 0) {
-      card.appendChild(tagsWrapper);
-    }
 
     const messageText = this.buildSystemModelMessage(model);
-    if (messageText) {
-      const message = document.createElement('div');
-      message.className = 'system-model-card__message';
-      message.textContent = messageText;
-      card.appendChild(message);
+    let inlineMessageAttached = false;
+    const shouldAttachToTags =
+      messageText && model.key === 'clip_vit_b_32_multilingual' && tagsWrapper.children.length > 0;
+    if (shouldAttachToTags) {
+      const inlineMessage = this.createSystemModelInlineMessage(messageText);
+      inlineMessage.classList.add('system-model-card__inline-message--after-tags');
+      tagsWrapper.appendChild(inlineMessage);
+      inlineMessageAttached = true;
+    }
+
+    card.appendChild(description);
+
+    if (messageText && !inlineMessageAttached) {
+      const inlineMessage = this.createSystemModelInlineMessage(messageText);
+      inlineMessage.classList.add('system-model-card__inline-message--after-description');
+      description.appendChild(inlineMessage);
+    }
+
+    if (tagsWrapper.children.length > 0) {
+      card.appendChild(tagsWrapper);
     }
 
     card.addEventListener('click', (event) => {
@@ -497,6 +593,13 @@ class ModelModule {
     });
 
     return card;
+  }
+
+  createSystemModelInlineMessage(text) {
+    const inlineMessage = document.createElement('span');
+    inlineMessage.className = 'system-model-card__inline-message';
+    inlineMessage.textContent = text;
+    return inlineMessage;
   }
 
   describeSystemModelStatus(model) {
@@ -510,10 +613,13 @@ class ModelModule {
       const percent = Math.max(0, Math.min(100, Math.round((model.progress || 0) * 100)));
       return `下载中 ${percent}%`;
     }
+    if (model.status === 'pending') {
+      return '卸载中';
+    }
     if (model.status === 'failed') {
       return '下载失败';
     }
-    return '点击下载';
+    return '未下载';
   }
 
   buildSystemModelMessage(model) {
@@ -555,6 +661,7 @@ class ModelModule {
       case 'bge_reranker_v2_m3':
         return 'AAAI';
       case 'clip_vit_b_32':
+      case 'clip_vit_b_32_multilingual':
         return 'SentenceTransformer';
       case 'pdf_extract_kit':
         return 'opendatalab';

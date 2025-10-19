@@ -17,8 +17,16 @@ IMAGES_PATH = PROJECT_ROOT / "img"
 class CLIPmbeddings:
     def __init__(self):
         print("开始加载 Embedding 模型...")
-        EMBEDDING_MODEL_DIR = PROJECT_ROOT / "meta" / "embedding" / "clip"
-        self.model = SentenceTransformer(str(EMBEDDING_MODEL_DIR))
+        candidate_dirs = [
+            PROJECT_ROOT / "meta" / "embedding" / "clip-Vit-32B-multilingual",
+            PROJECT_ROOT / "meta" / "embedding" / "clip",
+        ]
+        embedding_root = candidate_dirs[0]
+        for candidate in candidate_dirs:
+            if candidate.exists():
+                embedding_root = candidate
+                break
+        self.model = SentenceTransformer(str(embedding_root))
         # self.model.processor = CLIPProcessor.from_pretrained(
         #     str(EMBEDDING_MODEL_DIR), use_fast=True
         # )

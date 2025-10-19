@@ -179,6 +179,30 @@ class ModelDownloadService:
                 results.append(self._build_status(spec, state))
         return results
 
+    def uninstall(self, key: str) -> ModelStatus:
+        """Uninstall the given model by removing its local assets and return status."""
+        spec = self._manager.get_spec(key)
+        with self._lock:
+            state = self._ensure_state(spec)
+            try:
+                self._manager.uninstall_model(key)
+            except Exception as exc:
+                state.status = "failed"
+                state.message = f"卸载失败: {exc}"
+                state.error = str(exc)
+                state.updated_at = time.time()
+                return self._build_status(spec, state)
+            # Update state to reflect removal
+            state.status = "not_downloaded"
+            state.progress = 0.0
+            state.downloaded_bytes = 0
+            state.total_bytes = None
+            state.message = "模型已卸载"
+            state.error = None
+            state.endpoint = None
+            state.updated_at = time.time()
+            return self._build_status(spec, state)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

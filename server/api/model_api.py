@@ -64,3 +64,14 @@ def trigger_download(key: str) -> ModelStatusResponse:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ModelStatusResponse.from_service(status)
+
+
+@router.post("/{key}/uninstall", response_model=ModelStatusResponse)
+def uninstall_model(key: str) -> ModelStatusResponse:
+    """Uninstall a system model and return its updated status."""
+    service = _get_service()
+    try:
+        status = service.uninstall(key)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ModelStatusResponse.from_service(status)

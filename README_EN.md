@@ -54,7 +54,7 @@ LoFS fuses local file organization with semantic retrieval to deliver an “alwa
 Model assets download lazily the first time a capability is invoked. Prefetch them to warm the cache:
 
 ```bash
-python -c "from service.model_manager import get_model_manager; manager = get_model_manager(); [manager.get_model_path(key) for key in ('bge_m3', 'bge_reranker_v2_m3', 'clip_vit_b_32', 'pdf_extract_kit')]"
+python -c "from service.model_manager import get_model_manager; manager = get_model_manager(); [manager.get_model_path(key) for key in ('bge_m3', 'bge_reranker_v2_m3', 'clip_vit_b_32', 'clip_vit_b_32_multilingual', 'pdf_extract_kit')]"
 ```
 
 ## 4. Deployment & Usage
@@ -95,7 +95,7 @@ npm run dev
 python package.py        # cross-platform one-click packaging
 ```
 
-- On startup LoFS creates model directories under `meta` (`embedding/bge-m3`, `embedding/clip`, `reranker/bge-reranker-v3-m3`, `pdf-extract-kit`).
+- On startup LoFS creates model directories under `meta` (`embedding/bge-m3`, `embedding/clip`, `embedding/clip-Vit-32B-multilingual`, `reranker/bge-reranker-v3-m3`, `pdf-extract-kit`).
 - The first invocation of embeddings, reranking, CLIP, or PDF parsing auto-downloads weights via `huggingface_hub`.
 - Deleting `meta` is safe—the app will recreate the structure during the next boot.
 

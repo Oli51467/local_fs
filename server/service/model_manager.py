@@ -138,6 +138,21 @@ class ModelManager:
             self._download_model(local_path, spec, progress_callback=progress_callback)
         return local_path
 
+    def uninstall_model(self, key: str) -> None:
+        """Remove all local assets for the given model key.
+        This deletes the corresponding subdirectory under the meta root.
+        """
+        spec = self.get_spec(key)
+        local_path = spec.local_path(self._meta_root)
+        with self._lock_for(key):
+            try:
+                import shutil
+                if local_path.exists():
+                    shutil.rmtree(local_path, ignore_errors=True)
+            except Exception as exc:
+                logger.exception("Uninstalling model '%s' failed at %s: %s", key, local_path, exc)
+                raise
+
     def _is_ready(self, local_path: Path, spec: ModelSpec) -> bool:
         if not local_path.exists():
             return False
@@ -495,8 +510,28 @@ def _build_registry() -> Dict[str, ModelSpec]:
             ),
             mirror_endpoints=("https://hf-mirror.com",),
             download_on_startup=False,
-            display_name="CLIP ViT-B",
-            description="支持图文向量化的 CLIP 模型，用于图片检索与比对。",
+            display_name="CLIP ViT-B 32",
+            description="标准英文优化的 CLIP 模型，用于图文检索与比对。",
+            tags=("图像嵌入", "多模态"),
+        ),
+        "clip_vit_b_32_multilingual": ModelSpec(
+            key="clip_vit_b_32_multilingual",
+            repo_id="sentence-transformers/clip-ViT-B-32-multilingual-v1",
+            local_subdir=Path("embedding") / "clip-Vit-32B-multilingual",
+            required_files=(
+                "modules.json",
+                (
+                    "0_CLIPModel/pytorch_model.bin",
+                    "0_CLIPModel/model.safetensors",
+                    "pytorch_model.bin",
+                    "model.safetensors",
+                    "onnx/model.onnx",
+                ),
+            ),
+            mirror_endpoints=("https://hf-mirror.com",),
+            download_on_startup=False,
+            display_name="CLIP ViT-B Multilingual",
+            description="多语言支持的 CLIP 模型，提升中文等多语种的图文检索效果。",
             tags=("图像嵌入", "多模态"),
         ),
         "pdf_extract_kit": ModelSpec(

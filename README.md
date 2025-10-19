@@ -54,7 +54,7 @@ LoFS 聚焦“本地优先”的知识管理场景，将文件管理与语义检
 模型目录按需懒加载，首次使用对应能力时自动下载；也可以提前拉取以免首轮等待：
 
 ```bash
-python -c "from service.model_manager import get_model_manager; manager = get_model_manager(); [manager.get_model_path(key) for key in ('bge_m3', 'bge_reranker_v2_m3', 'clip_vit_b_32', 'pdf_extract_kit')]"
+python -c "from service.model_manager import get_model_manager; manager = get_model_manager(); [manager.get_model_path(key) for key in ('bge_m3', 'bge_reranker_v2_m3', 'clip_vit_b_32', 'clip_vit_b_32_multilingual', 'pdf_extract_kit')]"
 ```
 
 ## 4. 部署使用
@@ -95,6 +95,6 @@ npm run dev
 python package.py # 一键打包
 ```
 
-- 应用启动时会在 `meta` 目录创建所需模型文件夹（`embedding/bge-m3`、`embedding/clip`、`reranker/bge-reranker-v3-m3`、`pdf-extract-kit`）。
+- 应用启动时会在 `meta` 目录创建所需模型文件夹（`embedding/bge-m3`、`embedding/clip`、`embedding/clip-Vit-32B-multilingual`、`reranker/bge-reranker-v3-m3`、`pdf-extract-kit`）。
 - 首次使用向量化、重排、图像检索或 PDF 解析时，会通过 `huggingface_hub` 自动下载对应模型。
 - 即便清空 `meta` 目录，LoFS 也会在下次启动时自动恢复目录结构。
