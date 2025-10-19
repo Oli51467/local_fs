@@ -136,7 +136,7 @@
   border: 1px solid transparent;
 }
 
-.chat-history-item + .chat-history-item {
+.chat-history-item+.chat-history-item {
   margin-top: 0;
 }
 
@@ -144,7 +144,7 @@
   background: rgba(0, 0, 0, 0.06);
 }
 
-.chat-history-item + .chat-history-item {
+.chat-history-item+.chat-history-item {
   margin-top: 2px;
 }
 
@@ -173,7 +173,8 @@
 
 .chat-history-item.active {
   border-color: transparent;
-  background: rgba(0, 0, 0, 0.08); /* 浅色模式下的浅灰选中效果 */
+  background: rgba(0, 0, 0, 0.08);
+  /* 浅色模式下的浅灰选中效果 */
 }
 
 .chat-history-title {
@@ -201,7 +202,8 @@
 }
 
 .chat-history-meta {
-  display: none; /* 不展示消息条数 */
+  display: none;
+  /* 不展示消息条数 */
 }
 
 .chat-history-delete-btn {
@@ -278,7 +280,8 @@
 .chat-timestamp {
   font-size: 12px;
   color: var(--text-muted);
-  display: none; /* 隐藏最近更新时间 */
+  display: none;
+  /* 隐藏最近更新时间 */
 }
 
 .chat-page-header-actions {
@@ -496,7 +499,8 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
-  max-width: 720px; /* 与输入框宽度保持一致，便于左右对齐 */
+  max-width: 720px;
+  /* 与输入框宽度保持一致，便于左右对齐 */
   margin: 0 auto;
   width: 100%;
 }
@@ -539,7 +543,7 @@
 }
 
 .chat-reference-title {
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 600;
@@ -547,6 +551,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  padding-left: 12px;
 }
 
 .chat-reference-list {
@@ -579,12 +584,20 @@
   align-items: center;
   gap: 12px;
   width: 100%;
-  justify-content: space-between;
+  justify-content: flex-start;
+}
+
+.chat-reference-header-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .chat-reference-toggle {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   border: none;
   background: none;
   display: flex;
@@ -604,17 +617,20 @@
 }
 
 .chat-reference-toggle-icon {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-right: 2px solid rgba(71, 85, 105, 0.7);
   border-bottom: 2px solid rgba(71, 85, 105, 0.7);
   transform: rotate(-45deg);
   transition: transform 0.18s ease, border-color 0.18s ease;
   flex: 0 0 auto;
+  position: relative;
+  top: 0;
 }
 
 .chat-reference-item.is-expanded .chat-reference-toggle-icon {
   transform: rotate(45deg);
+  top: -1px;
 }
 
 .chat-reference-texts {
@@ -622,6 +638,7 @@
   flex-direction: column;
   gap: 4px;
   flex: 1;
+  min-width: 0;
 }
 
 .chat-reference-name {
@@ -648,6 +665,7 @@
   color: rgba(107, 114, 128, 0.85);
   letter-spacing: 0.02em;
   flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .chat-reference-chunks {
@@ -795,7 +813,8 @@
 .chat-message-header {
   display: flex;
   align-items: flex-start;
-  gap: 0; /* 移除内部间距，避免气泡相对输入框产生偏移 */
+  gap: 0;
+  /* 移除内部间距，避免气泡相对输入框产生偏移 */
   position: relative;
   width: 100%;
 }
@@ -845,18 +864,22 @@
 /* 绝对定位头像以避免影响气泡左右对齐 */
 .chat-message.assistant .chat-avatar {
   position: absolute;
-  left: -46px; /* 头像宽度(30) + 间距(16)，增大至两倍当前长度 */
+  left: -46px;
+  /* 头像宽度(30) + 间距(16)，增大至两倍当前长度 */
   top: 0;
 }
+
 .chat-message.user .chat-avatar {
   position: absolute;
-  right: -46px; /* 头像宽度(30) + 间距(16)，增大至两倍当前长度 */
+  right: -46px;
+  /* 头像宽度(30) + 间距(16)，增大至两倍当前长度 */
   top: 0;
 }
 
 /* 头像后面的加载转动圆圈（助手消息等待中显示） */
 .chat-avatar-spinner {
-  display: none; /* 默认隐藏，等待时显示 */
+  display: none;
+  /* 默认隐藏，等待时显示 */
   width: 14px;
   height: 14px;
   border: 2px solid rgba(148, 163, 184, 0.35);
@@ -874,7 +897,8 @@
   word-break: break-word;
   background: #f5f5f5;
   color: var(--text-color);
-  max-width: 100%; /* 允许根据内容扩展至输入框左右边界 */
+  max-width: 100%;
+  /* 允许根据内容扩展至输入框左右边界 */
   min-width: fit-content;
   width: fit-content;
   display: inline-block;
@@ -975,11 +999,11 @@
   max-width: 100%;
 }
 
-.chat-bubble .chat-markdown-body > *:first-child {
+.chat-bubble .chat-markdown-body>*:first-child {
   margin-top: 0;
 }
 
-.chat-bubble .chat-markdown-body > *:last-child {
+.chat-bubble .chat-markdown-body>*:last-child {
   margin-bottom: 0;
 }
 
@@ -1066,7 +1090,7 @@
   font-style: italic;
 }
 
-.chat-bubble .chat-markdown-body :not(pre) > code {
+.chat-bubble .chat-markdown-body :not(pre)>code {
   background-color: rgba(37, 99, 235, 0.08) !important;
   border: 1px solid rgba(37, 99, 235, 0.12);
   color: #1e3a8a;
@@ -1121,7 +1145,8 @@
 .chat-message.assistant .chat-bubble {
   background: #f5f5f5;
   color: var(--text-color);
-  margin-left: 0; /* 与输入框左侧对齐 */
+  margin-left: 0;
+  /* 与输入框左侧对齐 */
   width: 100%;
   max-width: 100%;
   display: block;
@@ -1131,7 +1156,8 @@
   background: #e0e0e0;
   color: var(--text-color);
   align-self: flex-end;
-  margin-right: 0; /* 与输入框右侧对齐 */
+  margin-right: 0;
+  /* 与输入框右侧对齐 */
 }
 
 .chat-message.is-waiting .chat-bubble,
@@ -1147,6 +1173,16 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.chat-waiting-indicator-inline {
+  flex: 1;
+  padding: 8px 14px;
+  margin-left: 0;
+  width: 100%;
+  max-width: 100%;
+  background: transparent;
+  border-radius: 12px;
 }
 
 .chat-waiting-spinner {
@@ -1254,13 +1290,16 @@
   margin: 0 auto;
   display: flex;
   align-items: center;
-  box-sizing: border-box; /* 使最大宽度包含边框和内边距，保证与消息列对齐 */
+  box-sizing: border-box;
+  /* 使最大宽度包含边框和内边距，保证与消息列对齐 */
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 12px;
   background: var(--bg-color);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
-  padding: 12px 50px 12px 16px; /* 略增上下内边距，稳定整体高度 */
-  min-height: 56px; /* 稍增最小高度，确保按钮始终可居中 */
+  padding: 12px 50px 12px 16px;
+  /* 略增上下内边距，稳定整体高度 */
+  min-height: 56px;
+  /* 稍增最小高度，确保按钮始终可居中 */
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -1275,7 +1314,8 @@
   width: 100%;
   max-height: 320px;
   margin: 0;
-  padding: 0; /* 保持无额外内边距，避免高度跳变 */
+  padding: 0;
+  /* 保持无额外内边距，避免高度跳变 */
   min-height: 22px;
   border: none;
   font-size: 14px;
@@ -1284,7 +1324,8 @@
   background: transparent;
   resize: none;
   overflow-y: hidden;
-  line-height: 1.5; /* 固定行高，与容器高度配合 */
+  line-height: 1.5;
+  /* 固定行高，与容器高度配合 */
 }
 
 #chat-input::placeholder {
@@ -1384,7 +1425,8 @@
 }
 
 .dark-mode .chat-history-item.active {
-  background: rgba(148, 163, 184, 0.18); /* 深色模式下的浅灰效果 */
+  background: rgba(148, 163, 184, 0.18);
+  /* 深色模式下的浅灰效果 */
 }
 
 .dark-mode .chat-bubble {
@@ -1507,7 +1549,7 @@
   color: #f472b6;
 }
 
-.dark-mode .chat-bubble .chat-markdown-body :not(pre) > code {
+.dark-mode .chat-bubble .chat-markdown-body :not(pre)>code {
   background-color: rgba(56, 189, 248, 0.24) !important;
   border-color: rgba(56, 189, 248, 0.35);
   color: #e0f2fe;

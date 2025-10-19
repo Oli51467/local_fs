@@ -4,7 +4,9 @@
   const state = {
     isSearchMode: false,
     eventsBound: false,
-    activeMode: 'file'
+    activeMode: 'file',
+    searchInputBaseHeight: null,
+    searchInputMaxHeight: null
   };
 
   const dependencies = {
@@ -45,6 +47,35 @@
         dependencies[key] = overrides[key];
       }
     });
+  }
+
+  function autoResizeSearchInput(input) {
+    if (!input) {
+      return;
+    }
+    if (!state.searchInputBaseHeight || !state.searchInputMaxHeight) {
+      const computed = window.getComputedStyle(input);
+      const minHeight = parseFloat(computed.minHeight) || parseFloat(computed.lineHeight) || 32;
+      const maxHeight = parseFloat(computed.maxHeight);
+      state.searchInputBaseHeight = minHeight;
+      state.searchInputMaxHeight = Number.isNaN(maxHeight) ? Math.max(minHeight, 240) : maxHeight;
+    }
+    input.style.height = 'auto';
+    const nextHeight = Math.min(
+      state.searchInputMaxHeight,
+      Math.max(state.searchInputBaseHeight, input.scrollHeight)
+    );
+    input.style.height = `${nextHeight}px`;
+  }
+
+  function resetSearchInputHeight(input) {
+    if (!input) {
+      return;
+    }
+    input.style.height = '';
+    state.searchInputBaseHeight = null;
+    state.searchInputMaxHeight = null;
+    autoResizeSearchInput(input);
   }
 
   function hideDatabasePage() {
@@ -136,6 +167,7 @@
       if (searchState && searchState.query) {
         searchInput.value = searchState.query;
       }
+      autoResizeSearchInput(searchInput);
       try {
         searchInput.focus();
       } catch (error) {
@@ -181,6 +213,7 @@
     const searchInput = dependencies.getSearchInput();
     if (searchInput) {
       searchInput.value = '';
+      resetSearchInputHeight(searchInput);
     }
 
     const fileContent = dependencies.getFileContentEl ? dependencies.getFileContentEl() : null;
@@ -411,10 +444,13 @@
     if (searchInput) {
       searchInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
-          event.preventDefault();
-          dependencies.performSearch(searchInput.value);
-        }
-        if (event.key === 'Escape') {
+          if (event.shiftKey) {
+            requestAnimationFrame(() => autoResizeSearchInput(searchInput));
+          } else {
+            event.preventDefault();
+            dependencies.performSearch(searchInput.value);
+          }
+        } else if (event.key === 'Escape') {
           event.preventDefault();
           switchToFileMode();
         }
@@ -425,11 +461,15 @@
         if (searchState) {
           searchState.query = event.target.value;
         }
+        autoResizeSearchInput(searchInput);
       });
 
       searchInput.addEventListener('focus', () => {
+        autoResizeSearchInput(searchInput);
         dependencies.renderSearchHistory();
       });
+
+      autoResizeSearchInput(searchInput);
     }
 
     const databaseBtn = dependencies.getDatabaseButton();
@@ -481,6 +521,7 @@
     switchToChatMode,
     switchToDatabaseMode,
     switchToModelMode,
+    autoResizeSearchInput,
     isSearchMode: getIsSearchMode
   };
 

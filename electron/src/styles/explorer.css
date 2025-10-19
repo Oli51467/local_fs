@@ -396,14 +396,35 @@
 
 #search-input {
   width: 100%;
-  padding: 4px 12px;
+  padding: 6px 12px;
   border: 1px solid var(--tree-border);
   border-radius: 4px;
   background-color: var(--bg-color);
   color: var(--text-color);
   font-size: 13px;
+  line-height: 1.5;
   outline: none;
   box-sizing: border-box;
+  min-height: calc(1.5em + 12px);
+  max-height: 50vh;
+  resize: none;
+  overflow-y: auto;
+  font-family: inherit;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
+}
+
+#search-input::-webkit-scrollbar {
+  width: 1px;
+}
+
+#search-input::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#search-input::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
 }
 
 #search-input:focus {

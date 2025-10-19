@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -11,8 +12,12 @@ from pydantic import BaseModel, Field
 import numpy as np
 
 from config.config import ServerConfig
+from api.status_api import status_broadcaster
 from service.bm25s_service import BM25SService
-from service.clip_embedding_service import CLIPEmbeddingService, get_clip_embedding_service
+from service.clip_embedding_service import (
+    CLIPEmbeddingService,
+    get_clip_embedding_service,
+)
 from service.embedding_service import EmbeddingService
 from service.faiss_service import FaissManager
 from service.llm_client import LLMClientError, SiliconFlowClient
@@ -61,6 +66,68 @@ RELATIVE_SCORE_KEEP = 0.75
 CLIP_STRONG_THRESHOLD = 0.58
 CLIP_TEXT_TRUNCATE = 512
 REFERENCE_SNIPPET_MAX_CHARS = 320
+CHAT_PROGRESS_TOTAL_STEPS = 6
+
+
+def _schedule_status_broadcast(
+    payload: Dict[str, Any], keep_latest: bool = False
+) -> None:
+    """调度状态广播，兼容同步/异步上下文。"""
+
+    async def _send() -> None:
+        try:
+            await status_broadcaster.broadcast(payload, keep_latest=keep_latest)
+        except Exception:
+            logger.debug("广播聊天进度失败", exc_info=True)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        loop.create_task(_send())
+        return
+
+    try:
+        asyncio.run(_send())
+    except RuntimeError:
+        new_loop = asyncio.new_event_loop()
+        try:
+            new_loop.run_until_complete(_send())
+        finally:
+            new_loop.close()
+
+
+def _schedule_chat_progress(
+    conversation_id: Optional[int],
+    assistant_message_id: Optional[int],
+    user_message_id: Optional[int],
+    client_request_id: Optional[str],
+    stage: str,
+    message: str,
+    step: int,
+    status: str = "running",
+    total_steps: int = CHAT_PROGRESS_TOTAL_STEPS,
+) -> None:
+    if client_request_id is None and assistant_message_id is None:
+        return
+
+    payload = {
+        "event": "chat_progress",
+        "conversation_id": conversation_id,
+        "assistant_message_id": assistant_message_id,
+        "user_message_id": user_message_id,
+        "client_request_id": client_request_id,
+        "stage": stage,
+        "message": message,
+        "step": step,
+        "total_steps": total_steps,
+        "status": status,
+    }
+    _schedule_status_broadcast(payload, keep_latest=False)
+
+
 class RetrievedChunk(BaseModel):
     document_id: int
     filename: str
@@ -104,7 +171,7 @@ class ReferenceDocument(BaseModel):
     project_relative_path: Optional[str] = None
     score: Optional[float] = None
     chunk_indices: List[int] = Field(default_factory=list)
-    reference_id: str = Field(default='')
+    reference_id: str = Field(default="")
     snippet: Optional[str] = None
     selected: Optional[bool] = None
 
@@ -115,14 +182,21 @@ class ModelSelection(BaseModel):
     api_model: str = Field(..., description="调用使用的模型名称")
     api_key: str = Field(..., description="对应的 API Key")
     provider_name: Optional[str] = Field(default=None, description="模型提供方名称")
-    api_key_setting: Optional[str] = Field(default=None, description="设置页面中的 API Key 标识")
+    api_key_setting: Optional[str] = Field(
+        default=None, description="设置页面中的 API Key 标识"
+    )
 
 
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, description="用户提问内容")
     conversation_id: Optional[int] = Field(default=None, description="已有会话 ID")
     top_k: int = Field(default=5, ge=1, le=50, description="返回的片段数量")
-    model: Optional[ModelSelection] = Field(default=None, description="指定使用的模型信息")
+    model: Optional[ModelSelection] = Field(
+        default=None, description="指定使用的模型信息"
+    )
+    client_request_id: Optional[str] = Field(
+        default=None, description="客户端生成的请求标识，用于跟踪进度"
+    )
 
 
 class ChatStreamRequest(ChatRequest):
@@ -189,18 +263,24 @@ def _ensure_clip_service() -> Optional[CLIPEmbeddingService]:
 
 
 def _generate_conversation_title(question: str) -> str:
-    normalized = ' '.join(question.strip().split())
+    normalized = " ".join(question.strip().split())
     if not normalized:
-        return '新对话'
+        return "新对话"
     if len(normalized) > 60:
-        return normalized[:57] + '...'
+        return normalized[:57] + "..."
     return normalized
 
 
 def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
-    assert embedding_service is not None and faiss_manager is not None and sqlite_manager is not None
+    assert (
+        embedding_service is not None
+        and faiss_manager is not None
+        and sqlite_manager is not None
+    )
 
-    bm25_service = bm25s_service if bm25s_service and bm25s_service.is_available() else None
+    bm25_service = (
+        bm25s_service if bm25s_service and bm25s_service.is_available() else None
+    )
     reranker = reranker_service
 
     def _normalize_embedding(raw: Optional[float]) -> Optional[float]:
@@ -226,7 +306,9 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
     candidate_map: Dict[int, Dict[str, Any]] = {}
     chunk_cache: Dict[int, Optional[Dict[str, Any]]] = {}
 
-    def _fetch_chunk(vector_id: int, fallback: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _fetch_chunk(
+        vector_id: int, fallback: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
         if vector_id in chunk_cache:
             return chunk_cache[vector_id]
         try:
@@ -236,19 +318,28 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             record = None
         if not record and fallback:
             # Fallback to metadata when sqlite missing (legacy indices)
-            fallback_content = fallback.get('chunk_text') or fallback.get('text') or fallback.get('content') or ''
+            fallback_content = (
+                fallback.get("chunk_text")
+                or fallback.get("text")
+                or fallback.get("content")
+                or ""
+            )
             if fallback_content:
                 record = {
-                    'document_id': fallback.get('document_id'),
-                    'filename': fallback.get('filename') or '',
-                    'file_path': fallback.get('file_path') or fallback.get('path') or '',
-                    'chunk_index': fallback.get('chunk_index', 0),
-                    'content': fallback_content,
+                    "document_id": fallback.get("document_id"),
+                    "filename": fallback.get("filename") or "",
+                    "file_path": fallback.get("file_path")
+                    or fallback.get("path")
+                    or "",
+                    "chunk_index": fallback.get("chunk_index", 0),
+                    "content": fallback_content,
                 }
         chunk_cache[vector_id] = record
         return record
 
-    def _get_candidate(vector_id: int, source_payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _get_candidate(
+        vector_id: int, source_payload: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
         if vector_id is None or vector_id < 0:
             return None
         if vector_id in candidate_map:
@@ -258,11 +349,11 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
         if not chunk_record:
             return None
 
-        raw_content = chunk_record.get('content')
+        raw_content = chunk_record.get("content")
         if raw_content is None:
             return None
         if isinstance(raw_content, bytes):
-            raw_content = raw_content.decode('utf-8', 'ignore')
+            raw_content = raw_content.decode("utf-8", "ignore")
         if not isinstance(raw_content, str):
             raw_content = str(raw_content)
 
@@ -270,30 +361,36 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             return None
 
         candidate = {
-            'vector_id': int(vector_id),
-            'document_id': chunk_record.get('document_id'),
-            'filename': chunk_record.get('filename') or (source_payload or {}).get('filename') or '',
-            'file_path': chunk_record.get('file_path') or (source_payload or {}).get('file_path') or '',
-            'chunk_index': chunk_record.get('chunk_index', 0),
-            'content': raw_content,
-            'embedding_score': None,
-            'embedding_norm': None,
-            'bm25_raw': None,
-            'bm25_norm': None,
-            'rerank_score': None,
-            'rerank_norm': None,
-            'dense_rank': None,
-            'lexical_rank': None,
-            'clip_score': None,
-            'clip_norm': None,
-            'clip_rank': None,
-            'sources': set(),  # type: Set[str]
+            "vector_id": int(vector_id),
+            "document_id": chunk_record.get("document_id"),
+            "filename": chunk_record.get("filename")
+            or (source_payload or {}).get("filename")
+            or "",
+            "file_path": chunk_record.get("file_path")
+            or (source_payload or {}).get("file_path")
+            or "",
+            "chunk_index": chunk_record.get("chunk_index", 0),
+            "content": raw_content,
+            "embedding_score": None,
+            "embedding_norm": None,
+            "bm25_raw": None,
+            "bm25_norm": None,
+            "rerank_score": None,
+            "rerank_norm": None,
+            "dense_rank": None,
+            "lexical_rank": None,
+            "clip_score": None,
+            "clip_norm": None,
+            "clip_rank": None,
+            "sources": set(),  # type: Set[str]
         }
         candidate_map[vector_id] = candidate
         return candidate
 
     query_vector = embedding_service.encode_text(question)
-    dense_limit = min(max(top_k * DENSE_RECALL_MULTIPLIER, DENSE_RECALL_MIN), DENSE_RECALL_MAX)
+    dense_limit = min(
+        max(top_k * DENSE_RECALL_MULTIPLIER, DENSE_RECALL_MIN), DENSE_RECALL_MAX
+    )
 
     try:
         dense_results = faiss_manager.search_vectors([query_vector], k=dense_limit)
@@ -303,19 +400,27 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
 
     if dense_results:
         for idx, item in enumerate(dense_results[0][:dense_limit]):
-            vector_id = item.get('vector_id')
-            candidate = _get_candidate(int(vector_id) if vector_id is not None else -1, item)
+            vector_id = item.get("vector_id")
+            candidate = _get_candidate(
+                int(vector_id) if vector_id is not None else -1, item
+            )
             if not candidate:
                 continue
-            candidate['sources'].add('dense')
-            candidate['dense_rank'] = idx + 1 if candidate.get('dense_rank') is None else min(candidate['dense_rank'], idx + 1)
-            score = item.get('score')
+            candidate["sources"].add("dense")
+            candidate["dense_rank"] = (
+                idx + 1
+                if candidate.get("dense_rank") is None
+                else min(candidate["dense_rank"], idx + 1)
+            )
+            score = item.get("score")
             if score is not None:
                 embedding_score = float(score)
-                candidate['embedding_score'] = embedding_score
-                candidate['embedding_norm'] = _normalize_embedding(embedding_score)
+                candidate["embedding_score"] = embedding_score
+                candidate["embedding_norm"] = _normalize_embedding(embedding_score)
 
-    lexical_limit = min(max(top_k * LEXICAL_RECALL_MULTIPLIER, LEXICAL_RECALL_MIN), LEXICAL_RECALL_MAX)
+    lexical_limit = min(
+        max(top_k * LEXICAL_RECALL_MULTIPLIER, LEXICAL_RECALL_MIN), LEXICAL_RECALL_MAX
+    )
     if bm25_service and lexical_limit > 0:
         try:
             lexical_results = bm25_service.retrieve(question, top_k=lexical_limit)
@@ -324,7 +429,7 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             lexical_results = []
 
         for item in lexical_results:
-            doc_id = item.get('doc_id')
+            doc_id = item.get("doc_id")
             try:
                 doc_index = int(doc_id)
             except (TypeError, ValueError):
@@ -334,7 +439,7 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             vector_id_meta: Optional[int] = None
             if doc_index is not None and 0 <= doc_index < len(faiss_manager.metadata):
                 meta = faiss_manager.metadata[doc_index]
-                vector_id_meta = meta.get('vector_id')
+                vector_id_meta = meta.get("vector_id")
             if vector_id_meta is None:
                 # 兼容旧数据，尝试使用doc_index作为vector id
                 vector_id_meta = doc_index
@@ -346,15 +451,19 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             if not candidate:
                 continue
 
-            candidate['sources'].add('lexical')
-            rank = item.get('rank')
+            candidate["sources"].add("lexical")
+            rank = item.get("rank")
             if isinstance(rank, int):
-                candidate['lexical_rank'] = rank if candidate.get('lexical_rank') is None else min(candidate['lexical_rank'], rank)
-            bm25_raw = item.get('score')
+                candidate["lexical_rank"] = (
+                    rank
+                    if candidate.get("lexical_rank") is None
+                    else min(candidate["lexical_rank"], rank)
+                )
+            bm25_raw = item.get("score")
             if bm25_raw is not None:
                 raw_val = float(bm25_raw)
-                candidate['bm25_raw'] = raw_val
-                candidate['bm25_norm'] = _normalize_bm25(raw_val)
+                candidate["bm25_raw"] = raw_val
+                candidate["bm25_norm"] = _normalize_bm25(raw_val)
 
     candidates: List[Dict[str, Any]] = list(candidate_map.values())
     if not candidates:
@@ -371,7 +480,7 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             query_clip_vec = np.array(query_clip_vectors[0], dtype=np.float32)
             clip_payload: List[Tuple[int, str]] = []
             for idx, candidate in enumerate(candidates[:CLIP_CANDIDATE_LIMIT]):
-                content = candidate.get('content') or ''
+                content = candidate.get("content") or ""
                 trimmed = str(content).strip()
                 if not trimmed:
                     continue
@@ -381,41 +490,48 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
                     clip_texts = [text for _, text in clip_payload]
                     clip_vectors = clip_service.encode_texts(clip_texts)
                 except Exception as exc:  # pragma: no cover - optional path
-                    logger.debug("Failed to encode candidate passages with CLIP: %s", exc)
+                    logger.debug(
+                        "Failed to encode candidate passages with CLIP: %s", exc
+                    )
                     clip_vectors = []
                 if clip_vectors:
                     doc_matrix = np.array(clip_vectors, dtype=np.float32)
                     if doc_matrix.ndim == 1:
                         doc_matrix = doc_matrix.reshape(1, -1)
-                    if doc_matrix.size and doc_matrix.shape[1] == query_clip_vec.shape[0]:
+                    if (
+                        doc_matrix.size
+                        and doc_matrix.shape[1] == query_clip_vec.shape[0]
+                    ):
                         scores = doc_matrix @ query_clip_vec
                         for order, (candidate_idx, _) in enumerate(clip_payload):
                             candidate = candidates[candidate_idx]
                             score = float(scores[order])
                             normalized = max(0.0, min(1.0, (score + 1.0) / 2.0))
-                            candidate['clip_score'] = score
-                            candidate['clip_norm'] = normalized
-                            candidate['clip_rank'] = order + 1
-                            candidate['sources'].add('clip')
+                            candidate["clip_score"] = score
+                            candidate["clip_norm"] = normalized
+                            candidate["clip_rank"] = order + 1
+                            candidate["sources"].add("clip")
     for candidate in candidates:
-        emb_norm = candidate.get('embedding_norm')
-        bm_norm = candidate.get('bm25_norm')
-        clip_norm = candidate.get('clip_norm')
-        candidate['pre_score'] = (emb_norm or 0.0) + (bm_norm or 0.0) + (clip_norm or 0.0)
+        emb_norm = candidate.get("embedding_norm")
+        bm_norm = candidate.get("bm25_norm")
+        clip_norm = candidate.get("clip_norm")
+        candidate["pre_score"] = (
+            (emb_norm or 0.0) + (bm_norm or 0.0) + (clip_norm or 0.0)
+        )
 
     candidates.sort(
         key=lambda item: (
-            item.get('pre_score', 0.0),
-            item.get('embedding_norm', 0.0),
-            item.get('bm25_norm', 0.0)
+            item.get("pre_score", 0.0),
+            item.get("embedding_norm", 0.0),
+            item.get("bm25_norm", 0.0),
         ),
-        reverse=True
+        reverse=True,
     )
 
     if len(candidates) > MERGED_CANDIDATE_LIMIT:
         candidates = candidates[:MERGED_CANDIDATE_LIMIT]
 
-    rerank_input = [candidate for candidate in candidates if candidate.get('content')]
+    rerank_input = [candidate for candidate in candidates if candidate.get("content")]
     rerank_limit = min(max(top_k * 6, 60), RERANK_CANDIDATE_LIMIT)
     rerank_limit = min(rerank_limit, len(rerank_input))
 
@@ -423,29 +539,31 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
         try:
             rerank_scores = reranker.rerank_results(
                 question,
-                [candidate['content'] for candidate in rerank_input[:rerank_limit]],
-                normalize=True
+                [candidate["content"] for candidate in rerank_input[:rerank_limit]],
+                normalize=True,
             )
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("Reranker scoring failed: %s", exc)
             rerank_scores = []
 
-        for idx, (candidate, score) in enumerate(zip(rerank_input[:rerank_limit], rerank_scores)):
+        for idx, (candidate, score) in enumerate(
+            zip(rerank_input[:rerank_limit], rerank_scores)
+        ):
             try:
                 normalized_score = max(0.0, min(1.0, float(score)))
             except (TypeError, ValueError):
                 normalized_score = 0.0
-            candidate['sources'].add('reranker')
-            candidate['rerank_score'] = float(score)
-            candidate['rerank_norm'] = normalized_score
-            candidate['rerank_rank'] = idx + 1
+            candidate["sources"].add("reranker")
+            candidate["rerank_score"] = float(score)
+            candidate["rerank_norm"] = normalized_score
+            candidate["rerank_rank"] = idx + 1
 
     ranked: List[RetrievedChunk] = []
     for candidate in candidates:
-        emb_norm = candidate.get('embedding_norm')
-        bm_norm = candidate.get('bm25_norm')
-        rr_norm = candidate.get('rerank_norm')
-        clip_norm = candidate.get('clip_norm')
+        emb_norm = candidate.get("embedding_norm")
+        bm_norm = candidate.get("bm25_norm")
+        rr_norm = candidate.get("rerank_norm")
+        clip_norm = candidate.get("clip_norm")
 
         weight_rerank = RERANK_FUSION_WEIGHT if rr_norm is not None else 0.0
         weight_dense = DENSE_FUSION_WEIGHT if emb_norm is not None else 0.0
@@ -454,63 +572,71 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
 
         weight_sum = weight_rerank + weight_dense + weight_lex + weight_clip
         if weight_sum <= 0.0:
-            fallback_components = [comp for comp in (rr_norm, emb_norm, bm_norm, clip_norm) if comp is not None]
+            fallback_components = [
+                comp
+                for comp in (rr_norm, emb_norm, bm_norm, clip_norm)
+                if comp is not None
+            ]
             final_score = max(fallback_components) if fallback_components else 0.0
         else:
             final_score = (
-                (rr_norm or 0.0) * weight_rerank +
-                (emb_norm or 0.0) * weight_dense +
-                (bm_norm or 0.0) * weight_lex +
-                (clip_norm or 0.0) * weight_clip
+                (rr_norm or 0.0) * weight_rerank
+                + (emb_norm or 0.0) * weight_dense
+                + (bm_norm or 0.0) * weight_lex
+                + (clip_norm or 0.0) * weight_clip
             ) / weight_sum
 
-        candidate['final_score'] = final_score
+        candidate["final_score"] = final_score
 
         score_breakdown = {}
         if rr_norm is not None:
-            score_breakdown['reranker'] = rr_norm
+            score_breakdown["reranker"] = rr_norm
         if emb_norm is not None:
-            score_breakdown['dense'] = emb_norm
+            score_breakdown["dense"] = emb_norm
         if bm_norm is not None:
-            score_breakdown['lexical'] = bm_norm
+            score_breakdown["lexical"] = bm_norm
         if clip_norm is not None:
-            score_breakdown['clip'] = clip_norm
+            score_breakdown["clip"] = clip_norm
 
         score_weights = {}
         if weight_sum > 0:
             if weight_rerank > 0:
-                score_weights['reranker'] = weight_rerank / weight_sum
+                score_weights["reranker"] = weight_rerank / weight_sum
             if weight_dense > 0:
-                score_weights['dense'] = weight_dense / weight_sum
+                score_weights["dense"] = weight_dense / weight_sum
             if weight_lex > 0:
-                score_weights['lexical'] = weight_lex / weight_sum
+                score_weights["lexical"] = weight_lex / weight_sum
             if weight_clip > 0:
-                score_weights['clip'] = weight_clip / weight_sum
+                score_weights["clip"] = weight_clip / weight_sum
 
         ranked.append(
             RetrievedChunk(
-                document_id=int(candidate.get('document_id')) if candidate.get('document_id') is not None else -1,
-                filename=candidate.get('filename') or '',
-                file_path=candidate.get('file_path') or '',
-                chunk_index=int(candidate.get('chunk_index') or 0),
-                content=candidate.get('content') or '',
+                document_id=(
+                    int(candidate.get("document_id"))
+                    if candidate.get("document_id") is not None
+                    else -1
+                ),
+                filename=candidate.get("filename") or "",
+                file_path=candidate.get("file_path") or "",
+                chunk_index=int(candidate.get("chunk_index") or 0),
+                content=candidate.get("content") or "",
                 score=float(final_score),
-                embedding_score=candidate.get('embedding_score'),
+                embedding_score=candidate.get("embedding_score"),
                 embedding_score_normalized=emb_norm,
                 bm25_score=bm_norm,
-                bm25_raw_score=candidate.get('bm25_raw'),
-                rerank_score=candidate.get('rerank_score'),
+                bm25_raw_score=candidate.get("bm25_raw"),
+                rerank_score=candidate.get("rerank_score"),
                 rerank_score_normalized=rr_norm,
-                vector_id=candidate.get('vector_id'),
-                sources=sorted(candidate.get('sources', [])),
+                vector_id=candidate.get("vector_id"),
+                sources=sorted(candidate.get("sources", [])),
                 score_breakdown=score_breakdown or None,
                 score_weights=score_weights or None,
-                dense_rank=candidate.get('dense_rank'),
-                lexical_rank=candidate.get('lexical_rank'),
-                rerank_rank=candidate.get('rerank_rank'),
-                clip_score=candidate.get('clip_score'),
+                dense_rank=candidate.get("dense_rank"),
+                lexical_rank=candidate.get("lexical_rank"),
+                rerank_rank=candidate.get("rerank_rank"),
+                clip_score=candidate.get("clip_score"),
                 clip_score_normalized=clip_norm,
-                clip_rank=candidate.get('clip_rank')
+                clip_rank=candidate.get("clip_rank"),
             )
         )
 
@@ -520,9 +646,9 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             chunk.rerank_score_normalized or 0.0,
             chunk.embedding_score_normalized or 0.0,
             chunk.bm25_score or 0.0,
-            chunk.clip_score_normalized or 0.0
+            chunk.clip_score_normalized or 0.0,
         ),
-        reverse=True
+        reverse=True,
     )
 
     def _passes_threshold(chunk: RetrievedChunk) -> bool:
@@ -530,7 +656,7 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             chunk.embedding_score_normalized,
             chunk.bm25_score,
             chunk.rerank_score_normalized,
-            chunk.clip_score_normalized
+            chunk.clip_score_normalized,
         ]
         scored_components = [comp for comp in components if comp is not None]
         if not scored_components:
@@ -547,8 +673,7 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
             and chunk.embedding_score_normalized >= MIN_COMPONENT_SCORE
         )
         lexical_ok = (
-            chunk.bm25_score is not None
-            and chunk.bm25_score >= MIN_COMPONENT_SCORE
+            chunk.bm25_score is not None and chunk.bm25_score >= MIN_COMPONENT_SCORE
         )
         clip_ok = (
             chunk.clip_score_normalized is not None
@@ -579,7 +704,10 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
     strong_top = (
         top_rerank >= RERANK_STRONG_THRESHOLD
         or top_clip >= CLIP_STRONG_THRESHOLD
-        or (top_dense >= DENSE_STRONG_THRESHOLD and top_lexical >= LEXICAL_STRONG_THRESHOLD)
+        or (
+            top_dense >= DENSE_STRONG_THRESHOLD
+            and top_lexical >= LEXICAL_STRONG_THRESHOLD
+        )
         or top_chunk.score >= FINAL_STRONG_THRESHOLD
     )
 
@@ -592,15 +720,25 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
         if chunk.score < relative_cutoff:
             continue
 
-        rerank_confident = (chunk.rerank_score_normalized or 0.0) >= (RERANK_STRONG_THRESHOLD * 0.9)
-        clip_confident = (chunk.clip_score_normalized or 0.0) >= (CLIP_STRONG_THRESHOLD * 0.9)
+        rerank_confident = (chunk.rerank_score_normalized or 0.0) >= (
+            RERANK_STRONG_THRESHOLD * 0.9
+        )
+        clip_confident = (chunk.clip_score_normalized or 0.0) >= (
+            CLIP_STRONG_THRESHOLD * 0.9
+        )
         dense_lexical_confident = (
-            (chunk.embedding_score_normalized or 0.0) >= DENSE_STRONG_THRESHOLD
-            and (chunk.bm25_score or 0.0) >= (LEXICAL_STRONG_THRESHOLD * 0.9)
+            chunk.embedding_score_normalized or 0.0
+        ) >= DENSE_STRONG_THRESHOLD and (chunk.bm25_score or 0.0) >= (
+            LEXICAL_STRONG_THRESHOLD * 0.9
         )
         final_confident = chunk.score >= FINAL_STRONG_THRESHOLD
 
-        if rerank_confident or clip_confident or dense_lexical_confident or final_confident:
+        if (
+            rerank_confident
+            or clip_confident
+            or dense_lexical_confident
+            or final_confident
+        ):
             confident_chunks.append(chunk)
 
     if not confident_chunks:
@@ -609,17 +747,27 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
     return confident_chunks[:top_k]
 
 
-def _build_references_from_chunks(chunks: List[RetrievedChunk]) -> List[ReferenceDocument]:
+def _build_references_from_chunks(
+    chunks: List[RetrievedChunk],
+) -> List[ReferenceDocument]:
     reference_map: Dict[str, Dict[str, Any]] = {}
 
     for chunk in chunks:
-        raw_path = (chunk.file_path or '').strip()
-        normalized_path = raw_path.replace('\\', '/') if raw_path else ''
+        raw_path = (chunk.file_path or "").strip()
+        normalized_path = raw_path.replace("\\", "/") if raw_path else ""
         file_path = normalized_path
-        filename = chunk.filename or (Path(normalized_path).name if normalized_path else '') or '未知文件'
+        filename = (
+            chunk.filename
+            or (Path(normalized_path).name if normalized_path else "")
+            or "未知文件"
+        )
         key = file_path or filename
 
-        document_id = chunk.document_id if chunk.document_id is not None and chunk.document_id >= 0 else None
+        document_id = (
+            chunk.document_id
+            if chunk.document_id is not None and chunk.document_id >= 0
+            else None
+        )
 
         absolute_path: Optional[str] = None
         project_relative: Optional[str] = None
@@ -631,36 +779,46 @@ def _build_references_from_chunks(chunks: List[RetrievedChunk]) -> List[Referenc
                     resolved = path_obj.resolve()
                     absolute_path = str(resolved)
                     try:
-                        project_relative = str(resolved.relative_to(ServerConfig.PROJECT_ROOT)).replace('\\', '/')
+                        project_relative = str(
+                            resolved.relative_to(ServerConfig.PROJECT_ROOT)
+                        ).replace("\\", "/")
                     except ValueError:
                         project_relative = normalized_path
                 else:
                     project_relative = normalized_path
-                    absolute_path = str((ServerConfig.PROJECT_ROOT / path_obj).resolve())
+                    absolute_path = str(
+                        (ServerConfig.PROJECT_ROOT / path_obj).resolve()
+                    )
             except Exception:
                 absolute_path = absolute_path or normalized_path
 
         if absolute_path is None and project_relative:
             try:
-                absolute_path = str((ServerConfig.PROJECT_ROOT / Path(project_relative)).resolve())
+                absolute_path = str(
+                    (ServerConfig.PROJECT_ROOT / Path(project_relative)).resolve()
+                )
             except Exception:
                 absolute_path = None
 
         if project_relative is None and absolute_path:
             try:
-                project_relative = str(Path(absolute_path).resolve().relative_to(ServerConfig.PROJECT_ROOT)).replace('\\', '/')
+                project_relative = str(
+                    Path(absolute_path).resolve().relative_to(ServerConfig.PROJECT_ROOT)
+                ).replace("\\", "/")
             except Exception:
                 project_relative = normalized_path or None
 
         chunk_index = chunk.chunk_index if isinstance(chunk.chunk_index, int) else None
-        snippet = (chunk.content or '').strip()
+        snippet = (chunk.content or "").strip()
         if snippet:
-            snippet = textwrap.shorten(snippet, width=REFERENCE_SNIPPET_MAX_CHARS, placeholder='...')
+            snippet = textwrap.shorten(
+                snippet, width=REFERENCE_SNIPPET_MAX_CHARS, placeholder="..."
+            )
 
         entry = reference_map.setdefault(
             key,
             {
-                'document': ReferenceDocument(
+                "document": ReferenceDocument(
                     document_id=document_id,
                     filename=filename,
                     file_path=file_path,
@@ -670,15 +828,15 @@ def _build_references_from_chunks(chunks: List[RetrievedChunk]) -> List[Referenc
                     score=chunk.score,
                     chunk_indices=[chunk_index] if chunk_index is not None else [],
                 ),
-                'snippets': [],
-                'scores': [],
-            }
+                "snippets": [],
+                "scores": [],
+            },
         )
 
-        reference = entry['document']
+        reference = entry["document"]
         if chunk_index is not None and chunk_index not in reference.chunk_indices:
             reference.chunk_indices.append(chunk_index)
-        if chunk.score > (reference.score or float('-inf')):
+        if chunk.score > (reference.score or float("-inf")):
             reference.score = chunk.score
         if reference.document_id is None and document_id is not None:
             reference.document_id = document_id
@@ -687,18 +845,20 @@ def _build_references_from_chunks(chunks: List[RetrievedChunk]) -> List[Referenc
         if not reference.project_relative_path and project_relative:
             reference.project_relative_path = project_relative
         if snippet:
-            entry['snippets'].append(snippet)
-        entry['scores'].append(chunk.score)
+            entry["snippets"].append(snippet)
+        entry["scores"].append(chunk.score)
 
     references: List[ReferenceDocument] = []
     for entry in reference_map.values():
-        reference = entry['document']
-        snippets = entry.get('snippets') or []
+        reference = entry["document"]
+        snippets = entry.get("snippets") or []
         if snippets and not reference.snippet:
             reference.snippet = snippets[0]
         # Deduplicate and sort chunk indices
         if reference.chunk_indices:
-            reference.chunk_indices = sorted({idx for idx in reference.chunk_indices if isinstance(idx, int)})
+            reference.chunk_indices = sorted(
+                {idx for idx in reference.chunk_indices if isinstance(idx, int)}
+            )
         references.append(reference)
 
     references.sort(key=lambda ref: ref.score or 0.0, reverse=True)
@@ -710,11 +870,13 @@ def _build_references_from_chunks(chunks: List[RetrievedChunk]) -> List[Referenc
 
 def _normalize_path(value: Optional[str]) -> str:
     if not value:
-        return ''
-    return str(value).replace('\\', '/').strip()
+        return ""
+    return str(value).replace("\\", "/").strip()
 
 
-def _reference_matches_chunk(reference: ReferenceDocument, chunk: RetrievedChunk) -> bool:
+def _reference_matches_chunk(
+    reference: ReferenceDocument, chunk: RetrievedChunk
+) -> bool:
     if reference.document_id is not None and reference.document_id >= 0:
         if chunk.document_id == reference.document_id:
             return True
@@ -729,59 +891,72 @@ def _reference_matches_chunk(reference: ReferenceDocument, chunk: RetrievedChunk
     return False
 
 
-def _collect_reference_chunks_backend(reference: ReferenceDocument, chunks: List[RetrievedChunk]) -> List[RetrievedChunk]:
+def _collect_reference_chunks_backend(
+    reference: ReferenceDocument, chunks: List[RetrievedChunk]
+) -> List[RetrievedChunk]:
     matched = [chunk for chunk in chunks if _reference_matches_chunk(reference, chunk)]
     if matched:
         return matched
     # fallback: match by filename when no explicit path
-    ref_name = (reference.filename or '').strip().lower()
+    ref_name = (reference.filename or "").strip().lower()
     if not ref_name:
         return []
-    return [chunk for chunk in chunks if (chunk.filename or '').strip().lower() == ref_name]
+    return [
+        chunk for chunk in chunks if (chunk.filename or "").strip().lower() == ref_name
+    ]
 
 
-def _format_reference_material(references: List[ReferenceDocument], chunks: List[RetrievedChunk]) -> str:
+def _format_reference_material(
+    references: List[ReferenceDocument], chunks: List[RetrievedChunk]
+) -> str:
     if not references:
-        return ''
+        return ""
 
     entries: List[str] = []
     for reference in references:
         matched_chunks = _collect_reference_chunks_backend(reference, chunks)
         snippets: List[str] = []
         for chunk in matched_chunks[:2]:
-            snippet = (chunk.content or '').strip()
+            snippet = (chunk.content or "").strip()
             if snippet:
-                snippets.append(textwrap.shorten(snippet, width=REFERENCE_SNIPPET_MAX_CHARS, placeholder='...'))
+                snippets.append(
+                    textwrap.shorten(
+                        snippet, width=REFERENCE_SNIPPET_MAX_CHARS, placeholder="..."
+                    )
+                )
         if not snippets and reference.snippet:
             snippets.append(reference.snippet)
         if not snippets:
-            snippets.append('（未提供片段摘录）')
+            snippets.append("（未提供片段摘录）")
         snippet_lines = [
             f"- 片段{idx + 1}: {textwrap.dedent(text).strip()}"
             for idx, text in enumerate(snippets)
         ]
-        entry = "\n".join([
-            f"[{reference.reference_id}] {reference.display_name or reference.filename or '未命名文件'}",
-            *snippet_lines
-        ])
+        entry = "\n".join(
+            [
+                f"[{reference.reference_id}] {reference.display_name or reference.filename or '未命名文件'}",
+                *snippet_lines,
+            ]
+        )
         entries.append(entry.strip())
 
-    return '\n\n'.join(entries)
+    return "\n\n".join(entries)
 
 
-REFERENCE_LINE_PATTERN = re.compile(r'^\s*参考文档\s*[:：]\s*(?P<value>.+?)\s*$', re.IGNORECASE)
-REFERENCE_NONE_TOKENS = {'无', 'none', 'null', '暂无', '无引用', '无参考', '无资料'}
+REFERENCE_LINE_PATTERN = re.compile(
+    r"^\s*参考文档\s*[:：]\s*(?P<value>.+?)\s*$", re.IGNORECASE
+)
+REFERENCE_NONE_TOKENS = {"无", "none", "null", "暂无", "无引用", "无参考", "无资料"}
 
 
 def _normalize_reference_value(value: str) -> str:
     stripped = value.strip()
-    stripped = stripped.replace('。', '').replace('.', '').strip()
+    stripped = stripped.replace("。", "").replace(".", "").strip()
     return stripped
 
 
 def _apply_reference_selection(
-    content: str,
-    references: List[ReferenceDocument]
+    content: str, references: List[ReferenceDocument]
 ) -> Tuple[str, List[ReferenceDocument], List[str]]:
     lines = content.splitlines()
     selected_ids: List[str] = []
@@ -793,12 +968,12 @@ def _apply_reference_selection(
         if not match:
             continue
         matched_index = idx
-        raw_value = match.group('value') or ''
+        raw_value = match.group("value") or ""
         normalized_value = _normalize_reference_value(raw_value)
         if not normalized_value or normalized_value.lower() in REFERENCE_NONE_TOKENS:
             selected_ids = []
         else:
-            tokens = re.split(r'[，,；;、\s]+', normalized_value)
+            tokens = re.split(r"[，,；;、\s]+", normalized_value)
             interim: List[str] = []
             for token in tokens:
                 token_norm = token.strip().upper()
@@ -846,7 +1021,7 @@ def _build_llm_messages(
     user_message_id: int,
     chunks: List[RetrievedChunk],
     references: List[ReferenceDocument],
-    selection: ModelSelection
+    selection: ModelSelection,
 ) -> List[Dict[str, str]]:
     system_prompt = (
         "你是一名资深的企业知识助手，会综合提供的资料与自身掌握的通用知识回答问题。\n"
@@ -856,18 +1031,18 @@ def _build_llm_messages(
         "请始终使用 Markdown 输出，结构清晰、分层表达。"
     )
 
-    messages: List[Dict[str, str]] = [{'role': 'system', 'content': system_prompt}]
+    messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
     history_segments: List[str] = []
     for message in conversation_messages:
-        if message.get('id') == user_message_id:
+        if message.get("id") == user_message_id:
             continue
-        role = message.get('role')
-        content = (message.get('content') or '').strip()
-        if role not in {'user', 'assistant'} or not content:
+        role = message.get("role")
+        content = (message.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
             continue
-        display_role = '用户' if role == 'user' else '助手'
-        snippet = content[:500] + ('…' if len(content) > 500 else '')
+        display_role = "用户" if role == "user" else "助手"
+        snippet = content[:500] + ("…" if len(content) > 500 else "")
         history_segments.append(f"{display_role}：{snippet}")
 
     context_parts: List[str] = []
@@ -904,19 +1079,21 @@ def _build_llm_messages(
         "若参考资料包含答案，请据此总结；若参考资料缺失或不足，请运用自身专业知识完整作答。\n"
         f"{citation_instruction}"
     )
-    messages.append({'role': 'user', 'content': user_prompt})
+    messages.append({"role": "user", "content": user_prompt})
     return messages
 
 
-def _build_llm_payload(selection: ModelSelection, messages: List[Dict[str, str]], stream: bool) -> Dict[str, Any]:
+def _build_llm_payload(
+    selection: ModelSelection, messages: List[Dict[str, str]], stream: bool
+) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "model": selection.api_model,
         "messages": messages,
-        "temperature": getattr(ServerConfig, 'CHAT_TEMPERATURE', 0.3),
-        "top_p": getattr(ServerConfig, 'CHAT_TOP_P', 0.85),
-        "stream": stream
+        "temperature": getattr(ServerConfig, "CHAT_TEMPERATURE", 0.3),
+        "top_p": getattr(ServerConfig, "CHAT_TOP_P", 0.85),
+        "stream": stream,
     }
-    max_tokens = getattr(ServerConfig, 'CHAT_MAX_TOKENS', None)
+    max_tokens = getattr(ServerConfig, "CHAT_MAX_TOKENS", None)
     if max_tokens:
         payload["max_tokens"] = max_tokens
     return payload
@@ -926,7 +1103,8 @@ def _prepare_chat_context(
     question: str,
     conversation_id: Optional[int],
     top_k: int,
-    selection: ModelSelection
+    selection: ModelSelection,
+    client_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     _ensure_dependencies(require_llm=True)
     assert sqlite_manager is not None
@@ -944,33 +1122,60 @@ def _prepare_chat_context(
         conversation_id = sqlite_manager.create_conversation(title)
 
     user_message_id = sqlite_manager.insert_chat_message(
+        conversation_id, "user", normalized_question, metadata={"top_k": top_k}
+    )
+
+    _schedule_chat_progress(
         conversation_id,
-        'user',
-        normalized_question,
-        metadata={'top_k': top_k}
+        assistant_message_id=None,
+        user_message_id=user_message_id,
+        client_request_id=client_request_id,
+        stage="understanding",
+        message="正在理解问题",
+        step=1,
     )
 
     conversation_messages = sqlite_manager.get_conversation_messages(conversation_id)
+
+    _schedule_chat_progress(
+        conversation_id,
+        assistant_message_id=None,
+        user_message_id=user_message_id,
+        client_request_id=client_request_id,
+        stage="retrieving",
+        message="正在检索结果",
+        step=2,
+    )
+
     chunks = _retrieve_chunks(normalized_question, top_k)
     references = _build_references_from_chunks(chunks)
 
-    selection_data = selection.model_dump(exclude={'api_key'}, exclude_none=True)
+    selection_data = selection.model_dump(exclude={"api_key"}, exclude_none=True)
     assistant_metadata = {
-        'query': normalized_question,
-        'top_k': top_k,
-        'model': selection_data,
-        'chunks': [chunk.dict() for chunk in chunks],
-        'available_references': [reference.dict() for reference in references],
-        'references': [],
-        'selected_reference_ids': [],
-        'reference_mode': 'retrieval' if references else 'llm_only',
+        "query": normalized_question,
+        "top_k": top_k,
+        "model": selection_data,
+        "chunks": [chunk.dict() for chunk in chunks],
+        "available_references": [reference.dict() for reference in references],
+        "references": [],
+        "selected_reference_ids": [],
+        "reference_mode": "retrieval" if references else "llm_only",
     }
+    if client_request_id:
+        assistant_metadata["client_request_id"] = client_request_id
 
     assistant_message_id = sqlite_manager.insert_chat_message(
+        conversation_id, "assistant", "", metadata=assistant_metadata
+    )
+
+    _schedule_chat_progress(
         conversation_id,
-        'assistant',
-        '',
-        metadata=assistant_metadata
+        assistant_message_id=assistant_message_id,
+        user_message_id=user_message_id,
+        client_request_id=client_request_id,
+        stage="merging_retrieval",
+        message="正在合并结果",
+        step=3,
     )
 
     llm_messages = _build_llm_messages(
@@ -979,235 +1184,407 @@ def _prepare_chat_context(
         user_message_id,
         chunks,
         references,
-        selection
+        selection,
     )
 
     return {
-        'conversation_id': conversation_id,
-        'user_message_id': user_message_id,
-        'assistant_message_id': assistant_message_id,
-        'assistant_metadata': assistant_metadata,
-        'chunks': chunks,
-        'references': references,
-        'llm_messages': llm_messages,
-        'selection': selection
+        "conversation_id": conversation_id,
+        "user_message_id": user_message_id,
+        "assistant_message_id": assistant_message_id,
+        "assistant_metadata": assistant_metadata,
+        "chunks": chunks,
+        "references": references,
+        "llm_messages": llm_messages,
+        "selection": selection,
+        "client_request_id": client_request_id,
     }
 
 
 def _sse_event(event: str, data: Dict[str, Any]) -> str:
     # 采用 ensure_ascii=False 生成 UTF-8 JSON，并在响应层面声明 UTF-8
-    payload = json.dumps({'event': event, 'data': data}, ensure_ascii=False)
+    payload = json.dumps({"event": event, "data": data}, ensure_ascii=False)
     return f"data: {payload}\n\n"
 
 
 def _extract_stream_delta(chunk: Dict[str, Any]) -> str:
-    choices = chunk.get('choices') or []
+    choices = chunk.get("choices") or []
     if not choices:
-        return ''
+        return ""
     choice = choices[0]
-    delta = choice.get('delta')
+    delta = choice.get("delta")
     if delta and isinstance(delta, dict):
-        return delta.get('content') or ''
-    message = choice.get('message')
+        return delta.get("content") or ""
+    message = choice.get("message")
     if message and isinstance(message, dict):
-        return message.get('content') or ''
-    return ''
+        return message.get("content") or ""
+    return ""
 
 
 def _extract_completion_content(result: Dict[str, Any]) -> str:
-    choices = result.get('choices') or []
+    choices = result.get("choices") or []
     if not choices:
-        return ''
-    message = choices[0].get('message') or {}
-    content = message.get('content') or ''
+        return ""
+    message = choices[0].get("message") or {}
+    content = message.get("content") or ""
     return content
 
 
 def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, None]:
     try:
-        context = _prepare_chat_context(payload.question, payload.conversation_id, payload.top_k, payload.model)
+        context = _prepare_chat_context(
+            payload.question,
+            payload.conversation_id,
+            payload.top_k,
+            payload.model,
+            payload.client_request_id,
+        )
     except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, str) else '请求无效'
-        yield _sse_event('error', {'message': detail})
+        detail = exc.detail if isinstance(exc.detail, str) else "请求无效"
+        yield _sse_event("error", {"message": detail})
         return
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception('Failed to prepare chat context: %s', exc)
-        yield _sse_event('error', {'message': '服务器内部错误，请稍后重试。'})
+        logger.exception("Failed to prepare chat context: %s", exc)
+        yield _sse_event("error", {"message": "服务器内部错误，请稍后重试。"})
         return
 
     assert sqlite_manager is not None
     selection = payload.model
-    assistant_metadata = context['assistant_metadata']
+    assistant_metadata = context["assistant_metadata"]
+    conversation_id = context["conversation_id"]
+    assistant_message_id = context["assistant_message_id"]
+    user_message_id = context["user_message_id"]
+    client_request_id = context.get("client_request_id")
 
-    yield _sse_event('meta', {
-        'conversation_id': context['conversation_id'],
-        'assistant_message_id': context['assistant_message_id'],
-        'metadata': assistant_metadata
-    })
+    yield _sse_event(
+        "meta",
+        {
+            "conversation_id": conversation_id,
+            "assistant_message_id": assistant_message_id,
+            "metadata": assistant_metadata,
+            "client_request_id": client_request_id,
+            "user_message_id": user_message_id,
+        },
+    )
 
-    llm_payload = _build_llm_payload(selection, context['llm_messages'], stream=True)
+    llm_payload = _build_llm_payload(selection, context["llm_messages"], stream=True)
     buffer_parts: List[str] = []
+
+    _schedule_chat_progress(
+        conversation_id,
+        assistant_message_id=assistant_message_id,
+        user_message_id=user_message_id,
+        client_request_id=client_request_id,
+        stage="llm_invocation",
+        message="正在调用模型",
+        step=4,
+    )
 
     try:
         assert llm_client is not None
+        _schedule_chat_progress(
+            conversation_id,
+            assistant_message_id=assistant_message_id,
+            user_message_id=user_message_id,
+            client_request_id=client_request_id,
+            stage="thinking",
+            message="正在思考中",
+            step=5,
+        )
         for raw_chunk in llm_client.stream_chat(selection.api_key, llm_payload):
             delta = _extract_stream_delta(raw_chunk)
             if not delta:
                 continue
             buffer_parts.append(delta)
-            yield _sse_event('chunk', {'delta': delta})
+            yield _sse_event("chunk", {"delta": delta})
 
-        final_content = ''.join(buffer_parts).strip()
+        final_content = "".join(buffer_parts).strip()
         if not final_content:
-            final_content = '很抱歉，目前无法根据提供的资料给出答案。'
+            final_content = "很抱歉，目前无法根据提供的资料给出答案。"
 
-        available_refs: List[ReferenceDocument] = context['references']
-        final_content, selected_refs, selected_ids = _apply_reference_selection(final_content, available_refs)
-        assistant_metadata['selected_reference_ids'] = selected_ids
-        assistant_metadata['available_references'] = [reference.dict() for reference in available_refs]
-        assistant_metadata['references'] = [reference.dict() for reference in selected_refs]
-        assistant_metadata['reference_mode'] = 'retrieval' if selected_refs else 'llm_only'
+        available_refs: List[ReferenceDocument] = context["references"]
+        final_content, selected_refs, selected_ids = _apply_reference_selection(
+            final_content, available_refs
+        )
+        assistant_metadata["selected_reference_ids"] = selected_ids
+        assistant_metadata["available_references"] = [
+            reference.dict() for reference in available_refs
+        ]
+        assistant_metadata["references"] = [
+            reference.dict() for reference in selected_refs
+        ]
+        assistant_metadata["reference_mode"] = (
+            "retrieval" if selected_refs else "llm_only"
+        )
+
+        _schedule_chat_progress(
+            conversation_id,
+            assistant_message_id=assistant_message_id,
+            user_message_id=user_message_id,
+            client_request_id=client_request_id,
+            stage="merging_answer",
+            message="正在合并结果",
+            step=6,
+        )
 
         sqlite_manager.update_chat_message(
-            context['assistant_message_id'],
+            context["assistant_message_id"],
             content=final_content,
             metadata=assistant_metadata,
-            conversation_id=context['conversation_id']
+            conversation_id=context["conversation_id"],
         )
 
-        yield _sse_event('done', {
-            'conversation_id': context['conversation_id'],
-            'assistant_message_id': context['assistant_message_id'],
-            'content': final_content,
-            'metadata': assistant_metadata
-        })
+        yield _sse_event(
+            "done",
+            {
+                "conversation_id": context["conversation_id"],
+                "assistant_message_id": context["assistant_message_id"],
+                "content": final_content,
+                "metadata": assistant_metadata,
+            },
+        )
+        _schedule_chat_progress(
+            conversation_id,
+            assistant_message_id=assistant_message_id,
+            user_message_id=user_message_id,
+            client_request_id=client_request_id,
+            stage="merging_answer",
+            message="正在合并结果",
+            step=6,
+            status="completed",
+        )
     except LLMClientError as exc:
-        logger.warning('LLM streaming error: %s', exc)
+        logger.warning("LLM streaming error: %s", exc)
         sqlite_manager.update_chat_message(
-            context['assistant_message_id'],
-            content='',
-            metadata={**assistant_metadata, 'error': str(exc)},
-            conversation_id=context['conversation_id']
+            context["assistant_message_id"],
+            content="",
+            metadata={**assistant_metadata, "error": str(exc)},
+            conversation_id=context["conversation_id"],
         )
-        yield _sse_event('error', {'message': str(exc)})
+        yield _sse_event("error", {"message": str(exc)})
+        _schedule_chat_progress(
+            conversation_id,
+            assistant_message_id=assistant_message_id,
+            user_message_id=user_message_id,
+            client_request_id=client_request_id,
+            stage="error",
+            message=str(exc),
+            step=6,
+            status="error",
+        )
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception('LLM streaming failed: %s', exc)
+        logger.exception("LLM streaming failed: %s", exc)
         sqlite_manager.update_chat_message(
-            context['assistant_message_id'],
-            content='',
-            metadata={**assistant_metadata, 'error': 'internal_error'},
-            conversation_id=context['conversation_id']
+            context["assistant_message_id"],
+            content="",
+            metadata={**assistant_metadata, "error": "internal_error"},
+            conversation_id=context["conversation_id"],
         )
-        yield _sse_event('error', {'message': '服务器内部错误，请稍后重试。'})
+        yield _sse_event("error", {"message": "服务器内部错误，请稍后重试。"})
+        _schedule_chat_progress(
+            conversation_id,
+            assistant_message_id=assistant_message_id,
+            user_message_id=user_message_id,
+            client_request_id=client_request_id,
+            stage="error",
+            message="服务器内部错误，请稍后重试。",
+            step=6,
+            status="error",
+        )
 
 
-@router.post('/stream')
+@router.post("/stream")
 async def chat_stream_endpoint(payload: ChatStreamRequest) -> StreamingResponse:
     _ensure_dependencies(require_llm=True)
     generator = _chat_stream_generator(payload)
     # 指定 UTF-8 编码，避免 SSE 在不同客户端出现乱码
-    return StreamingResponse(generator, media_type='text/event-stream; charset=utf-8')
+    return StreamingResponse(generator, media_type="text/event-stream; charset=utf-8")
 
 
-@router.post('', response_model=ChatResponse)
+@router.post("", response_model=ChatResponse)
 async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     _ensure_dependencies(require_llm=True)
     if payload.model is None:
         raise HTTPException(status_code=400, detail="缺少模型信息")
 
     try:
-        context = _prepare_chat_context(payload.question, payload.conversation_id, payload.top_k, payload.model)
+        context = _prepare_chat_context(
+            payload.question,
+            payload.conversation_id,
+            payload.top_k,
+            payload.model,
+            payload.client_request_id,
+        )
     except HTTPException:
         raise
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception('Failed to prepare chat context: %s', exc)
+        logger.exception("Failed to prepare chat context: %s", exc)
         raise HTTPException(status_code=500, detail="服务器内部错误") from exc
 
     selection = payload.model
-    llm_payload = _build_llm_payload(selection, context['llm_messages'], stream=False)
+    llm_payload = _build_llm_payload(selection, context["llm_messages"], stream=False)
+    conversation_id = context["conversation_id"]
+    assistant_message_id = context["assistant_message_id"]
+    user_message_id = context["user_message_id"]
+    client_request_id = context.get("client_request_id")
+
+    _schedule_chat_progress(
+        conversation_id,
+        assistant_message_id=assistant_message_id,
+        user_message_id=user_message_id,
+        client_request_id=client_request_id,
+        stage="llm_invocation",
+        message="正在调用模型",
+        step=4,
+    )
 
     try:
         assert llm_client is not None
+        _schedule_chat_progress(
+            conversation_id,
+            assistant_message_id=assistant_message_id,
+            user_message_id=user_message_id,
+            client_request_id=client_request_id,
+            stage="thinking",
+            message="正在思考中",
+            step=5,
+        )
         result = llm_client.chat_completion(selection.api_key, llm_payload)
     except LLMClientError as exc:
         sqlite_manager.update_chat_message(
-            context['assistant_message_id'],
-            content='',
-            metadata={**context['assistant_metadata'], 'error': str(exc)},
-            conversation_id=context['conversation_id']
+            context["assistant_message_id"],
+            content="",
+            metadata={**context["assistant_metadata"], "error": str(exc)},
+            conversation_id=context["conversation_id"],
+        )
+        _schedule_chat_progress(
+            conversation_id,
+            assistant_message_id=assistant_message_id,
+            user_message_id=user_message_id,
+            client_request_id=client_request_id,
+            stage="error",
+            message=str(exc),
+            step=6,
+            status="error",
         )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception('LLM request failed: %s', exc)
+        logger.exception("LLM request failed: %s", exc)
         sqlite_manager.update_chat_message(
-            context['assistant_message_id'],
-            content='',
-            metadata={**context['assistant_metadata'], 'error': 'internal_error'},
-            conversation_id=context['conversation_id']
+            context["assistant_message_id"],
+            content="",
+            metadata={**context["assistant_metadata"], "error": "internal_error"},
+            conversation_id=context["conversation_id"],
+        )
+        _schedule_chat_progress(
+            conversation_id,
+            assistant_message_id=assistant_message_id,
+            user_message_id=user_message_id,
+            client_request_id=client_request_id,
+            stage="error",
+            message="调用模型接口失败",
+            step=6,
+            status="error",
         )
         raise HTTPException(status_code=502, detail="调用模型接口失败") from exc
 
     final_content = _extract_completion_content(result)
     if not final_content.strip():
-        final_content = '很抱歉，目前无法根据提供的资料给出答案。'
+        final_content = "很抱歉，目前无法根据提供的资料给出答案。"
 
-    usage_info = result.get('usage')
+    usage_info = result.get("usage")
     if usage_info:
-        context['assistant_metadata']['usage'] = usage_info
+        context["assistant_metadata"]["usage"] = usage_info
 
-    available_refs: List[ReferenceDocument] = context['references']
-    final_content, selected_refs, selected_ids = _apply_reference_selection(final_content, available_refs)
-    context['assistant_metadata']['selected_reference_ids'] = selected_ids
-    context['assistant_metadata']['available_references'] = [reference.dict() for reference in available_refs]
-    context['assistant_metadata']['references'] = [reference.dict() for reference in selected_refs]
-    context['assistant_metadata']['reference_mode'] = 'retrieval' if selected_refs else 'llm_only'
+    available_refs: List[ReferenceDocument] = context["references"]
+    final_content, selected_refs, selected_ids = _apply_reference_selection(
+        final_content, available_refs
+    )
+    context["assistant_metadata"]["selected_reference_ids"] = selected_ids
+    context["assistant_metadata"]["available_references"] = [
+        reference.dict() for reference in available_refs
+    ]
+    context["assistant_metadata"]["references"] = [
+        reference.dict() for reference in selected_refs
+    ]
+    context["assistant_metadata"]["reference_mode"] = (
+        "retrieval" if selected_refs else "llm_only"
+    )
+
+    _schedule_chat_progress(
+        conversation_id,
+        assistant_message_id=assistant_message_id,
+        user_message_id=user_message_id,
+        client_request_id=client_request_id,
+        stage="merging_answer",
+        message="正在合并结果",
+        step=6,
+    )
 
     sqlite_manager.update_chat_message(
-        context['assistant_message_id'],
+        context["assistant_message_id"],
         content=final_content,
-        metadata=context['assistant_metadata'],
-        conversation_id=context['conversation_id']
+        metadata=context["assistant_metadata"],
+        conversation_id=context["conversation_id"],
     )
 
-    messages = sqlite_manager.get_conversation_messages(context['conversation_id'])
+    _schedule_chat_progress(
+        conversation_id,
+        assistant_message_id=assistant_message_id,
+        user_message_id=user_message_id,
+        client_request_id=client_request_id,
+        stage="merging_answer",
+        message="正在合并结果",
+        step=6,
+        status="completed",
+    )
+
+    messages = sqlite_manager.get_conversation_messages(context["conversation_id"])
     assistant_message = next(
-        (message for message in messages if message['id'] == context['assistant_message_id']),
-        None
+        (
+            message
+            for message in messages
+            if message["id"] == context["assistant_message_id"]
+        ),
+        None,
     )
     if assistant_message is None:
-        raise HTTPException(status_code=500, detail="Failed to create assistant message")
+        raise HTTPException(
+            status_code=500, detail="Failed to create assistant message"
+        )
 
-    selected_references = [reference for reference in context['references'] if reference.selected]
+    selected_references = [
+        reference for reference in context["references"] if reference.selected
+    ]
 
     return ChatResponse(
-        conversation_id=context['conversation_id'],
+        conversation_id=context["conversation_id"],
         messages=[ChatMessageModel(**message) for message in messages],
         assistant_message=ChatMessageModel(**assistant_message),
-        chunks=context['chunks'],
+        chunks=context["chunks"],
         references=selected_references,
     )
 
 
-@router.get('/conversations', response_model=List[ConversationSummary])
+@router.get("/conversations", response_model=List[ConversationSummary])
 async def list_conversations_endpoint() -> List[ConversationSummary]:
     _ensure_dependencies()
     assert sqlite_manager is not None
     conversations = sqlite_manager.list_conversations()
     return [
         ConversationSummary(
-            id=int(item['id']),
-            title=item['title'],
-            created_time=item['created_time'],
-            updated_time=item['updated_time'],
-            last_message=item.get('last_message'),
-            last_role=item.get('last_role'),
-            message_count=int(item.get('message_count', 0)),
+            id=int(item["id"]),
+            title=item["title"],
+            created_time=item["created_time"],
+            updated_time=item["updated_time"],
+            last_message=item.get("last_message"),
+            last_role=item.get("last_role"),
+            message_count=int(item.get("message_count", 0)),
         )
         for item in conversations
     ]
 
 
-@router.get('/conversations/{conversation_id}', response_model=ConversationDetail)
+@router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
 async def get_conversation_endpoint(conversation_id: int) -> ConversationDetail:
     _ensure_dependencies()
     assert sqlite_manager is not None
@@ -1218,22 +1595,22 @@ async def get_conversation_endpoint(conversation_id: int) -> ConversationDetail:
 
     messages = sqlite_manager.get_conversation_messages(conversation_id)
     summary = ConversationSummary(
-        id=int(conversation['id']),
-        title=conversation['title'],
-        created_time=conversation['created_time'],
-        updated_time=conversation['updated_time'],
-        last_message=messages[-1]['content'] if messages else None,
-        last_role=messages[-1]['role'] if messages else None,
+        id=int(conversation["id"]),
+        title=conversation["title"],
+        created_time=conversation["created_time"],
+        updated_time=conversation["updated_time"],
+        last_message=messages[-1]["content"] if messages else None,
+        last_role=messages[-1]["role"] if messages else None,
         message_count=len(messages),
     )
 
     return ConversationDetail(
         conversation=summary,
-        messages=[ChatMessageModel(**message) for message in messages]
+        messages=[ChatMessageModel(**message) for message in messages],
     )
 
 
-@router.delete('/conversations/{conversation_id}', status_code=204)
+@router.delete("/conversations/{conversation_id}", status_code=204)
 async def delete_conversation_endpoint(conversation_id: int) -> Response:
     _ensure_dependencies()
     assert sqlite_manager is not None

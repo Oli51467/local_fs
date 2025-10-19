@@ -116,6 +116,7 @@ class ChatModule {
     this.modelRegistryHandler = (event) => this.handleModelRegistryChanged(event);
     this.handleDocumentClick = (event) => this.handleGlobalClick(event);
     this.handleDocumentKeydown = (event) => this.handleGlobalKeydown(event);
+    this.handleBackendStatusEvent = (event) => this.handleBackendStatus(event);
     this.streamingState = null;
     this.markdownViewer = null;
     this.markdownStyleRefs = new Set();
@@ -201,6 +202,7 @@ class ChatModule {
       });
     }
 
+    document.addEventListener('backendStatus', this.handleBackendStatusEvent);
     document.addEventListener('click', this.handleDocumentClick);
     document.addEventListener('keydown', this.handleDocumentKeydown);
     document.addEventListener('modelRegistryChanged', this.modelRegistryHandler);
@@ -303,6 +305,83 @@ class ChatModule {
     this.refreshAvailableModels({ models }).catch((error) => {
       console.warn('设置更新后刷新聊天模型列表失败:', error);
     });
+  }
+
+  handleBackendStatus(event) {
+    if (!event || !event.detail || typeof event.detail !== 'object') {
+      return;
+    }
+    const payload = event.detail;
+    if (payload.event !== 'chat_progress') {
+      return;
+    }
+    this.applyChatProgressUpdate(payload);
+  }
+
+  applyChatProgressUpdate(payload) {
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+    if (!this.streamingState) {
+      return;
+    }
+
+    const requestId = typeof payload.client_request_id === 'string' ? payload.client_request_id : null;
+    const assistantId = payload.assistant_message_id !== undefined && payload.assistant_message_id !== null
+      ? String(payload.assistant_message_id)
+      : null;
+    const conversationId = typeof payload.conversation_id === 'number' ? payload.conversation_id : null;
+
+    const currentRequestId = this.streamingState.clientRequestId || null;
+    const currentAssistantId = this.streamingState.messageId
+      ? String(this.streamingState.messageId)
+      : (this.streamingState.message && this.streamingState.message.id !== undefined && this.streamingState.message.id !== null
+        ? String(this.streamingState.message.id)
+        : null);
+
+    const matchesRequest = Boolean(requestId && currentRequestId && requestId === currentRequestId);
+    const matchesAssistant = Boolean(assistantId && currentAssistantId && assistantId === currentAssistantId);
+    const matchesConversation = Boolean(
+      conversationId !== null
+        && (this.streamingState.conversationId === conversationId
+          || this.streamingState.conversationId === undefined
+          || this.streamingState.conversationId === null)
+    );
+
+    if (!matchesRequest && !matchesAssistant && !matchesConversation) {
+      return;
+    }
+
+    if (conversationId !== null) {
+      this.streamingState.conversationId = conversationId;
+      this.streamingState.conversationKey = `id:${conversationId}`;
+    }
+
+    if (assistantId && !currentAssistantId) {
+      this.streamingState.messageId = payload.assistant_message_id;
+      if (this.streamingState.message) {
+        this.streamingState.message.id = payload.assistant_message_id;
+      }
+    }
+
+    if (requestId && !currentRequestId) {
+      this.streamingState.clientRequestId = requestId;
+    }
+
+    const stageMessage = typeof payload.message === 'string' && payload.message ? payload.message : null;
+    if (stageMessage) {
+      this.streamingState.stageMessage = stageMessage;
+    }
+
+    if (typeof payload.step === 'number') {
+      this.streamingState.stageStep = payload.step;
+    }
+
+    if (typeof payload.status === 'string' && payload.status) {
+      this.streamingState.stageStatus = payload.status;
+    }
+
+    this.updateStreamingBubble();
   }
 
   updateModelSelect(models) {
@@ -1069,15 +1148,19 @@ class ChatModule {
 
       const contentEl = document.createElement('div');
       contentEl.className = 'chat-bubble-content';
+      bubble.appendChild(contentEl);
+
+      header.appendChild(bubble);
 
       if (isWaitingMessage) {
-        this.renderWaitingIndicator(contentEl);
+        const waitingStage = (this.streamingState && String(this.streamingState.messageId) === String(message.id))
+          ? (this.streamingState.stageMessage || '正在思考中')
+          : '正在思考中';
+        this.renderWaitingIndicator(contentEl, waitingStage);
       } else {
         const content = rawContent;
         this.setBubbleContent(contentEl, content, message.role);
       }
-
-      bubble.appendChild(contentEl);
 
       if (isWaitingMessage) {
         this.removeCopyButton(bubble);
@@ -1085,7 +1168,6 @@ class ChatModule {
         this.attachCopyButton(bubble, contentEl);
       }
 
-      header.appendChild(bubble);
       wrapper.appendChild(header);
       this.chatMessagesEl.appendChild(wrapper);
 
@@ -1106,24 +1188,64 @@ class ChatModule {
     }
   }
 
-  renderWaitingIndicator(target) {
+  renderWaitingIndicator(target, message = '正在思考中') {
     if (!target) {
       return;
     }
     target.innerHTML = '';
-    const indicator = document.createElement('div');
-    indicator.className = 'chat-waiting-indicator';
+    const bubble = target.closest('.chat-bubble');
+    const header = bubble ? bubble.parentElement : target.closest('.chat-message-header');
+    if (!header) {
+      return;
+    }
+    const wrapper = header.closest('.chat-message');
+    let indicator = header.querySelector('.chat-waiting-indicator-inline');
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.className = 'chat-waiting-indicator chat-waiting-indicator-inline';
+      const spinner = document.createElement('div');
+      spinner.className = 'chat-waiting-spinner';
+      const text = document.createElement('span');
+      text.className = 'chat-waiting-text';
+      indicator.appendChild(spinner);
+      indicator.appendChild(text);
+      if (bubble) {
+        header.insertBefore(indicator, bubble);
+      } else {
+        header.appendChild(indicator);
+      }
+    }
+    const textNode = indicator.querySelector('.chat-waiting-text');
+    if (textNode) {
+      textNode.textContent = message;
+    }
+    if (bubble) {
+      bubble.style.display = 'none';
+      bubble.classList.add('is-waiting-hidden');
+    }
+    indicator.hidden = false;
+    if (wrapper) {
+      wrapper.classList.add('is-waiting');
+    }
+  }
 
-    const spinner = document.createElement('div');
-    spinner.className = 'chat-waiting-spinner';
-
-    const text = document.createElement('span');
-    text.className = 'chat-waiting-text';
-    text.textContent = '正在思考中';
-
-    indicator.appendChild(spinner);
-    indicator.appendChild(text);
-    target.appendChild(indicator);
+  removeWaitingIndicator(wrapper) {
+    if (!wrapper) {
+      return;
+    }
+    const header = wrapper.querySelector('.chat-message-header');
+    if (!header) {
+      return;
+    }
+    const indicator = header.querySelector('.chat-waiting-indicator-inline');
+    if (indicator && indicator.parentElement) {
+      indicator.parentElement.removeChild(indicator);
+    }
+    const bubble = header.querySelector('.chat-bubble');
+    if (bubble) {
+      bubble.style.display = '';
+      bubble.classList.remove('is-waiting-hidden');
+    }
   }
 
   applyWaitingState(wrapper, avatar, bubble, isWaiting, role = 'assistant') {
@@ -1132,6 +1254,9 @@ class ChatModule {
     }
     if (bubble) {
       bubble.classList.toggle('is-waiting', Boolean(isWaiting));
+    }
+    if (!isWaiting && wrapper) {
+      this.removeWaitingIndicator(wrapper);
     }
     if (!avatar) {
       return;
@@ -1193,11 +1318,13 @@ class ChatModule {
     const trimmed = content.trim();
     const role = state.message?.role || 'assistant';
     if (!trimmed) {
-      this.renderWaitingIndicator(state.content);
+      const waitingStage = state.stageMessage || '正在思考中';
+      this.renderWaitingIndicator(state.content, waitingStage);
       this.removeCopyButton(state.bubble);
       this.applyWaitingState(state.wrapper, state.avatar, state.bubble, true, role);
       return;
     }
+    this.removeWaitingIndicator(state.wrapper);
     this.setBubbleContent(state.content, content, role);
     this.attachCopyButton(state.bubble, state.content);
     this.applyWaitingState(state.wrapper, state.avatar, state.bubble, false, role);
@@ -1728,13 +1855,24 @@ class ChatModule {
     const chunkCount = chunkList.length || (Array.isArray(reference.chunk_indices) ? reference.chunk_indices.length : 0);
 
     const item = document.createElement('div');
-    item.className = 'chat-reference-item is-collapsed';
+    item.className = 'chat-reference-item';
     item.setAttribute('data-file-path', reference.file_path || '');
 
     const header = document.createElement('div');
     header.className = 'chat-reference-header';
 
-    // 移除箭头图标，不再插入 toggle 按钮；改为点击整个头部区域进行展开/收起
+    const headerMain = document.createElement('div');
+    headerMain.className = 'chat-reference-header-main';
+
+    const toggleButton = document.createElement('button');
+    toggleButton.type = 'button';
+    toggleButton.className = 'chat-reference-toggle';
+    toggleButton.setAttribute('aria-label', '折叠参考片段');
+    toggleButton.setAttribute('aria-expanded', 'true');
+
+    const toggleIcon = document.createElement('span');
+    toggleIcon.className = 'chat-reference-toggle-icon';
+    toggleButton.appendChild(toggleIcon);
 
     const textWrapper = document.createElement('div');
     textWrapper.className = 'chat-reference-texts';
@@ -1751,7 +1889,9 @@ class ChatModule {
     });
     textWrapper.appendChild(docButton);
 
-    header.appendChild(textWrapper);
+    headerMain.appendChild(toggleButton);
+    headerMain.appendChild(textWrapper);
+    header.appendChild(headerMain);
 
     const meta = document.createElement('span');
     meta.className = 'chat-reference-meta';
@@ -1769,30 +1909,45 @@ class ChatModule {
 
     const chunkContainer = document.createElement('div');
     chunkContainer.className = 'chat-reference-chunks';
-    chunkContainer.hidden = true;
-    chunkContainer.style.display = 'none';
+    chunkContainer.hidden = false;
+    chunkContainer.style.display = 'flex';
 
     const setExpanded = (expanded) => {
       if (expanded) {
-        item.classList.add('is-expanded');
         item.classList.remove('is-collapsed');
+        item.classList.add('is-expanded');
         chunkContainer.hidden = false;
         chunkContainer.style.display = 'flex';
+        toggleButton.setAttribute('aria-expanded', 'true');
+        toggleButton.setAttribute('aria-label', '折叠参考片段');
       } else {
-        item.classList.add('is-collapsed');
         item.classList.remove('is-expanded');
+        item.classList.add('is-collapsed');
         chunkContainer.hidden = true;
         chunkContainer.style.display = 'none';
+        toggleButton.setAttribute('aria-expanded', 'false');
+        toggleButton.setAttribute('aria-label', '展开参考片段');
       }
     };
+
+    const handleToggle = () => {
+      const expanded = item.classList.contains('is-expanded');
+      setExpanded(!expanded);
+    };
+
+    toggleButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      handleToggle();
+    });
 
     // 支持点击头部进行展开/收起
     header.addEventListener('click', (event) => {
       // 点击文件名或右侧元信息不触发展开/收起
       if (event.target.closest('.chat-reference-name')) return;
       if (event.target.closest('.chat-reference-meta')) return;
-      const expanded = !item.classList.contains('is-expanded');
-      setExpanded(expanded);
+      if (event.target.closest('.chat-reference-toggle')) return;
+      handleToggle();
     });
 
     if (chunkList.length) {
@@ -1844,7 +1999,7 @@ class ChatModule {
 
     item.appendChild(header);
     item.appendChild(chunkContainer);
-    setExpanded(false);
+    setExpanded(true);
 
     return item;
   }
@@ -2379,6 +2534,9 @@ class ChatModule {
           this.streamingState.message.metadata = data.metadata;
           this.streamingState.metadata = data.metadata;
         }
+        if (typeof data.client_request_id === 'string') {
+          this.streamingState.clientRequestId = data.client_request_id;
+        }
       }
       return null;
     }
@@ -2664,20 +2822,6 @@ class ChatModule {
 
     this.closeModelDropdown();
 
-    const payload = {
-      question,
-      conversation_id: this.currentConversationId,
-      top_k: 5,
-      stream: true,
-      model: {
-        source_id: this.selectedModel.sourceId,
-        model_id: this.selectedModel.modelId,
-        api_model: this.selectedModel.apiModel,
-        provider_name: this.selectedModel.providerName || '',
-        api_key: apiKey
-      }
-    };
-
     if (this.chatInputEl) {
       this.chatInputEl.disabled = true;
     }
@@ -2703,12 +2847,16 @@ class ChatModule {
     this.streamingState = {
       message: streamingMessage,
       messageId: streamingMessage.id,
+      clientRequestId: streamingMessage.id,
       wrapper: null,
       bubble: null,
       content: null,
       avatar: null,
       buffer: '',
       metadata: null,
+      stageMessage: '正在理解问题',
+      stageStatus: 'running',
+      stageStep: 1,
       conversationId: this.currentConversationId,
       conversationKey: (this.currentConversationId === null || this.currentConversationId === undefined)
         ? 'pending'
@@ -2723,6 +2871,21 @@ class ChatModule {
     this.streamingState.content = elements.content;
     this.streamingState.avatar = elements.avatar;
     this.updateStreamingBubble();
+
+    const payload = {
+      question,
+      conversation_id: this.currentConversationId,
+      top_k: 5,
+      stream: true,
+      client_request_id: streamingMessage.id,
+      model: {
+        source_id: this.selectedModel.sourceId,
+        model_id: this.selectedModel.modelId,
+        api_model: this.selectedModel.apiModel,
+        provider_name: this.selectedModel.providerName || '',
+        api_key: apiKey
+      }
+    };
 
     this.chatInputEl.value = '';
     this.autoResizeTextarea();

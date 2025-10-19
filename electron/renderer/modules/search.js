@@ -420,6 +420,10 @@
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
           searchInput.value = term;
+          const viewStateModule = window.RendererModules?.viewState;
+          if (viewStateModule && typeof viewStateModule.autoResizeSearchInput === 'function') {
+            viewStateModule.autoResizeSearchInput(searchInput);
+          }
         }
         searchState.query = term;
         performSearch(term);
