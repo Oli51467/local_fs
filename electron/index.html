@@ -194,6 +194,9 @@
         <button id="database-btn">
           <div id="database-icon"></div>
         </button>
+        <button id="github-btn">
+          <div id="github-icon"></div>
+        </button>
       </div>
     </div>
 
@@ -566,6 +569,14 @@
       </section>
       </section>
     </div>
+    <!-- Github 页面 -->
+    <div id="github-page" style="display: none;">
+      <div class="github-section">
+        <div class="github-content">
+          <webview id="github-webview" src="https://github.com/Oli51467/local_fs" style="width:100%; height:100%; border:0;"></webview>
+        </div>
+      </div>
+    </div>
     <!-- 数据库页面 -->
     <div id="database-page">
       <div class="database-section">
@@ -631,12 +642,15 @@
       </div>
     </div>
   </div>
+
+
   <!-- 模块化样式文件 -->
   <link rel="stylesheet" href="./src/styles/splash.css">
   <link rel="stylesheet" href="./src/styles/settings.css">
   <link rel="stylesheet" href="./src/styles/explorer.css">
   <link rel="stylesheet" href="./src/styles/chat.css">
   <link rel="stylesheet" href="./src/styles/database.css">
+  <link rel="stylesheet" href="./src/styles/github.css">
   <link rel="stylesheet" href="./src/styles/model.css">
   <link rel="stylesheet" href="./src/styles/codeViewer.css">
 

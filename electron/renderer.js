@@ -125,7 +125,8 @@ function renderIcons() {
     { id: 'chat-icon', icon: icons.chat },
     { id: 'model-icon', icon: icons.model },
     { id: 'settings-icon', icon: icons.settings },
-    { id: 'database-icon', icon: icons.database }
+    { id: 'database-icon', icon: icons.database },
+    { id: 'github-icon', icon: icons.github }
   ];
 
   elements.forEach(({ id, icon }) => {
@@ -173,11 +174,14 @@ configureViewStateModule({
   getResourceTitleEl: () => document.getElementById('resource-title'),
   getDatabasePageEl: () => document.getElementById('database-page'),
   getModelPageEl: () => document.getElementById('model-page'),
+  getGithubPageEl: () => document.getElementById('github-page'),
+  getGithubWebview: () => document.getElementById('github-webview'),
   getHeaderButtons: () => document.querySelectorAll('#file-tree-header > div > button'),
   getSearchButton: () => document.getElementById('search-btn'),
   getSearchInput: () => document.getElementById('search-input'),
   getDatabaseButton: () => document.getElementById('database-btn'),
   getModelButton: () => document.getElementById('model-btn'),
+  getGithubButton: () => document.getElementById('github-btn'),
   getToggleTreeButton: () => document.getElementById('toggle-tree'),
   getChatButton: () => document.getElementById('chat-btn'),
   getChatHistoryContainer: () => document.getElementById('chat-history-container'),

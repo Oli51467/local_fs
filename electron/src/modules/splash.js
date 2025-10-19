@@ -35,7 +35,7 @@ class SplashScreen {
       return;
     }
 
-    this.updateLoadingText('等待服务启动...');
+    this.updateLoadingText('应用启动中...');
 
     this.startBackendStatusStream();
     this.setupThemeListener();
@@ -100,7 +100,7 @@ class SplashScreen {
       this.statusSocket = null;
       this.backendConnected = false;
       if (!this.isReady) {
-        this.updateLoadingText('等待服务启动...');
+        this.updateLoadingText('应用启动中...');
         this.scheduleReconnect();
       }
     });

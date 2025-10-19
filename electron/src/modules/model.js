@@ -52,7 +52,7 @@ class ModelModule {
     this.systemFetchPending = false;
     this.systemPollingHandle = null;
     this.systemPollingInterval = null;
-    this.systemPollingDelayMs = 5000;
+    this.systemPollingDelayMs = 10000;
     this.systemDownloadRequests = new Set();
     this.systemUninstallRequests = new Set();
     this.registryListeners = new Set();
@@ -145,7 +145,7 @@ class ModelModule {
         progress: 0,
         downloadedBytes: 0,
         totalBytes: null,
-        message: '点击卡片开始下载模型。',
+        message: '',
         error: null,
         endpoint: null,
         updatedAt: now
@@ -362,6 +362,13 @@ class ModelModule {
     const hasActiveModel =
       this.systemModels.some((model) => model.status === 'downloading' || model.status === 'pending');
 
+    // 仅在模型页面可见时才允许轮询
+    const isVisible = this.isModelPageVisible();
+    if (!isVisible) {
+      this.stopSystemPolling();
+      return;
+    }
+
     if (hasActiveModel || !this.areAllSystemModelsReady() || forceFast) {
       this.startSystemPolling(this.systemPollingDelayMs);
       return;
@@ -374,12 +381,21 @@ class ModelModule {
     if (!interval) {
       return;
     }
+    // 页面不可见时不启动轮询
+    if (!this.isModelPageVisible()) {
+      return;
+    }
     if (this.systemPollingHandle && this.systemPollingInterval === interval) {
       return;
     }
     this.stopSystemPolling();
     this.systemPollingInterval = interval;
     this.systemPollingHandle = setInterval(() => {
+      // 再次确认页面可见，否则停止
+      if (!this.isModelPageVisible()) {
+        this.stopSystemPolling();
+        return;
+      }
       this.fetchSystemModels({ silent: true }).catch((error) => {
         console.error('轮询系统模型状态失败:', error);
       });
@@ -392,6 +408,13 @@ class ModelModule {
     }
     this.systemPollingHandle = null;
     this.systemPollingInterval = null;
+  }
+
+  isModelPageVisible() {
+    const el = this.modelPageEl || document.getElementById('model-page');
+    if (!el) return false;
+    const style = (el.style && el.style.display) || '';
+    return style && style !== 'none';
   }
 
   handleSystemModelClick(model) {
@@ -474,9 +497,6 @@ class ModelModule {
       }
       const data = await response.json();
       this.mergeSystemModelStatus(data);
-      if (data && data.status === 'not_downloaded') {
-        this.updateSystemModelPartial(key, { message: '模型已卸载' });
-      }
       this.renderAllModels();
       this.updateSystemPollingState();
     } catch (error) {
@@ -638,7 +658,10 @@ class ModelModule {
       const reason = model.error || model.message || '请稍后重试。';
       return `下载失败：${this.truncateText(reason, 60)}`;
     }
-    return model.message || '点击卡片开始下载模型。';
+    if ((model.key || '') === 'clip_vit_b_32_multilingual') {
+      return '';
+    }
+    return model.message || '';
   }
 
   truncateText(text, limit = 80) {
@@ -1004,12 +1027,16 @@ class ModelModule {
     if (this.modelPageEl) {
       this.modelPageEl.style.display = 'flex';
     }
+    // 进入模型页面后更新轮询状态
+    this.updateSystemPollingState();
   }
 
   hideModelPage() {
     if (this.modelPageEl) {
       this.modelPageEl.style.display = 'none';
     }
+    // 离开模型页面时停止轮询
+    this.stopSystemPolling();
   }
 
   hideOtherAreas() {

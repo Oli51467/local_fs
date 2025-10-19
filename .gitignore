@@ -20,3 +20,4 @@ build
 /electron/dist/*.exe
 /electron/dist/*.AppleImage
 /electron/dist/*.blockmap
+/electron/dist/builder-debug.yml

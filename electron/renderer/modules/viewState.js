@@ -31,6 +31,10 @@
     getChatPageEl: () => document.getElementById('chat-page'),
     getChatModule: () => global.chatModule,
     getFileContentEl: () => document.getElementById('file-content'),
+    // 新增：Settings/Github 依赖
+    getSettingsPageEl: () => document.getElementById('settings-page'),
+    getGithubPageEl: () => document.getElementById('github-page'),
+    getGithubButton: () => document.getElementById('github-btn'),
     getSearchState: () => global.searchState,
     initializeSearchUI: () => {},
     showSearchResultsPane: () => {},
@@ -97,6 +101,22 @@
     }
   }
 
+  // 新增：隐藏Github页面
+  function hideGithubPage() {
+    const page = dependencies.getGithubPageEl && dependencies.getGithubPageEl();
+    if (page) {
+      page.style.display = 'none';
+    }
+  }
+
+  // 新增：隐藏设置页面
+  function hideSettingsPage() {
+    const settingsPage = dependencies.getSettingsPageEl && dependencies.getSettingsPageEl();
+    if (settingsPage) {
+      settingsPage.style.display = 'none';
+    }
+  }
+
   function updateHeaderButtons(display) {
     const buttons = dependencies.getHeaderButtons ? dependencies.getHeaderButtons() : null;
     if (buttons && typeof buttons.forEach === 'function') {
@@ -139,6 +159,7 @@
 
     hideDatabasePage();
     hideModelPage();
+    hideGithubPage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
     if (fileTreeEl) {
@@ -187,6 +208,7 @@
 
     hideDatabasePage();
     hideModelPage();
+    hideGithubPage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
     if (fileTreeEl) {
@@ -236,6 +258,7 @@
 
     hideDatabasePage();
     hideModelPage();
+    hideGithubPage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
     if (fileTreeEl) {
@@ -254,7 +277,7 @@
 
     const resourceTitle = dependencies.getResourceTitleEl();
     if (resourceTitle) {
-      resourceTitle.textContent = '对话历史';
+      resourceTitle.textContent = '对话';
     }
 
     updateHeaderButtons('none');
@@ -292,6 +315,7 @@
 
     hideChatInterface();
     hideDatabasePage();
+    hideGithubPage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
     if (fileTreeEl) {
@@ -337,6 +361,7 @@
 
     hideChatInterface();
     hideModelPage();
+    hideGithubPage();
 
     const fileTreeEl = dependencies.getFileTreeEl();
     if (fileTreeEl) {
@@ -375,6 +400,86 @@
       if (databasePage) {
         databasePage.style.display = 'block';
       }
+    }
+  }
+
+  // 新增：切换到Github页面
+  function switchToGithubMode() {
+    state.isSearchMode = false;
+    state.activeMode = 'github';
+
+    hideChatInterface();
+    hideDatabasePage();
+    hideModelPage();
+    hideSettingsPage();
+
+    const fileTreeEl = dependencies.getFileTreeEl();
+    if (fileTreeEl) {
+      fileTreeEl.style.display = 'none';
+    }
+
+    const fileTreeContainer = dependencies.getFileTreeContainer ? dependencies.getFileTreeContainer() : null;
+    if (fileTreeContainer) {
+      fileTreeContainer.style.display = 'none';
+    }
+
+    const searchArea = dependencies.getSearchAreaEl();
+    if (searchArea) {
+      searchArea.style.display = 'none';
+    }
+
+    const resourceTitle = dependencies.getResourceTitleEl();
+    if (resourceTitle) {
+      resourceTitle.textContent = '';
+    }
+
+    updateHeaderButtons('none');
+
+    const fileContent = dependencies.getFileContentEl ? dependencies.getFileContentEl() : null;
+    if (fileContent) {
+      fileContent.style.display = 'none';
+    }
+
+    dependencies.hideSearchResultsPane();
+
+    // 显示Github页面
+    const githubPage = dependencies.getGithubPageEl ? dependencies.getGithubPageEl() : null;
+    if (githubPage) {
+      // 以 flex 方式显示以撑满主面板宽度
+      githubPage.style.display = 'flex';
+    }
+
+    // 尝试让外层容器承担滚动：根据内容高度调整 webview 高度
+    const webview = dependencies.getGithubWebview ? dependencies.getGithubWebview() : null;
+    if (webview) {
+      // 进入页面时，确保webview至少占满容器高度
+      webview.style.display = 'block';
+      webview.style.height = '100%';
+      webview.style.minHeight = '';
+
+      const updateHeight = async () => {
+        try {
+          const h = await webview.executeJavaScript('document.documentElement.scrollHeight');
+          // 安全回退：避免设置为0，保证可见
+          const page = dependencies.getGithubPageEl ? dependencies.getGithubPageEl() : null;
+          const base = page ? (page.clientHeight || 400) : 400;
+          const safeHeight = Math.max(Number(h) || 0, base);
+          // 使用 minHeight 让外层容器滚动，同时不压缩到0
+          webview.style.minHeight = `${safeHeight}px`;
+        } catch (e) {
+          console.warn('计算GitHub页面高度失败:', e);
+          // 回退：至少填充父容器高度
+          webview.style.minHeight = '400px';
+        }
+      };
+      if (!webview.__autosizeBound) {
+        webview.addEventListener('dom-ready', updateHeight, { once: true });
+        webview.addEventListener('did-navigate', updateHeight);
+        webview.addEventListener('did-stop-loading', updateHeight);
+        webview.__autosizeBound = true;
+      }
+      // 切换到页面时也主动计算一次
+      updateHeight();
     }
   }
 
@@ -490,10 +595,18 @@
       });
     }
 
+    // 新增：Github按钮事件绑定
+    const githubBtn = dependencies.getGithubButton ? dependencies.getGithubButton() : null;
+    if (githubBtn) {
+      githubBtn.addEventListener('click', () => {
+        switchToGithubMode();
+      });
+    }
+
     const toggleTreeBtn = dependencies.getToggleTreeButton();
     if (toggleTreeBtn) {
       toggleTreeBtn.addEventListener('click', () => {
-        if (state.isSearchMode || state.activeMode === 'chat' || state.activeMode === 'model' || state.activeMode === 'database') {
+        if (state.isSearchMode || state.activeMode === 'chat' || state.activeMode === 'model' || state.activeMode === 'database' || state.activeMode === 'github') {
           switchToFileMode();
         }
       });
@@ -521,6 +634,8 @@
     switchToChatMode,
     switchToDatabaseMode,
     switchToModelMode,
+    // 新增：导出Github模式切换
+    switchToGithubMode,
     autoResizeSearchInput,
     isSearchMode: getIsSearchMode
   };
@@ -530,6 +645,8 @@
   global.switchToChatMode = switchToChatMode;
   global.switchToDatabaseMode = switchToDatabaseMode;
   global.switchToModelMode = switchToModelMode;
+  // 新增：全局导出Github切换
+  global.switchToGithubMode = switchToGithubMode;
   Object.defineProperty(global, 'isSearchMode', {
     configurable: true,
     get: () => state.isSearchMode

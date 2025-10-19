@@ -1,0 +1,59 @@
+/* Github 页面样式 */
+#github-page {
+  display: none;
+  /* 关键：确保在主容器中占满剩余宽度 */
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0; /* 设为0以贴合容器 */
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.github-section {
+  /* 关键：使用flex填充，不依赖父元素的display:flex */
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* 允许子元素在 flex 容器中拉伸 */
+}
+
+.github-title {
+  margin: 0 0 12px 0;
+  border-bottom: 2px solid var(--accent-color);
+  padding-bottom: 8px;
+}
+
+.github-content {
+  flex: 1;
+  display: flex;
+  min-height: 0; /* 允许子元素在 flex 容器中拉伸 */
+}
+
+/* 外层滚动条：设为 1px 粗度 */
+#github-page {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: rgba(148,163,184,0.45) transparent;
+}
+#github-page::-webkit-scrollbar {
+  width: 1px;
+  height: 1px;
+}
+#github-page::-webkit-scrollbar-track {
+  background: transparent;
+}
+#github-page::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
+  background-clip: padding-box;
+  border: 0;
+}
+
+#github-webview {
+  width: 100%;
+  height: 100%;
+  border: none;
+  overflow: hidden;
+}

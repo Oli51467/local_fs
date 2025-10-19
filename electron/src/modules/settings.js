@@ -829,7 +829,13 @@ class SettingsModule {
     if (chatHistory) {
       chatHistory.style.display = 'none';
     }
-    
+
+    // 新增：隐藏 Github 页面，避免与文件页面同时显示
+    const githubPage = document.getElementById('github-page');
+    if (githubPage) {
+      githubPage.style.display = 'none';
+    }
+
     // 显示文件树容器
     const fileTreeContainer = document.getElementById('file-tree-container');
     if (fileTreeContainer) {
@@ -863,7 +869,13 @@ class SettingsModule {
     if (chatHistory) {
       chatHistory.style.display = 'none';
     }
-    
+
+    // 新增：隐藏 Github 页面，避免与设置页面同时显示
+    const githubPage = document.getElementById('github-page');
+    if (githubPage) {
+      githubPage.style.display = 'none';
+    }
+
     // 折叠操作栏，隐藏左侧的文件树容器
     const fileTreeContainer = document.getElementById('file-tree-container');
     if (fileTreeContainer) {
