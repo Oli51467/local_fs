@@ -140,11 +140,20 @@
       return `图片结果 ${index + 1}`;
     }
 
+    const normalizedPath = normalizeDocumentPath(result.file_path || result.path || result.source_path || '');
+    let pathDerivedName = null;
+    if (normalizedPath) {
+      const segments = normalizedPath.split('/');
+      if (segments.length) {
+        pathDerivedName = segments[segments.length - 1];
+      }
+    }
+
     const candidates = [
       result.filename,
       result.file_name,
-      result.display_name,
-      result.image_name
+      pathDerivedName,
+      result.display_name
     ];
 
     for (const candidate of candidates) {
@@ -162,14 +171,6 @@
         continue;
       }
       return text;
-    }
-
-    const normalizedPath = normalizeDocumentPath(result.file_path || result.path || result.source_path || '');
-    if (normalizedPath) {
-      const segments = normalizedPath.split('/');
-      if (segments.length) {
-        return segments[segments.length - 1];
-      }
     }
 
     return `图片结果 ${index + 1}`;
@@ -505,8 +506,8 @@
 
         .search-result-card {
           position: relative;
-          border-radius: 18px;
-          padding: 22px;
+          border-radius: 16px;
+          padding: 18px;
           background: var(--bg-color);
           border: 1px solid rgba(148, 163, 184, 0.3);
           box-shadow: 0 16px 36px rgba(15, 23, 42, 0.12);
@@ -514,7 +515,7 @@
           cursor: pointer;
           display: flex;
           flex-direction: column;
-          gap: 18px;
+          gap: 14px;
         }
 
         .search-result-card:hover {
@@ -538,7 +539,7 @@
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 10px;
+          gap: 8px;
         }
 
         .search-card-title {
@@ -571,16 +572,29 @@
           border-radius: 3px;
         }
 
-        .search-card-image-layout {
-          display: grid;
-          grid-template-columns: minmax(130px, 160px) 1fr;
-          gap: 14px;
-          align-items: stretch;
+        .search-result-card.image-result {
+          padding: 16px;
+          gap: 12px;
         }
 
-        .search-card-image-preview {
+        .search-result-card.image-result .search-card-header {
+          padding: 0;
+        }
+
+        .search-result-card.image-result .search-card-title {
+          font-size: 15px;
+          font-weight: 600;
+        }
+
+        .image-result-body {
+          display: flex;
+          align-items: flex-start;
+          gap: 16px;
+        }
+
+        .image-result-preview {
           position: relative;
-          border-radius: 14px;
+          border-radius: 12px;
           overflow: hidden;
           border: 1px solid rgba(59, 130, 246, 0.26);
           background: linear-gradient(150deg, rgba(191, 219, 254, 0.42), rgba(226, 232, 240, 0.2));
@@ -588,23 +602,24 @@
           align-items: center;
           justify-content: center;
           aspect-ratio: 4 / 3;
-          align-self: stretch;
+          flex: 0 0 200px;
           transition: transform 0.24s ease, border-color 0.24s ease;
         }
 
-        .search-card-image-preview:hover {
+        .image-result-preview:hover {
           transform: translateY(-3px);
           border-color: rgba(37, 99, 235, 0.6);
         }
 
-        .search-card-image-preview img {
+        .image-result-preview img {
           width: 100%;
           height: 100%;
-          object-fit: contain;
-          background: rgba(248, 250, 252, 0.55);
+          object-fit: cover;
+          display: block;
+          border-radius: inherit;
         }
 
-        .search-card-image-preview.no-preview {
+        .image-result-preview.no-preview {
           cursor: default;
           border-style: dashed;
           border-color: rgba(148, 163, 184, 0.45);
@@ -615,54 +630,41 @@
           letter-spacing: 0.12em;
         }
 
-        .search-card-image-details {
+        .image-result-details {
           display: flex;
           flex-direction: column;
-          gap: 0;
-          min-height: 100%;
-          height: 100%;
+          gap: 8px;
           flex: 1 1 auto;
-          align-self: stretch;
+          align-items: flex-start;
         }
 
-        .search-card-image-details.has-rank {
-          justify-content: space-between;
-        }
-
-        .search-card-info-tabs {
+        .image-result-info {
           display: flex;
           flex-direction: column;
-          gap: 6px;
-          flex: 0 0 auto;
+          gap: 4px;
+          align-self: flex-start;
         }
 
-        .search-card-info-row {
+        .image-result-info-row {
           display: flex;
           flex-wrap: wrap;
-          gap: 6px;
+          gap: 4px;
         }
 
-        .search-card-rank-container {
-          margin-top: auto;
-          flex: 0 0 auto;
-        }
-
-        .search-card-rank-row {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-          justify-content: flex-start;
+        .image-result-details .search-card-metrics {
+          margin: 4px 0 0;
+          align-self: flex-start;
         }
 
         .search-card-info-chip {
           display: inline-flex;
           align-items: center;
           gap: 4px;
-          padding: 3px 8px;
+          padding: 2px 7px;
           border-radius: 999px;
           background: rgba(59, 130, 246, 0.12);
           border: 1px solid rgba(59, 130, 246, 0.2);
-          font-size: 11px;
+          font-size: 10px;
           line-height: 1.2;
           color: #1d4ed8;
           white-space: nowrap;
@@ -675,7 +677,7 @@
         }
 
         .search-card-info-chip .info-chip-label {
-          font-size: 10px;
+          font-size: 9px;
           font-weight: 500;
           color: #2563eb;
           letter-spacing: 0.04em;
@@ -683,7 +685,7 @@
         }
 
         .search-card-info-chip .info-chip-value {
-          font-size: 11px;
+          font-size: 10px;
           font-weight: 600;
           color: inherit;
         }
@@ -708,9 +710,9 @@
           display: inline-flex;
           align-items: center;
           gap: 4px;
-          font-size: 11px;
+          font-size: 10px;
           line-height: 1;
-          padding: 4px 12px;
+          padding: 3px 10px;
           border-radius: 999px;
           background: rgba(148, 163, 184, 0.18);
           color: var(--text-muted, #475569);
@@ -776,16 +778,17 @@
 
         .search-card-metrics {
           display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 4px;
           margin-top: 4px;
         }
 
-        @media (max-width: 860px) {
-          .search-card-image-layout {
-            grid-template-columns: 1fr;
-          }
+        .search-result-card.image-result .search-card-metrics {
+          margin: 0;
+        }
 
+        @media (max-width: 860px) {
           .search-card-image-preview,
           .search-card-image-preview.no-preview {
             aspect-ratio: 3 / 2;
@@ -1237,40 +1240,39 @@
 
     const title = document.createElement('h4');
     title.className = 'search-card-title';
+    const normalizedPath = normalizeDocumentPath(result.file_path || result.path || result.source_path || '');
     if (imageResult) {
-      const imageDisplayName = getDisplayNameForImage(result, index);
-      title.textContent = imageDisplayName;
-      title.title = imageDisplayName;
+      const pathDisplay = normalizedPath || getDisplayNameForImage(result, index);
+      title.textContent = pathDisplay;
+      title.title = pathDisplay;
     } else {
-      title.textContent = result.filename || result.file_name || `结果 ${index + 1}`;
+      title.textContent = result.filename || result.file_name || normalizedPath || `结果 ${index + 1}`;
+      title.title = title.textContent;
     }
     header.appendChild(title);
 
-    const sourceChip = document.createElement('span');
-    sourceChip.className = 'search-card-chip';
-    if (imageResult) {
-      sourceChip.dataset.variant = 'image';
-      sourceChip.textContent = '图片';
-    } else {
+    if (!imageResult) {
+      const sourceChip = document.createElement('span');
+      sourceChip.className = 'search-card-chip';
       const chipInfo = resolveSourceChipInfo(result, variant);
       sourceChip.dataset.variant = chipInfo.variant;
       sourceChip.textContent = chipInfo.label;
+      header.appendChild(sourceChip);
     }
-    header.appendChild(sourceChip);
 
     card.appendChild(header);
 
-    const metrics = imageResult ? null : buildMetricsChips(result);
+    const metrics = buildMetricsChips(result);
 
     if (imageResult) {
-      card.classList.add('search-result-card-image');
-
-      const layout = document.createElement('div');
-      layout.className = 'search-card-image-layout';
+      card.classList.add('image-result');
 
       const imgSrc = buildImagePreviewSrc(result);
+      const body = document.createElement('div');
+      body.className = 'image-result-body';
+
       const preview = document.createElement(imgSrc ? 'button' : 'div');
-      preview.className = 'search-card-image-preview';
+      preview.className = imgSrc ? 'image-result-preview' : 'image-result-preview no-preview';
       if (imgSrc) {
         preview.type = 'button';
         preview.title = '点击预览图片';
@@ -1284,34 +1286,28 @@
         img.loading = 'lazy';
         preview.appendChild(img);
       } else {
-        preview.classList.add('no-preview');
         preview.textContent = '暂无预览';
       }
-      layout.appendChild(preview);
+      body.appendChild(preview);
 
       const details = document.createElement('div');
-      details.className = 'search-card-image-details';
+      details.className = 'image-result-details';
 
-      const { infoContainer, rankContainer } = buildImageInfoTabs(result, index);
-      if (infoContainer) {
-        const infoWrapper = document.createElement('div');
-        infoWrapper.className = 'search-card-info-tabs';
-        infoWrapper.appendChild(infoContainer);
-        details.appendChild(infoWrapper);
-      }
+    const infoChips = buildImageInfoChips(result);
+    if (infoChips) {
+        details.appendChild(infoChips);
+    }
 
-      if (rankContainer) {
-        details.classList.add('has-rank');
-        rankContainer.classList.add('search-card-rank-container');
-        details.appendChild(rankContainer);
-      }
+    if (metrics) {
+        details.appendChild(metrics);
+    }
 
-      layout.appendChild(details);
-      card.appendChild(layout);
+      body.appendChild(details);
+      card.appendChild(body);
     } else {
       const path = document.createElement('div');
       path.className = 'search-card-path';
-      path.textContent = result.file_path || result.path || '(未知路径)';
+      path.textContent = normalizedPath || '(未知路径)';
       card.appendChild(path);
 
       const snippet = document.createElement('div');
@@ -1355,6 +1351,98 @@
     return null;
   }
 
+  function buildImageInfoChips(result) {
+    if (!result) {
+      return null;
+    }
+
+    const rows = [];
+
+    const baseRow = document.createElement('div');
+    baseRow.className = 'image-result-info-row';
+
+    const rawWidth = Number(result.width ?? result.image_width);
+    const rawHeight = Number(result.height ?? result.image_height);
+    if (Number.isFinite(rawWidth) && Number.isFinite(rawHeight) && rawWidth > 0 && rawHeight > 0) {
+      const chip = document.createElement('span');
+      chip.className = 'search-card-info-chip';
+      chip.dataset.key = 'resolution';
+      chip.innerHTML = `
+        <span class="info-chip-label">分辨率</span>
+        <span class="info-chip-value">${escapeHtml(`${rawWidth}×${rawHeight}`)}</span>
+      `;
+      baseRow.appendChild(chip);
+    } else if (result.image_resolution) {
+      const text = String(result.image_resolution).trim();
+      if (text) {
+        const chip = document.createElement('span');
+        chip.className = 'search-card-info-chip';
+        chip.dataset.key = 'resolution';
+        chip.innerHTML = `
+          <span class="info-chip-label">分辨率</span>
+          <span class="info-chip-value">${escapeHtml(text)}</span>
+        `;
+        baseRow.appendChild(chip);
+      }
+    }
+
+    const sizeBytes = Number(result.image_size_bytes ?? result.image_size);
+    if (Number.isFinite(sizeBytes) && sizeBytes > 0) {
+      const chip = document.createElement('span');
+      chip.className = 'search-card-info-chip';
+      chip.dataset.key = 'size';
+      chip.innerHTML = `
+        <span class="info-chip-label">文件大小</span>
+        <span class="info-chip-value">${escapeHtml(formatBytes(sizeBytes))}</span>
+      `;
+      baseRow.appendChild(chip);
+    }
+
+    if (baseRow.children.length) {
+      rows.push(baseRow);
+    }
+
+    const breakdown = result.score_breakdown || {};
+    const secondaryRow = document.createElement('div');
+    secondaryRow.className = 'image-result-info-row';
+    const breakdownMap = {
+      clip: 'CLIP',
+      dense: 'Vector',
+      reranker: 'Rerank'
+    };
+    Object.entries(breakdownMap).forEach(([key, label]) => {
+      const value = breakdown[key];
+      if (value === undefined || value === null) {
+        return;
+      }
+      const formatted = Number.isFinite(value) ? Number(value).toFixed(3) : null;
+      if (!formatted) {
+        return;
+      }
+      const chip = document.createElement('span');
+      chip.className = 'search-card-info-chip';
+      chip.dataset.key = key;
+      chip.innerHTML = `
+        <span class="info-chip-label">${escapeHtml(label)}</span>
+        <span class="info-chip-value">${escapeHtml(formatted)}</span>
+      `;
+      secondaryRow.appendChild(chip);
+    });
+
+    if (secondaryRow.children.length) {
+      rows.push(secondaryRow);
+    }
+
+    if (!rows.length) {
+      return null;
+    }
+
+    const container = document.createElement('div');
+    container.className = 'image-result-info';
+    rows.forEach((row) => container.appendChild(row));
+    return container;
+  }
+
   function ensureGlobalImageViewer() {
     // 始终仅维护独立的全局图片查看器，不污染全局 fileViewer
     if (global.__globalImageViewer) {
@@ -1382,7 +1470,7 @@
 
     const viewer = ensureGlobalImageViewer();
     if (viewer && typeof viewer.show === 'function') {
-      const title = result?.image_name || result?.display_name || result?.filename || '';
+      const title = getDisplayNameForImage(result) || '';
       viewer.show(src, title || src);
       return;
     }
@@ -1394,195 +1482,107 @@
     }
   }
 
-  function buildImageInfoTabs(result, index = 0) {
-    if (!result) {
-      return { infoContainer: null, rankContainer: null };
-    }
-
-    const primaryItems = [];
-    const secondaryItems = [];
-
-    const addItem = (target, item) => {
-      if (!item || !item.value) {
-        return;
-      }
-      target.push(item);
-    };
-
-    const rawWidth = Number(result.width ?? result.image_width);
-    const rawHeight = Number(result.height ?? result.image_height);
-    let resolutionLabel = null;
-    if (Number.isFinite(rawWidth) && Number.isFinite(rawHeight) && rawWidth > 0 && rawHeight > 0) {
-      resolutionLabel = `${rawWidth} × ${rawHeight}`;
-    } else if (result.image_resolution) {
-      resolutionLabel = String(result.image_resolution);
-    }
-    if (resolutionLabel) {
-      addItem(primaryItems, {
-        key: 'resolution',
-        label: '分辨率',
-        value: resolutionLabel,
-        detail: `像素尺寸 ${resolutionLabel}`
-      });
-    }
-
-    const imageMetric = getMetricsForSource(result, 'image') || {};
-    const scoreSource = imageMetric.confidence ?? result.confidence ?? result.final_score ?? result.image_score;
-    if (scoreSource !== undefined && scoreSource !== null) {
-      const displayScore = formatPercentage(scoreSource) || formatScore(scoreSource, 3) || '--';
-      addItem(primaryItems, {
-        key: 'relevance',
-        label: '相关度',
-        value: displayScore,
-        detail: `检索相关度 ${displayScore}`
-      });
-    }
-
-    const sizeBytes = Number(result.image_size_bytes ?? result.image_size);
-    if (Number.isFinite(sizeBytes) && sizeBytes > 0) {
-      const formattedSize = formatBytes(sizeBytes);
-      addItem(primaryItems, {
-        key: 'size',
-        label: '文件大小',
-        value: formattedSize,
-        detail: `图像体积 ${formattedSize}`
-      });
-    }
-
-    const exactMetric = getMetricsForSource(result, 'exact');
-    const exactRank = exactMetric && Number(exactMetric.rank);
-    if (Number.isFinite(exactRank) && exactRank > 0) {
-      const rankLabel = `#${exactRank}`;
-      addItem(secondaryItems, {
-        key: 'exact-rank',
-        label: '字符Rank',
-        value: rankLabel,
-        detail: `字符匹配排名 ${rankLabel}`
-      });
-    }
-
-    const semanticMetric = getMetricsForSource(result, 'semantic');
-    const semanticRank = semanticMetric && Number(semanticMetric.rank);
-    if (Number.isFinite(semanticRank) && semanticRank > 0) {
-      const rankLabel = `#${semanticRank}`;
-      addItem(secondaryItems, {
-        key: 'semantic-rank',
-        label: '语义Rank',
-        value: rankLabel,
-        detail: `语义检索排名 ${rankLabel}`
-      });
-    }
-
-    if (!primaryItems.length && !secondaryItems.length) {
-      return { infoContainer: null, rankContainer: null };
-    }
-
-    const buildRow = (items, rowKey) => {
-      if (!items.length) {
-        return null;
-      }
-      const row = document.createElement('div');
-      row.className = rowKey === 'secondary' ? 'search-card-rank-row' : 'search-card-info-row';
-      row.dataset.row = rowKey;
-      items.forEach((item) => {
-        const chip = document.createElement('span');
-        chip.className = 'search-card-info-chip';
-        chip.dataset.key = item.key;
-        chip.dataset.variant = rowKey === 'secondary' ? 'secondary' : 'primary';
-        if (item.detail) {
-          chip.title = item.detail;
-        }
-        chip.innerHTML = `
-          <span class="info-chip-label">${escapeHtml(item.label)}</span>
-          <span class="info-chip-value">${escapeHtml(item.value || '-')}</span>
-        `;
-        row.appendChild(chip);
-      });
-      return row;
-    };
-
-    const infoContainer = buildRow(primaryItems, 'primary');
-    const rankContainer = buildRow(secondaryItems, 'secondary');
-
-    return { infoContainer, rankContainer };
-  }
-
   function buildMetricsChips(result) {
     if (!result) {
+      return null;
+    }
+
+    if (isImageResult(result)) {
       return null;
     }
 
     const metricsContainer = document.createElement('div');
     metricsContainer.className = 'search-card-metrics';
 
-    const sources = ['exact', 'semantic'];
-    if (searchState.mode === SEARCH_MODES.IMAGE) {
-      sources.push('image');
-    }
+    const formatScore = (value, digits = 3) => {
+      if (value === undefined || value === null) {
+        return null;
+      }
+      const numberValue = Number(value);
+      if (Number.isNaN(numberValue)) {
+        return null;
+      }
+      return numberValue.toFixed(digits);
+    };
 
-    sources.forEach((sourceKey) => {
-      const metric = getMetricsForSource(result, sourceKey);
-      if (!metric) {
+    const addChip = (variant, text) => {
+      if (!text) {
         return;
       }
-
-      const parts = [];
-
-      const formatScore = (value, digits = 3) => {
-        if (value === undefined || value === null) {
-          return null;
-        }
-        const numberValue = Number(value);
-        if (Number.isNaN(numberValue)) {
-          return null;
-        }
-        return numberValue.toFixed(digits);
-      };
-
-      if (metric.match_score !== undefined && metric.match_score !== null) {
-        const formatted = formatScore(metric.match_score);
-        if (formatted !== null) {
-          parts.push(`匹配 ${formatted}`);
-        }
-      }
-
-      if (metric.confidence !== undefined && metric.confidence !== null) {
-        const formatted = formatPercentage(metric.confidence);
-        if (formatted) {
-          parts.push(`可信度 ${formatted}`);
-        }
-      }
-
-      if (metric.mixed_score !== undefined && metric.mixed_score !== null) {
-        const formatted = formatScore(metric.mixed_score);
-        if (formatted !== null) {
-          parts.push(`混合 ${formatted}`);
-        }
-      }
-      if (metric.rerank_score !== undefined && metric.rerank_score !== null) {
-        const formatted = formatScore(metric.rerank_score);
-        if (formatted !== null) {
-          parts.push(`Rerank ${formatted}`);
-        }
-      }
-      if (metric.bm25s_score !== undefined && metric.bm25s_score !== null) {
-        const formatted = formatScore(metric.bm25s_score);
-        if (formatted !== null) {
-          parts.push(`BM25S ${formatted}`);
-        }
-      }
-
-      if (!parts.length) {
-        return;
-      }
-
       const chip = document.createElement('span');
       chip.className = 'search-card-chip';
-      chip.dataset.variant = sourceKey === 'exact' ? 'exact' : sourceKey === 'image' ? 'image' : 'semantic';
-      const label = sourceKey === 'exact' ? '字符' : sourceKey === 'image' ? '图片' : '语义';
-      chip.textContent = `${label} · ${parts.join(' | ')}`;
+      chip.dataset.variant = variant;
+      chip.textContent = text;
       metricsContainer.appendChild(chip);
-    });
+    };
+
+    const addInfoChip = (label, value) => {
+      if (!label) {
+        return;
+      }
+      const text = String(value ?? '').trim();
+      if (!text) {
+        return;
+      }
+      const chip = document.createElement('span');
+      chip.className = 'search-card-info-chip';
+      chip.dataset.variant = 'primary';
+      chip.innerHTML = `
+        <span class="info-chip-label">${escapeHtml(label)}</span>
+        <span class="info-chip-value">${escapeHtml(text)}</span>
+      `;
+      metricsContainer.appendChild(chip);
+    };
+
+    const hasImageSignal =
+      (Array.isArray(result.sources) && result.sources.includes('image')) ||
+      Boolean(result?.metrics?.image) ||
+      searchState.mode === SEARCH_MODES.IMAGE;
+
+    if (hasImageSignal) {
+      const imageMetric = getMetricsForSource(result, 'image') || {};
+      const confidence =
+        imageMetric.confidence ??
+        result.confidence ??
+        result.final_score ??
+        result.image_score;
+      if (confidence !== undefined && confidence !== null) {
+        const percent =
+          formatPercentage(confidence) || formatScore(confidence, 3) || '--';
+        addChip('image', `相关度 · ${percent}`);
+      }
+
+      const breakdown = result.score_breakdown || {};
+      const breakdownLabels = {
+        clip: 'CLIP',
+        dense: '向量',
+        reranker: 'Rerank'
+      };
+      Object.entries(breakdown).forEach(([component, value]) => {
+        if (component === 'lexical') {
+          return;
+        }
+        const formatted = formatScore(value, 3);
+        if (formatted === null) {
+          return;
+        }
+        const label = breakdownLabels[component] || component.toUpperCase();
+        addInfoChip(label, formatted);
+      });
+    }
+
+    const semanticMetric = getMetricsForSource(result, 'semantic');
+    if (semanticMetric) {
+      const matchFormatted = formatScore(semanticMetric.match_score);
+      if (matchFormatted !== null) {
+        addChip('exact', `字符匹配 · ${matchFormatted}`);
+      }
+
+      const rerankFormatted = formatScore(semanticMetric.rerank_score);
+      if (rerankFormatted !== null) {
+        addInfoChip('Rerank', rerankFormatted);
+      }
+    }
 
     return metricsContainer.children.length ? metricsContainer : null;
   }
@@ -1606,7 +1606,6 @@
       fallback.rank = result.rank;
       fallback.mixed_score = result.mixed_score;
       fallback.rerank_score = result.rerank_score;
-      fallback.bm25s_score = result.bm25s_score;
     }
     return fallback;
   }

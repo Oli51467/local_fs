@@ -107,13 +107,36 @@ class FakeFaissManager:
 
 
 class FakeImageFaissManager:
+    def __init__(
+        self,
+        results: Optional[List[List[Dict[str, Any]]]] = None,
+        vectors: Optional[List[List[float]]] = None,
+    ) -> None:
+        self._results = results or [[]]
+        self._vectors = vectors or []
+
+        class _StubIndex:
+            def __init__(self, parent: "FakeImageFaissManager") -> None:
+                self._parent = parent
+
+            def reconstruct(self, idx: int):
+                try:
+                    return self._parent._vectors[idx]
+                except (IndexError, TypeError):
+                    return [0.0, 0.0, 0.0, 0.0]
+
+        self.index = _StubIndex(self)
+
     def search_vectors(self, query_vectors, k: int = 10):
-        return [[]]
+        return self._results
 
 
 class FakeEmbeddingService:
     def encode_text(self, text: str):
         return [0.1, 0.2, 0.3, 0.4]
+
+    def encode_texts(self, texts: List[str]):
+        return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
 
 
 class FakeBM25Service:
@@ -172,6 +195,16 @@ class FakeSQLiteService:
         for document in self._known_docs.values():
             if document.get('id') == document_id:
                 return dict(document)
+        return None
+
+    def get_chunk_by_document_and_index(
+        self,
+        document_id: int,
+        chunk_index: int,
+    ) -> Optional[Dict[str, Any]]:
+        for record in self._allowed_vectors.values():
+            if record.get('document_id') == document_id and record.get('chunk_index') == chunk_index:
+                return dict(record)
         return None
 
     def search_chunks_by_substring(self, query: str) -> List[Dict[str, Any]]:
@@ -267,7 +300,7 @@ def test_hybrid_text_search_merges_dense_lexical_and_rerank(monkeypatch):
     assert any(item["source"] == "semantic" for item in combined_results)
 
     semantic_entry = next(item for item in combined_results if item["source"] == "semantic")
-    assert semantic_entry["final_score"] >= 0.3
+    assert semantic_entry["final_score"] >= faiss_api.TEXT_MIN_FINAL_SCORE
     assert semantic_entry["filename"] == "doc2.txt"
     assert semantic_entry["metrics"]["semantic"]["embedding_score"] == pytest.approx(0.57)
 
@@ -435,3 +468,87 @@ def test_unregistered_documents_are_excluded(monkeypatch):
 
     combined_results = payload["combined"]["results"]
     assert all(entry["filename"] == "doc1.txt" for entry in combined_results)
+
+
+def test_image_search_fuses_multimodal_signals(monkeypatch):
+    class _StubClipService:
+        def encode_texts(self, texts):
+            return [[0.5, 0.4, 0.3, 0.2] for _ in texts]
+
+    monkeypatch.setattr(faiss_api, "get_clip_embedding_service", lambda: _StubClipService())
+
+    image_candidates = [[
+        {
+            "vector_id": 0,
+            "document_id": 101,
+            "file_path": "docs/sample.md",
+            "storage_path": "images/x1/sample.png",
+            "image_name": "sample.png",
+            "chunk_index": 2,
+            "alt_text": "Transformer architecture diagram with attention layers.",
+            "width": 640,
+            "height": 480,
+            "image_size": 20480,
+        }
+    ]]
+    image_vectors = [[0.5, 0.4, 0.3, 0.2]]
+
+    fake_faiss = FakeFaissManager([], [[]])
+    fake_embedding = FakeEmbeddingService()
+    fake_image = FakeImageFaissManager(results=image_candidates, vectors=image_vectors)
+    fake_bm25 = FakeBM25Service([], [2.0])
+    fake_reranker = FakeRerankerService([0.82])
+
+    allowed_vectors = {
+        0: {
+            "document_id": 101,
+            "chunk_index": 2,
+            "content": "Transformer architecture overview图示展示编码器与解码器，以及注意力流向。",
+            "filename": "sample.md",
+            "file_path": "docs/sample.md",
+        }
+    }
+    known_docs = {
+        "docs/sample.md": {"id": 101, "filename": "sample.md", "file_path": "docs/sample.md"}
+    }
+    fake_sqlite = FakeSQLiteService(allowed_vectors, known_docs)
+
+    client = create_test_client(
+        fake_faiss,
+        fake_embedding,
+        fake_image,
+        fake_bm25,
+        fake_reranker,
+        fake_sqlite,
+    )
+
+    response = client.post(
+        "/api/faiss/search-images",
+        json={"query": "transformer attention diagram", "top_k": 1},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    image_section = payload.get("image_match") or {}
+    assert image_section.get("total") == 1
+    results = image_section.get("results") or []
+    assert len(results) == 1
+
+    result = results[0]
+    assert result["filename"] == "sample.md"
+    assert result["rank"] == 1
+    assert result["final_score"] >= faiss_api.IMAGE_MIN_FINAL_SCORE
+    assert "match_preview" in result and result["match_preview"]
+
+    sources = set(result.get("sources") or [])
+    assert {"image", "clip", "dense", "lexical", "reranker"} <= sources
+
+    breakdown = result.get("score_breakdown") or {}
+    assert {"clip", "dense", "lexical", "reranker"} <= set(breakdown.keys())
+
+    metrics = result.get("metrics") or {}
+    assert "semantic" in metrics
+    semantic_metrics = metrics["semantic"]
+    assert semantic_metrics.get("embedding_score_normalized") is not None
+    assert semantic_metrics.get("bm25s_score") is not None
+    assert semantic_metrics.get("rerank_score_normalized") is not None

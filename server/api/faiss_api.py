@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Optional, Set, Tuple
 from pathlib import Path
 import numpy as np
 import statistics
+import re
 from service.faiss_service import FaissManager
 from service.image_faiss_service import ImageFaissManager
 from service.embedding_service import EmbeddingService
@@ -38,7 +39,7 @@ TEXT_RERANK_MIN = 60
 TEXT_RERANK_MAX = 150
 
 TEXT_MIN_COMPONENT_SCORE = 0.4
-TEXT_MIN_FINAL_SCORE = 0.45
+TEXT_MIN_FINAL_SCORE = 0.55
 TEXT_STRONG_RERANK_THRESHOLD = 0.55
 TEXT_STRONG_DENSE_THRESHOLD = 0.6
 TEXT_STRONG_LEXICAL_THRESHOLD = 0.5
@@ -48,6 +49,13 @@ TEXT_RELATIVE_KEEP_FACTOR = 0.75
 CLIP_TEXT_TRUNCATE = 512
 CLIP_CANDIDATE_LIMIT = 220
 IMAGE_MIN_FINAL_SCORE = 0.45
+IMAGE_MIN_COMPONENT_SCORE = 0.35
+IMAGE_CLIP_WEIGHT = 0.4
+IMAGE_DENSE_WEIGHT = 0.25
+IMAGE_RERANK_WEIGHT = 0.25
+IMAGE_LEXICAL_WEIGHT = 0.1
+IMAGE_TEXT_CANDIDATE_LIMIT = 160
+IMAGE_CONTEXT_SNIPPET = 240
 
 FUSION_RERANK_WEIGHT = 0.45
 FUSION_DENSE_WEIGHT = 0.3
@@ -244,6 +252,91 @@ def search_image_vectors(
     for template in prompt_templates:
         prompt_candidates.append(template.format(query=base_lower))
 
+    def _contains_non_latin(text: str) -> bool:
+        return any(ord(ch) > 127 for ch in text)
+
+    def _collect_chinese_prompts(text: str) -> List[str]:
+        chinese_templates = [
+            "一张{query}的照片",
+            "{query}的图片",
+            "与{query}相关的图像",
+            "描绘{query}的照片",
+        ]
+        return [tpl.format(query=text.strip()) for tpl in chinese_templates if text.strip()]
+
+    def _extract_ascii_keywords(*texts: str) -> List[str]:
+        keywords: List[str] = []
+        seen: Set[str] = set()
+        pattern = re.compile(r"[A-Za-z]{3,}")
+        for text in texts:
+            if not text:
+                continue
+            for match in pattern.findall(text):
+                lowered = match.lower()
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                keywords.append(lowered)
+        return keywords
+
+    def _augment_prompts_from_text() -> List[str]:
+        if embedding_service is None or faiss_manager is None:
+            return []
+
+        try:
+            dense_query = embedding_service.encode_text(base_query)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("生成图像检索文本桥接向量失败: %s", exc)
+            return []
+
+        dense_vec = np.asarray(dense_query, dtype=np.float32)
+        norm = float(np.linalg.norm(dense_vec))
+        if norm <= 0:
+            return []
+        dense_vec = (dense_vec / norm).reshape(1, -1)
+
+        try:
+            recall_size = min(max(top_k * 8, 80), max(len(faiss_manager.metadata), 80))
+            text_results = faiss_manager.search_vectors(dense_vec.tolist(), k=recall_size)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("图像检索文本桥接失败: %s", exc)
+            return []
+
+        if not text_results or not text_results[0]:
+            return []
+
+        keyword_candidates: List[str] = []
+        for entry in text_results[0]:
+            chunk_text = entry.get("chunk_text") or entry.get("text") or ""
+            filename = entry.get("filename") or ""
+            keyword_candidates.extend(_extract_ascii_keywords(chunk_text, filename))
+            if len(keyword_candidates) >= 24:
+                break
+
+        if not keyword_candidates:
+            return []
+
+        unique_keywords: List[str] = []
+        seen_kw: Set[str] = set()
+        for keyword in keyword_candidates:
+            if keyword in seen_kw:
+                continue
+            seen_kw.add(keyword)
+            unique_keywords.append(keyword)
+            if len(unique_keywords) >= 12:
+                break
+
+        extra_prompts: List[str] = []
+        for keyword in unique_keywords:
+            extra_prompts.append(keyword)
+            extra_prompts.append(f"a photo of {keyword}")
+            extra_prompts.append(f"an image showing {keyword}")
+        return extra_prompts
+
+    if _contains_non_latin(base_query):
+        prompt_candidates.extend(_collect_chinese_prompts(base_query))
+        prompt_candidates.extend(_augment_prompts_from_text())
+
     unique_prompts: List[str] = []
     seen_prompts = set()
     for prompt in prompt_candidates:
@@ -280,14 +373,53 @@ def search_image_vectors(
         logger.error("图片向量检索失败: %s", exc)
         return []
 
-    matches: List[Dict[str, Any]] = []
     project_root = ServerConfig.PROJECT_ROOT.resolve()
+    chunk_cache: Dict[Tuple[int, int], Optional[Dict[str, Any]]] = {}
+
+    def _truncate_text(text: str, limit: int = IMAGE_CONTEXT_SNIPPET) -> str:
+        if not text:
+            return ""
+        normalized = str(text).strip()
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[:limit].rstrip() + "…"
+
+    def _get_chunk_record(
+        document_id: int,
+        chunk_index: int,
+    ) -> Optional[Dict[str, Any]]:
+        cache_key = (document_id, chunk_index)
+        if cache_key in chunk_cache:
+            return chunk_cache[cache_key]
+        if sqlite_manager is None:
+            chunk_cache[cache_key] = None
+            return None
+        try:
+            record = sqlite_manager.get_chunk_by_document_and_index(
+                int(document_id), int(chunk_index)
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug(
+                "获取图片关联文档片段失败(document_id=%s, chunk_index=%s): %s",
+                document_id,
+                chunk_index,
+                exc,
+            )
+            record = None
+        chunk_cache[cache_key] = record
+        return record
+
+    enriched: List[Dict[str, Any]] = []
 
     candidates = search_results[0] if search_results else []
-    for idx, candidate in enumerate(candidates):
+    for clip_rank, candidate in enumerate(candidates, start=1):
         vector_index = candidate.get('vector_id')
         # vector_id is stored separately; fallback to faiss index position
-        faiss_index = candidate.get('vector_id') if candidate.get('vector_id') is not None else idx
+        faiss_index = (
+            candidate.get('vector_id')
+            if candidate.get('vector_id') is not None
+            else clip_rank - 1
+        )
 
         try:
             reconstructed = image_faiss_manager.index.reconstruct(int(faiss_index))  # type: ignore[arg-type]
@@ -341,23 +473,26 @@ def search_image_vectors(
 
         record['result_type'] = 'image'
         record['source'] = 'image'
-        record['sources'] = ['image']
+        record['_sources'] = {'image', 'clip'}
         record['vector_index'] = int(faiss_index)
         record.setdefault('vector_id', int(faiss_index))
         record['cosine_similarity'] = best_cosine
         record['avg_cosine'] = average_cosine
         record['combined_cosine'] = combined_cosine
+        record['clip_score'] = combined_cosine
+        record['clip_norm'] = normalized_confidence
+        record['clip_rank'] = clip_rank
         record['confidence'] = normalized_confidence
         record['image_score'] = combined_cosine
         record['final_score'] = normalized_confidence
         record['mixed_score'] = normalized_confidence
         record['quality_score'] = normalized_confidence
-        record['score_breakdown'] = {'image': normalized_confidence}
-        record['score_weights'] = {'image': 1.0}
-        record['rank'] = len(matches) + 1
+        record['score_breakdown'] = {'clip': normalized_confidence}
+        record['score_weights'] = {'clip': 1.0}
+        record['rank'] = clip_rank
         record['metrics'] = {
             'image': {
-                'rank': record['rank'],
+                'rank': clip_rank,
                 'confidence': normalized_confidence,
                 'best_cosine': best_cosine,
                 'avg_cosine': average_cosine,
@@ -385,11 +520,275 @@ def search_image_vectors(
                         document_allowed = False
             if not document_allowed:
                 continue
+        enriched.append(record)
+
+    if not enriched:
+        return []
+
+    text_candidates: List[Dict[str, Any]] = []
+
+    for record in enriched:
+        doc_id_raw = record.get('document_id')
+        chunk_index_raw = record.get('chunk_index')
+        chunk_text: Optional[str] = None
+        if doc_id_raw is not None and chunk_index_raw is not None:
+            try:
+                doc_id_int = int(doc_id_raw)
+                chunk_index_int = int(chunk_index_raw)
+            except (TypeError, ValueError):
+                doc_id_int = None
+                chunk_index_int = None
+            if doc_id_int is not None and chunk_index_int is not None:
+                chunk_record = _get_chunk_record(doc_id_int, chunk_index_int)
+                if chunk_record and chunk_record.get('content'):
+                    chunk_text = str(chunk_record.get('content') or '').strip()
+                    record.setdefault('filename', chunk_record.get('filename'))
+                    record.setdefault('file_path', chunk_record.get('file_path'))
+                    record.setdefault('chunk_vector_id', chunk_record.get('vector_id'))
+
+        alt_text = str(record.get('alt_text') or record.get('caption') or '').strip()
+        if chunk_text:
+            record['chunk_text'] = chunk_text
+        context_parts: List[str] = []
+        if alt_text:
+            context_parts.append(alt_text)
+        if chunk_text:
+            context_parts.append(chunk_text)
+        fallback_name = record.get('filename') or record.get('image_name')
+        if not context_parts and fallback_name:
+            context_parts.append(str(fallback_name))
+
+        context_text = "\n".join(part for part in context_parts if part).strip()
+        record['context_text'] = context_text
+        preview_source = chunk_text or alt_text or context_text
+        if preview_source:
+            record['match_preview'] = _truncate_text(preview_source, IMAGE_CONTEXT_SNIPPET)
+
+        if context_text:
+            text_candidates.append(record)
+
+    limited_text_candidates = text_candidates[:IMAGE_TEXT_CANDIDATE_LIMIT]
+
+    # 密集向量评分
+    if embedding_service is not None and limited_text_candidates:
+        try:
+            query_vec_raw = embedding_service.encode_text(query_text)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("生成图像检索文本查询向量失败: %s", exc)
+            query_vec_raw = None
+        query_vec: Optional[np.ndarray] = None
+        if query_vec_raw:
+            query_vec = np.asarray(query_vec_raw, dtype=np.float32)
+            norm = float(np.linalg.norm(query_vec))
+            if norm > 0:
+                query_vec = query_vec / norm
+            else:
+                query_vec = None
+
+        if query_vec is not None:
+            try:
+                candidate_vecs = embedding_service.encode_texts(
+                    [item['context_text'] for item in limited_text_candidates]
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.debug("生成图像候选文本向量失败: %s", exc)
+                candidate_vecs = []
+
+            for record, vec in zip(limited_text_candidates, candidate_vecs):
+                doc_vec = np.asarray(vec, dtype=np.float32)
+                doc_norm = float(np.linalg.norm(doc_vec))
+                if doc_norm <= 0:
+                    continue
+                cosine_sim = float(np.dot(doc_vec, query_vec) / doc_norm)
+                record['embedding_score'] = cosine_sim
+                record['embedding_norm'] = normalize_embedding_score(cosine_sim)
+                record['_sources'].add('dense')
+
+    # 稀疏检索评分
+    if (
+        bm25s_service is not None
+        and bm25s_service.is_available()
+        and limited_text_candidates
+    ):
+        try:
+            bm25_scores = bm25s_service.score_documents(
+                query_text, [item['context_text'] for item in limited_text_candidates]
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("计算图像候选BM25分数失败: %s", exc)
+            bm25_scores = []
+        for record, score in zip(limited_text_candidates, bm25_scores):
+            record['bm25_raw'] = float(score)
+            normalized = normalize_bm25_score(score)
+            record['bm25_norm'] = normalized
+            if normalized not in (None, 0):
+                record['_sources'].add('lexical')
+
+    # Reranker评分
+    if reranker_service is not None and limited_text_candidates:
+        try:
+            rerank_scores = reranker_service.rerank_results(
+                query_text,
+                [item['context_text'] for item in limited_text_candidates],
+                normalize=True,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("图像候选重排序失败: %s", exc)
+            rerank_scores = []
+        for record, score in zip(limited_text_candidates, rerank_scores):
+            normalized = clamp_unit(score)
+            record['rerank_score'] = float(score)
+            record['rerank_norm'] = normalized
+            if normalized not in (None, 0):
+                record['_sources'].add('reranker')
+
+    # 组件排名
+    dense_sorted = sorted(
+        [item for item in enriched if item.get('embedding_norm') is not None],
+        key=lambda data: data.get('embedding_norm', 0.0),
+        reverse=True,
+    )
+    for rank, record in enumerate(dense_sorted, start=1):
+        record['dense_rank'] = rank
+
+    lexical_sorted = sorted(
+        [item for item in enriched if item.get('bm25_norm') is not None],
+        key=lambda data: data.get('bm25_norm', 0.0),
+        reverse=True,
+    )
+    for rank, record in enumerate(lexical_sorted, start=1):
+        record['lexical_rank'] = rank
+
+    rerank_sorted = sorted(
+        [item for item in enriched if item.get('rerank_norm') is not None],
+        key=lambda data: data.get('rerank_norm', 0.0),
+        reverse=True,
+    )
+    for rank, record in enumerate(rerank_sorted, start=1):
+        record['rerank_rank'] = rank
+
+    filtered: List[Dict[str, Any]] = []
+    for record in enriched:
+        clip_norm = record.get('clip_norm')
+        dense_norm = record.get('embedding_norm')
+        rerank_norm = record.get('rerank_norm')
+        bm_norm = record.get('bm25_norm')
+
+        components = [
+            value
+            for value in (clip_norm, dense_norm, rerank_norm, bm_norm)
+            if value is not None
+        ]
+        if not components:
+            continue
+
+        weight_sum = 0.0
+        fused_score = 0.0
+
+        if clip_norm is not None:
+            fused_score += clip_norm * IMAGE_CLIP_WEIGHT
+            weight_sum += IMAGE_CLIP_WEIGHT
+        if dense_norm is not None:
+            fused_score += dense_norm * IMAGE_DENSE_WEIGHT
+            weight_sum += IMAGE_DENSE_WEIGHT
+        if rerank_norm is not None:
+            fused_score += rerank_norm * IMAGE_RERANK_WEIGHT
+            weight_sum += IMAGE_RERANK_WEIGHT
+        if bm_norm is not None:
+            fused_score += bm_norm * IMAGE_LEXICAL_WEIGHT
+            weight_sum += IMAGE_LEXICAL_WEIGHT
+
+        if weight_sum > 0:
+            final_score = clamp_unit(fused_score / weight_sum)
+        else:
+            final_score = clamp_unit(max(components))
+
+        record['final_score'] = final_score
+        record['confidence'] = final_score
+        record['mixed_score'] = final_score
+        record['quality_score'] = final_score
+        record['metrics']['image'].update(
+            {
+                'confidence': final_score,
+                'clip_score': record.get('clip_score'),
+                'clip_score_normalized': record.get('clip_norm'),
+            }
+        )
+
+        breakdown: Dict[str, float] = {}
+        if clip_norm is not None:
+            breakdown['clip'] = clip_norm
+        if dense_norm is not None:
+            breakdown['dense'] = dense_norm
+        if rerank_norm is not None:
+            breakdown['reranker'] = rerank_norm
+        if bm_norm is not None:
+            breakdown['lexical'] = bm_norm
+        record['score_breakdown'] = breakdown or None
+
+        if weight_sum > 0:
+            weights: Dict[str, float] = {}
+            if clip_norm is not None:
+                weights['clip'] = IMAGE_CLIP_WEIGHT / weight_sum
+            if dense_norm is not None:
+                weights['dense'] = IMAGE_DENSE_WEIGHT / weight_sum
+            if rerank_norm is not None:
+                weights['reranker'] = IMAGE_RERANK_WEIGHT / weight_sum
+            if bm_norm is not None:
+                weights['lexical'] = IMAGE_LEXICAL_WEIGHT / weight_sum
+            record['score_weights'] = weights or None
+        else:
+            record['score_weights'] = None
+
+        if max(components) < IMAGE_MIN_COMPONENT_SCORE:
+            continue
         if record['final_score'] < IMAGE_MIN_FINAL_SCORE:
             continue
+
+        filtered.append(record)
+
+    if not filtered:
+        return []
+
+    filtered.sort(
+        key=lambda item: (
+            item.get('final_score', 0.0),
+            item.get('rerank_norm') or 0.0,
+            item.get('clip_norm') or 0.0,
+            item.get('embedding_norm') or 0.0,
+        ),
+        reverse=True,
+    )
+
+    matches: List[Dict[str, Any]] = []
+    for rank, record in enumerate(filtered[:top_k], start=1):
+        record['rank'] = rank
+        record['metrics']['image']['rank'] = rank
+
+        if any(
+            record.get(key) is not None
+            for key in ('embedding_norm', 'bm25_norm', 'rerank_norm')
+        ):
+            semantic_metrics = {
+                'rank': rank,
+                'embedding_score': record.get('embedding_score'),
+                'embedding_score_normalized': record.get('embedding_norm'),
+                'bm25s_raw_score': record.get('bm25_raw'),
+                'bm25s_score': record.get('bm25_norm'),
+                'rerank_score': record.get('rerank_score'),
+                'rerank_score_normalized': record.get('rerank_norm'),
+                'dense_rank': record.get('dense_rank'),
+                'lexical_rank': record.get('lexical_rank'),
+                'rerank_rank': record.get('rerank_rank'),
+                'mixed_score': record.get('final_score'),
+            }
+            record.setdefault('metrics', {})
+            record['metrics']['semantic'] = semantic_metrics
+
+        record['sources'] = sorted(record.get('_sources') or [])
+        record.pop('_sources', None)
+        record.pop('context_text', None)
         matches.append(record)
-        if len(matches) >= top_k:
-            break
 
     return matches
 
@@ -1259,15 +1658,16 @@ async def search_vectors_post(request: SearchRequest) -> Dict[str, Any]:
                 if candidate in selected_candidates:
                     continue
                 final_score = candidate.get('final_score') or 0.0
-                if final_score >= max(TEXT_MIN_FINAL_SCORE - 0.05, 0.35):
+                if final_score >= TEXT_MIN_FINAL_SCORE:
                     selected_candidates.append(candidate)
                 if len(selected_candidates) >= desired_limit:
                     break
 
-        if not selected_candidates and text_candidates:
-            selected_candidates = text_candidates[:min(len(text_candidates), desired_limit)]
-        else:
-            selected_candidates = selected_candidates[:desired_limit]
+        selected_candidates = [
+            candidate
+            for candidate in selected_candidates[:desired_limit]
+            if (candidate.get('final_score') or 0.0) >= TEXT_MIN_FINAL_SCORE
+        ]
         seen_semantic_keys: Set[Tuple] = set()
         for candidate in selected_candidates:
             key = build_chunk_key(candidate.get('meta', {}))

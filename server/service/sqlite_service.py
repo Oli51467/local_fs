@@ -619,6 +619,45 @@ class SQLiteManager:
                     'vector_id': row[6]
                 }
             return None
+
+    def get_chunk_by_document_and_index(
+        self,
+        document_id: int,
+        chunk_index: int,
+    ) -> Optional[Dict[str, Any]]:
+        """根据文档ID与块序号获取文档块内容。"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    d.id AS document_id,
+                    d.filename,
+                    d.file_path,
+                    d.file_type,
+                    dc.chunk_index,
+                    dc.content,
+                    dc.vector_id
+                FROM document_chunks dc
+                JOIN documents d ON d.id = dc.document_id
+                WHERE dc.document_id = ? AND dc.chunk_index = ?
+                LIMIT 1
+                """,
+                (document_id, chunk_index),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return {
+                "document_id": row["document_id"],
+                "filename": row["filename"],
+                "file_path": row["file_path"],
+                "file_type": row["file_type"],
+                "chunk_index": row["chunk_index"],
+                "content": row["content"],
+                "vector_id": row["vector_id"],
+            }
     
     def get_document_chunks(self, document_id: int) -> List[Dict]:
         """获取指定文档的所有块"""
