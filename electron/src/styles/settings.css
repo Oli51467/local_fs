@@ -105,6 +105,25 @@
   padding-top: 4px;
 }
 
+.setting-item--select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.setting-item--select-row .settings-input-label {
+  flex: 1;
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-color);
+  white-space: nowrap;
+}
+
+.setting-item--select-row .settings-select {
+  flex: 0 0 260px;
+}
+
 .setting-item-text {
   display: flex;
   flex-direction: column;
@@ -126,6 +145,17 @@
 
 .dark-mode .setting-item-desc {
   color: rgba(226, 232, 240, 0.7);
+}
+
+.settings-inline-desc {
+  margin: 6px 0 10px;
+  font-size: 13px;
+  color: var(--text-muted, #64748b);
+  line-height: 1.5;
+}
+
+.dark-mode .settings-inline-desc {
+  color: rgba(226, 232, 240, 0.68);
 }
 
 .settings-hint-message {
@@ -172,6 +202,13 @@
   color: var(--text-color);
   font-size: 14px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.settings-select--compact {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 14px;
 }
 
 .settings-select:focus {

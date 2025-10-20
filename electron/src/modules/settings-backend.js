@@ -16,7 +16,8 @@ class SettingsBackendModule {
       siliconflwApiKey: '',
       customModels: [],
       enableModelSummary: false,
-      modelSummarySelection: null
+      modelSummarySelection: null,
+      enableSummarySearch: false
     };
     
     // 初始化配置管理器

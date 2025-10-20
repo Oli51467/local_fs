@@ -23,7 +23,8 @@ class ConfigManager extends EventEmitter {
       siliconflwApiKey: '',
       customModels: [],
       enableModelSummary: false,
-      modelSummarySelection: null
+      modelSummarySelection: null,
+      enableSummarySearch: false
     };
 
     this.ensureSettingsDirExists();

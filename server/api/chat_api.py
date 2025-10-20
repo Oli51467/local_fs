@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 import requests
 from requests.exceptions import RequestException, Timeout
 import numpy as np
+import faiss
 
 from config.config import ServerConfig
 from api.status_api import status_broadcaster
@@ -69,6 +70,12 @@ CLIP_STRONG_THRESHOLD = 0.58
 CLIP_TEXT_TRUNCATE = 512
 REFERENCE_SNIPPET_MAX_CHARS = 320
 CHAT_PROGRESS_TOTAL_STEPS = 6
+SUMMARY_SEARCH_SCORE_THRESHOLD = 0.7
+SUMMARY_SEARCH_CANDIDATE_LIMIT = 20
+SUMMARY_SEARCH_MATCH_LIMIT = 3
+SUMMARY_VECTOR_TYPE = "summary"
+SUMMARY_SEARCH_VECTOR_WEIGHT = 0.6
+SUMMARY_SEARCH_LEXICAL_WEIGHT = 0.4
 
 
 def _schedule_status_broadcast(
@@ -208,6 +215,9 @@ class ChatRequest(BaseModel):
     )
     client_request_id: Optional[str] = Field(
         default=None, description="客户端生成的请求标识，用于跟踪进度"
+    )
+    use_summary_search: bool = Field(
+        default=False, description="是否优先基于文档主题摘要进行检索"
     )
 
 
@@ -403,6 +413,360 @@ def _generate_conversation_title(question: str) -> str:
     if len(normalized) > 60:
         return normalized[:57] + "..."
     return normalized
+
+
+def _retrieve_chunks_from_document_summaries(
+    question: str,
+) -> Optional[Tuple[List[RetrievedChunk], Dict[str, Any]]]:
+    assert (
+        embedding_service is not None
+        and faiss_manager is not None
+        and sqlite_manager is not None
+    )
+
+    normalized_question = question.strip()
+    if not normalized_question:
+        return None
+
+    summary_entries: List[Tuple[int, Dict[str, Any]]] = []
+    metadata_source = getattr(faiss_manager, "metadata", []) or []
+    for idx, metadata in enumerate(metadata_source):
+        if not isinstance(metadata, dict):
+            continue
+        vector_type = metadata.get("vector_type") or metadata.get("vectorType")
+        if vector_type != SUMMARY_VECTOR_TYPE:
+            continue
+        summary_entries.append((idx, metadata))
+
+    if not summary_entries:
+        return None
+
+    try:
+        query_vector = embedding_service.encode_text(normalized_question)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("基于摘要检索时生成查询向量失败: %s", exc)
+        return None
+
+    query_array = np.asarray(query_vector, dtype=np.float32)
+    if query_array.ndim == 2:
+        query_array = query_array.reshape(-1)
+    if query_array.ndim != 1 or query_array.size == 0:
+        return None
+    query_matrix = query_array.reshape(1, -1)
+    try:
+        faiss.normalize_L2(query_matrix)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.debug("基于摘要检索时归一化查询向量失败: %s", exc)
+        return None
+    query_vec = query_matrix[0]
+
+    summary_vectors: List[np.ndarray] = []
+    summary_metadata: List[Dict[str, Any]] = []
+    summary_indices: List[int] = []
+
+    for idx, metadata in summary_entries:
+        try:
+            vector = faiss_manager.index.reconstruct(idx)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug(
+                "基于摘要检索时重建摘要向量失败 (vector_id=%s): %s",
+                metadata.get("vector_id"),
+                exc,
+            )
+            continue
+        if vector is None:
+            continue
+        vector_array = np.asarray(vector, dtype=np.float32)
+        if vector_array.ndim == 2:
+            vector_array = vector_array.reshape(-1)
+        if vector_array.ndim != 1 or vector_array.size != query_vec.size:
+            continue
+        summary_vectors.append(vector_array)
+        summary_metadata.append(metadata)
+        summary_indices.append(idx)
+
+    if not summary_vectors:
+        return None
+
+    summary_matrix = np.vstack(summary_vectors)
+    try:
+        faiss.normalize_L2(summary_matrix)
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+    scores = summary_matrix @ query_vec
+    if scores.size == 0:
+        return None
+
+    ranked_idx = np.argsort(scores)[::-1][:SUMMARY_SEARCH_CANDIDATE_LIMIT]
+    if ranked_idx.size == 0:
+        return None
+
+    summary_details_cache: Dict[int, Optional[Dict[str, Any]]] = {}
+    candidates: List[Dict[str, Any]] = []
+    seen_documents: Set[int] = set()
+
+    for order in ranked_idx:
+        score_raw = float(scores[order])
+        metadata = summary_metadata[order]
+        vector_index = summary_indices[order]
+        doc_id_raw = metadata.get("document_id")
+        try:
+            document_id = int(doc_id_raw)
+        except (TypeError, ValueError):
+            continue
+        if document_id in seen_documents:
+            continue
+        seen_documents.add(document_id)
+
+        summary_record: Optional[Dict[str, Any]]
+        if document_id in summary_details_cache:
+            summary_record = summary_details_cache[document_id]
+        else:
+            try:
+                summary_record = sqlite_manager.get_document_summary(document_id)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "基于摘要检索时获取摘要记录失败 (document_id=%s): %s", document_id, exc
+                )
+                summary_record = None
+            summary_details_cache[document_id] = summary_record
+
+        summary_text = ""
+        if summary_record and isinstance(summary_record.get("summary_text"), str):
+            summary_text = summary_record.get("summary_text") or ""
+        elif isinstance(metadata.get("summary_preview"), str):
+            summary_text = metadata.get("summary_preview") or ""
+
+        file_path = (metadata.get("file_path") or "").strip()
+        filename = (metadata.get("filename") or "").strip()
+        if not filename and file_path:
+            filename = Path(file_path).name
+
+        score_clamped = max(0.0, min(1.0, score_raw))
+        candidates.append(
+            {
+                "document_id": document_id,
+                "vector_score_raw": score_raw,
+                "vector_score_norm": score_clamped,
+                "metadata": metadata,
+                "vector_index": vector_index,
+                "summary_text": summary_text or "",
+                "file_path": file_path,
+                "filename": filename,
+            }
+        )
+
+    if not candidates:
+        return None
+
+    bm25_available = (
+        bm25s_service is not None and bm25s_service.is_available()
+    )
+    lexical_scores: List[float] = [0.0 for _ in candidates]
+    if bm25_available:
+        try:
+            documents = [candidate["summary_text"] or "" for candidate in candidates]
+            lexical_scores = bm25s_service.score_documents(
+                normalized_question, documents
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug("基于摘要检索时计算BM25分数失败: %s", exc)
+            lexical_scores = [0.0 for _ in candidates]
+
+    vector_weight = SUMMARY_SEARCH_VECTOR_WEIGHT
+    lexical_weight = SUMMARY_SEARCH_LEXICAL_WEIGHT if bm25_available else 0.0
+    weight_sum = vector_weight + lexical_weight
+    if weight_sum <= 0.0:
+        weight_sum = 1.0
+
+    for idx, candidate in enumerate(candidates):
+        lexical_raw = float(lexical_scores[idx]) if idx < len(lexical_scores) else 0.0
+        lexical_norm = 0.0
+        if lexical_raw > 0.0:
+            lexical_norm = float(lexical_raw / (lexical_raw + 1.0))
+        candidate["lexical_score_raw"] = lexical_raw if bm25_available else None
+        candidate["lexical_score_norm"] = lexical_norm if bm25_available else None
+        combined = (
+            candidate["vector_score_norm"] * vector_weight
+            + (lexical_norm * lexical_weight if bm25_available else 0.0)
+        ) / weight_sum
+        candidate["final_score"] = combined
+
+    candidates.sort(
+        key=lambda item: (
+            item.get("final_score", 0.0),
+            item.get("vector_score_norm", 0.0),
+            item.get("lexical_score_norm") or 0.0,
+        ),
+        reverse=True,
+    )
+
+    matched_documents: List[Dict[str, Any]] = []
+    retrieved_chunks: List[RetrievedChunk] = []
+    selected = [
+        candidate
+        for candidate in candidates
+        if candidate.get("final_score", 0.0) >= SUMMARY_SEARCH_SCORE_THRESHOLD
+    ][:SUMMARY_SEARCH_MATCH_LIMIT]
+
+    if not selected:
+        return None
+
+    for rank, candidate in enumerate(selected, start=1):
+        document_id = candidate["document_id"]
+        try:
+            doc_chunks = sqlite_manager.get_document_chunks(document_id)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug(
+                "基于摘要检索时获取文档块失败 (document_id=%s): %s", document_id, exc
+            )
+            continue
+        if not doc_chunks:
+            continue
+
+        match_info = {
+            "document_id": document_id,
+            "score": candidate["final_score"],
+            "vector_score": candidate["vector_score_norm"],
+            "vector_raw_score": candidate["vector_score_raw"],
+            "lexical_score": candidate.get("lexical_score_norm"),
+            "lexical_raw_score": candidate.get("lexical_score_raw"),
+            "vector_id": candidate["metadata"].get("vector_id"),
+            "file_path": candidate["file_path"],
+            "filename": candidate["filename"],
+            "vector_index": candidate["vector_index"],
+            "summary_preview": candidate["metadata"].get("summary_preview"),
+            "summary_length": candidate["metadata"].get("summary_length"),
+            "summary_model_source": candidate["metadata"].get("summary_model_source"),
+            "summary_model_id": candidate["metadata"].get("summary_model_id"),
+            "summary_model_name": candidate["metadata"].get("summary_model_name"),
+            "summary_model_provider": candidate["metadata"].get("summary_model_provider"),
+            "summary_text": candidate.get("summary_text") or "",
+            "rank": rank,
+        }
+        matched_documents.append(match_info)
+
+        summary_text = match_info.get("summary_text") or ""
+        if summary_text.strip():
+            summary_chunk = RetrievedChunk(
+                document_id=document_id,
+                filename=candidate["filename"] or "",
+                file_path=candidate["file_path"] or "",
+                chunk_index=-1,
+                content=summary_text,
+                score=float(candidate["final_score"]),
+                embedding_score=candidate["vector_score_raw"],
+                embedding_score_normalized=candidate["vector_score_norm"],
+                bm25_score=(
+                    candidate.get("lexical_score_norm") if bm25_available else None
+                ),
+                bm25_raw_score=(
+                    candidate.get("lexical_score_raw") if bm25_available else None
+                ),
+                rerank_score=None,
+                rerank_score_normalized=None,
+                vector_id=candidate["metadata"].get("vector_id"),
+                sources=["summary"],
+                score_breakdown={
+                    "summary_vector": candidate["vector_score_norm"],
+                    **(
+                        {"summary_lexical": candidate["lexical_score_norm"]}
+                        if bm25_available
+                        and candidate.get("lexical_score_norm") is not None
+                        else {}
+                    ),
+                },
+                score_weights={
+                    "summary_vector": vector_weight / weight_sum,
+                    **(
+                        {"summary_lexical": lexical_weight / weight_sum}
+                        if bm25_available and lexical_weight > 0
+                        else {}
+                    ),
+                },
+                dense_rank=None,
+                lexical_rank=None,
+                rerank_rank=None,
+                clip_score=None,
+                clip_score_normalized=None,
+                clip_rank=None,
+            )
+            retrieved_chunks.append(summary_chunk)
+
+        for chunk in doc_chunks:
+            chunk_filename = chunk.get("filename") or candidate["filename"]
+            chunk_path = chunk.get("file_path") or candidate["file_path"]
+            try:
+                chunk_index = int(chunk.get("chunk_index") or 0)
+            except (TypeError, ValueError):
+                chunk_index = 0
+            score_breakdown = {
+                "summary_vector": candidate["vector_score_norm"],
+            }
+            if bm25_available and candidate.get("lexical_score_norm") is not None:
+                score_breakdown["summary_lexical"] = candidate["lexical_score_norm"]
+
+            score_weights = {
+                "summary_vector": vector_weight / weight_sum,
+            }
+            if bm25_available and lexical_weight > 0:
+                score_weights["summary_lexical"] = lexical_weight / weight_sum
+
+            retrieved_chunks.append(
+                RetrievedChunk(
+                    document_id=document_id,
+                    filename=chunk_filename or "",
+                    file_path=chunk_path or "",
+                    chunk_index=chunk_index,
+                    content=chunk.get("content") or "",
+                    score=float(candidate["final_score"]),
+                    embedding_score=candidate["vector_score_raw"],
+                    embedding_score_normalized=candidate["vector_score_norm"],
+                    bm25_score=(
+                        candidate.get("lexical_score_norm")
+                        if bm25_available
+                        else None
+                    ),
+                    bm25_raw_score=(
+                        candidate.get("lexical_score_raw")
+                        if bm25_available
+                        else None
+                    ),
+                    rerank_score=None,
+                    rerank_score_normalized=None,
+                    vector_id=chunk.get("vector_id"),
+                    sources=["summary"],
+                    score_breakdown=score_breakdown,
+                    score_weights=score_weights,
+                    dense_rank=None,
+                    lexical_rank=None,
+                    rerank_rank=None,
+                    clip_score=None,
+                    clip_score_normalized=None,
+                    clip_rank=None,
+                )
+            )
+
+    if not matched_documents or not retrieved_chunks:
+        return None
+
+    matched_vector_indices = [
+        match.get("vector_index")
+        for match in matched_documents
+        if isinstance(match.get("vector_index"), int)
+    ]
+    retrieval_context = {
+        "mode": "summary",
+        "summary_matches": matched_documents,
+        "summary_threshold": SUMMARY_SEARCH_SCORE_THRESHOLD,
+        "summary_vector_indices": matched_vector_indices,
+        "summary_vector_weight": vector_weight,
+        "summary_lexical_weight": lexical_weight,
+        "summary_search_applied": True,
+        "summary_candidate_total": len(candidates),
+    }
+    return retrieved_chunks, retrieval_context
 
 
 def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
@@ -1156,6 +1520,7 @@ def _build_llm_messages(
     chunks: List[RetrievedChunk],
     references: List[ReferenceDocument],
     selection: ModelSelection,
+    retrieval_context: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     system_prompt = (
         "你是一名资深的企业知识助手，会综合提供的资料与自身掌握的通用知识回答问题。\n"
@@ -1182,11 +1547,29 @@ def _build_llm_messages(
     context_parts: List[str] = []
 
     reference_material = _format_reference_material(references, chunks)
+    summary_mode = (
+        retrieval_context is not None
+        and retrieval_context.get("mode") == "summary"
+        and bool(reference_material)
+    )
+    summary_matches = (
+        (retrieval_context or {}).get("summary_matches") if summary_mode else None
+    )
     if reference_material:
-        knowledge_text = (
-            "以下是与用户问题可能相关的文档资料（编号已给出，若引用请基于编号确认来源）：\n"
-            f"{reference_material}\n\n"
-        )
+        if summary_mode:
+            summary_count = len(summary_matches) if summary_matches else 0
+            prefix = "以下文档依据主题概述自动匹配，已按相关性排序"
+            if summary_count:
+                prefix = f"{prefix}（共 {summary_count} 篇）"
+            knowledge_text = (
+                f"{prefix}，编号已给出，若引用请基于编号确认来源：\n"
+                f"{reference_material}\n\n"
+            )
+        else:
+            knowledge_text = (
+                "以下是与用户问题可能相关的文档资料（编号已给出，若引用请基于编号确认来源）：\n"
+                f"{reference_material}\n\n"
+            )
         citation_instruction = (
             "如果你在答案中参考了上述任何文档，请在回答末尾另起一行，严格使用“参考文档: 文档-1,文档-3”的格式列出你真正使用过的文档编号，按重要性排序且不要重复。"
             "如果未使用任何文档，请在该行写“参考文档: 无”。除了这一行，不要在正文中输出诸如 [1]、(1) 或其他编号引用。"
@@ -1238,6 +1621,7 @@ def _prepare_chat_context(
     conversation_id: Optional[int],
     top_k: int,
     selection: ModelSelection,
+    use_summary_search: bool = False,
     client_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     _ensure_dependencies(require_llm=True)
@@ -1281,7 +1665,38 @@ def _prepare_chat_context(
         step=2,
     )
 
-    chunks = _retrieve_chunks(normalized_question, top_k)
+    retrieval_context: Dict[str, Any] = {
+        "mode": "baseline",
+        "summary_search_requested": bool(use_summary_search),
+        "summary_search_applied": False,
+    }
+    chunks: List[RetrievedChunk] = []
+    summary_context: Optional[Dict[str, Any]] = None
+
+    if use_summary_search:
+        summary_payload = _retrieve_chunks_from_document_summaries(normalized_question)
+        if summary_payload:
+            chunks, summary_context = summary_payload
+            retrieval_context = {
+                **summary_context,
+                "summary_search_requested": True,
+                "summary_search_applied": summary_context.get(
+                    "summary_search_applied", True
+                ),
+            }
+            logger.debug(
+                "基于文档摘要检索命中 %d 篇文档",
+                len(summary_context.get("summary_matches", [])),
+            )
+        else:
+            chunks = _retrieve_chunks(normalized_question, top_k)
+            retrieval_context["summary_fallback"] = True
+    else:
+        chunks = _retrieve_chunks(normalized_question, top_k)
+
+    if retrieval_context.get("mode") != "summary":
+        retrieval_context["mode"] = "baseline"
+
     references = _build_references_from_chunks(chunks)
 
     selection_data = selection.model_dump(exclude={"api_key"}, exclude_none=True)
@@ -1294,6 +1709,9 @@ def _prepare_chat_context(
         "references": [],
         "selected_reference_ids": [],
         "reference_mode": "retrieval" if references else "llm_only",
+        "retrieval_mode": retrieval_context.get("mode"),
+        "retrieval_context": retrieval_context,
+        "use_summary_search": bool(use_summary_search),
     }
     if client_request_id:
         assistant_metadata["client_request_id"] = client_request_id
@@ -1319,6 +1737,7 @@ def _prepare_chat_context(
         chunks,
         references,
         selection,
+        retrieval_context=retrieval_context,
     )
 
     return {
@@ -1331,6 +1750,7 @@ def _prepare_chat_context(
         "llm_messages": llm_messages,
         "selection": selection,
         "client_request_id": client_request_id,
+        "retrieval_context": retrieval_context,
     }
 
 
@@ -1370,7 +1790,8 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
             payload.conversation_id,
             payload.top_k,
             payload.model,
-            payload.client_request_id,
+            use_summary_search=payload.use_summary_search,
+            client_request_id=payload.client_request_id,
         )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, str) else "请求无效"
@@ -1562,7 +1983,8 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
             payload.conversation_id,
             payload.top_k,
             payload.model,
-            payload.client_request_id,
+            use_summary_search=payload.use_summary_search,
+            client_request_id=payload.client_request_id,
         )
     except HTTPException:
         raise

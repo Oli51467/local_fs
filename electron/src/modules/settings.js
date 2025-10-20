@@ -58,14 +58,15 @@ class SettingsModule {
     this.apiSettingsOriginal = { ...this.apiSettings };
     this.apiSettingsKeys = Object.keys(this.apiSettings);
     this.apiSettingsDirty = false;
-   this.apiSettingsLoading = false;
-   this.apiStatusTimer = null;
+    this.apiSettingsLoading = false;
+    this.apiStatusTimer = null;
 
-   this.currentSettings = {};
-   this.customModels = [];
+    this.currentSettings = {};
+    this.customModels = [];
     this.enableModelSummary = false;
     this.modelSummarySelection = null;
     this.availableSummaryModels = [];
+    this.enableSummarySearch = false;
     this.modelSummaryRegistryDisposer = null;
     this.modelSummaryToggleEl = null;
     this.modelSummarySelectEl = null;
@@ -74,7 +75,8 @@ class SettingsModule {
     this.modelSummarySelectorEl = null;
     this.modelSummarySectionEl = null;
     this.modelSummarySaveTimer = null;
-    
+    this.summarySearchToggleEl = null;
+
     this.init();
   }
 
@@ -84,6 +86,7 @@ class SettingsModule {
   async init() {
     await this.loadSettings();
     this.setupModelSummaryControls();
+    this.setupSummarySearchControl();
     this.bindEvents();
     this.setupConfigListener();
     await this.loadRetrievalSettings();
@@ -106,8 +109,10 @@ class SettingsModule {
         this.customModels = this.normalizeCustomModels(newConfig?.customModels);
         this.enableModelSummary = Boolean(newConfig?.enableModelSummary);
         this.modelSummarySelection = this.sanitizeModelSelection(newConfig?.modelSummarySelection);
+        this.enableSummarySearch = Boolean(newConfig?.enableSummarySearch);
         this.refreshSummaryModelOptions();
         this.syncSummaryControls();
+        this.syncSummarySearchControl();
         // 不需要保存，因为配置已经在主进程中更新了
       });
     }
@@ -133,7 +138,7 @@ class SettingsModule {
     this.toggleTreeBtn.addEventListener('click', () => {
       this.showFilePage();
     });
-    
+
     // 搜索按钮点击事件已在renderer.js中处理，这里不需要重复绑定
 
     this.bindApiSettingsEvents();
@@ -171,6 +176,7 @@ class SettingsModule {
       this.customModels = this.normalizeCustomModels(settings?.customModels);
       this.enableModelSummary = Boolean(settings?.enableModelSummary);
       this.modelSummarySelection = this.sanitizeModelSelection(settings?.modelSummarySelection);
+      this.enableSummarySearch = Boolean(settings?.enableSummarySearch);
       // 确保标题栏主题在应用启动时正确应用
       await window.fsAPI.setTitleBarTheme(this.isDarkMode);
     } catch (error) {
@@ -186,6 +192,7 @@ class SettingsModule {
       darkMode: this.isDarkMode,
       customModels: this.customModels,
       enableModelSummary: this.enableModelSummary,
+      enableSummarySearch: this.enableSummarySearch,
       modelSummarySelection: this.sanitizeModelSelection(this.modelSummarySelection),
       ...overrides
     };
@@ -583,10 +590,10 @@ class SettingsModule {
     if (configKey === 'BM25S_WEIGHT' || configKey === 'EMBEDDING_WEIGHT') {
       const otherKey = configKey === 'BM25S_WEIGHT' ? 'EMBEDDING_WEIGHT' : 'BM25S_WEIGHT';
       const otherValue = Math.max(0, Math.min(1, 1 - parsedValue)); // 确保另一个值在0-1范围内
-      
+
       // 更新另一个滑块的值
       this.retrievalConfig[otherKey] = otherValue;
-      
+
       // 更新另一个滑块的UI
       const otherInputEl = this.retrievalInputs[otherKey];
       if (otherInputEl) {
@@ -969,6 +976,16 @@ class SettingsModule {
     this.registerModelSummaryRegistryListener();
   }
 
+  setupSummarySearchControl() {
+    this.summarySearchToggleEl = document.getElementById('enable-summary-search-toggle');
+    if (this.summarySearchToggleEl) {
+      this.summarySearchToggleEl.addEventListener('change', () => {
+        this.handleSummarySearchToggleChange();
+      });
+    }
+    this.syncSummarySearchControl();
+  }
+
   registerModelSummaryRegistryListener() {
     if (this.modelSummaryRegistryDisposer) {
       try {
@@ -1161,15 +1178,12 @@ class SettingsModule {
       }
     }
 
+    this.syncSummarySearchControl();
+
     if (hasModels) {
       if (missingApiKey) {
         this.setModelSummaryHint('所选模型需要 API Key，请先在“API-Key”部分填写后再启用。', 'warning');
         return;
-      }
-      if (this.enableModelSummary) {
-        this.setModelSummaryHint('选择用于生成文档主题概述的模型。', 'info');
-      } else {
-        this.setModelSummaryHint('启用后，挂载文档时会自动生成并保存文档主题概述。', 'info');
       }
     } else {
       this.setModelSummaryHint('暂无可用模型，请在“模型库”页面添加模型后再试。', 'warning');
@@ -1214,6 +1228,16 @@ class SettingsModule {
     this.persistModelSummarySettings();
   }
 
+  handleSummarySearchToggleChange() {
+    if (!this.summarySearchToggleEl) {
+      return;
+    }
+    const shouldEnable = Boolean(this.summarySearchToggleEl.checked);
+    this.enableSummarySearch = shouldEnable;
+    this.persistModelSummarySettings({ silent: true });
+    this.syncSummarySearchControl();
+  }
+
   handleSummaryModelChange(event) {
     const selectedKey = event?.target?.value;
     if (!selectedKey) {
@@ -1241,6 +1265,14 @@ class SettingsModule {
     this.persistModelSummarySettings({ silent: !this.enableModelSummary || missingApiKey });
   }
 
+  syncSummarySearchControl() {
+    if (!this.summarySearchToggleEl) {
+      return;
+    }
+    this.summarySearchToggleEl.disabled = false;
+    this.summarySearchToggleEl.checked = this.enableSummarySearch;
+  }
+
   async persistModelSummarySettings(options = {}) {
     const silent = Boolean(options?.silent);
     if (this.modelSummarySaveTimer) {
@@ -1252,7 +1284,8 @@ class SettingsModule {
     }
     const result = await this.saveSettings({
       enableModelSummary: this.enableModelSummary,
-      modelSummarySelection: this.sanitizeModelSelection(this.modelSummarySelection)
+      modelSummarySelection: this.sanitizeModelSelection(this.modelSummarySelection),
+      enableSummarySearch: this.enableSummarySearch
     });
     if (silent) {
       return;
@@ -1339,6 +1372,10 @@ class SettingsModule {
         api_key: apiKey || undefined
       }
     };
+  }
+
+  isSummarySearchEnabled() {
+    return Boolean(this.enableSummarySearch);
   }
 
   normalizeCustomModels(models) {

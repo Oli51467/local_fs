@@ -544,6 +544,19 @@ class ChatModule {
     return normalized;
   }
 
+  shouldUseSummarySearch() {
+    const settingsModule = window.settingsModule;
+    if (!settingsModule || typeof settingsModule.isSummarySearchEnabled !== 'function') {
+      return false;
+    }
+    try {
+      return Boolean(settingsModule.isSummarySearchEnabled());
+    } catch (error) {
+      console.warn('读取主题检索配置失败:', error);
+      return false;
+    }
+  }
+
   normalizeModelList(models) {
     if (!Array.isArray(models) || models.length === 0) {
       return [];
@@ -1940,7 +1953,9 @@ class ChatModule {
   }
 
   renderReferenceSection(references, metadata) {
-    if (!Array.isArray(references) || !references.length) {
+    const summaryCard = this.createSummaryReferenceCard(metadata);
+    const referenceList = Array.isArray(references) ? references : [];
+    if (!summaryCard && !referenceList.length) {
       return null;
     }
     const section = document.createElement('div');
@@ -1954,7 +1969,11 @@ class ChatModule {
     const list = document.createElement('div');
     list.className = 'chat-reference-list';
 
-    references.forEach((reference) => {
+    if (summaryCard) {
+      list.appendChild(summaryCard);
+    }
+
+    referenceList.forEach((reference) => {
       const item = this.createReferenceItem(reference, metadata);
       if (item) {
         list.appendChild(item);
@@ -1967,6 +1986,106 @@ class ChatModule {
 
     section.appendChild(list);
     return section;
+  }
+
+  createSummaryReferenceCard(metadata) {
+    if (!metadata || typeof metadata !== 'object') {
+      return null;
+    }
+    const useSummarySearch = Boolean(metadata.use_summary_search);
+    const retrievalContext = metadata.retrieval_context || {};
+    if (!useSummarySearch || retrievalContext.mode !== 'summary' || !retrievalContext.summary_search_applied) {
+      return null;
+    }
+    const rawMatches = Array.isArray(retrievalContext.summary_matches) ? retrievalContext.summary_matches : [];
+    if (!rawMatches.length) {
+      return null;
+    }
+
+    const matches = rawMatches.map((match, index) => {
+      if (!match || typeof match !== 'object') {
+        return null;
+      }
+      const summaryText = typeof match.summary_text === 'string' ? match.summary_text : (match.summary_preview || '');
+      return {
+        name: (match.filename || '').trim() || `文档-${match.rank || index + 1}`,
+        summary: summaryText,
+        score: Number.isFinite(match.score) ? Number(match.score) : null,
+        vectorScore: Number.isFinite(match.vector_score) ? Number(match.vector_score) : null,
+        lexicalScore: Number.isFinite(match.lexical_score) ? Number(match.lexical_score) : null,
+        modelName: (match.summary_model_name || '').trim(),
+      };
+    }).filter(Boolean);
+
+    if (!matches.length) {
+      return null;
+    }
+
+    const card = document.createElement('div');
+    card.className = 'chat-reference-item is-summary';
+
+    const header = document.createElement('div');
+    header.className = 'chat-reference-summary-header';
+    const title = document.createElement('span');
+    title.className = 'chat-reference-summary-title';
+    title.textContent = '参考文档主题';
+    header.appendChild(title);
+
+    const summaryMeta = document.createElement('span');
+    summaryMeta.className = 'chat-reference-summary-meta';
+    const thresholdValue = Number(retrievalContext.summary_threshold);
+    const threshold = Number.isFinite(thresholdValue) ? thresholdValue.toFixed(2) : '0.70';
+    summaryMeta.textContent = `命中 ${matches.length} 篇 · 阈值 ≥ ${threshold}`;
+    header.appendChild(summaryMeta);
+
+    card.appendChild(header);
+
+    const list = document.createElement('div');
+    list.className = 'chat-reference-summary-list';
+
+    matches.forEach((match) => {
+      const entry = document.createElement('div');
+      entry.className = 'chat-reference-summary-item';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'chat-reference-summary-name';
+      nameEl.textContent = match.name;
+      entry.appendChild(nameEl);
+
+      const metaParts = [];
+      if (Number.isFinite(match.score)) {
+        metaParts.push(`综合 ${match.score.toFixed(2)}`);
+      }
+      if (Number.isFinite(match.vectorScore)) {
+        metaParts.push(`语义 ${match.vectorScore.toFixed(2)}`);
+      }
+      if (Number.isFinite(match.lexicalScore)) {
+        metaParts.push(`词法 ${match.lexicalScore.toFixed(2)}`);
+      }
+      if (match.modelName) {
+        metaParts.push(`模型 ${match.modelName}`);
+      }
+
+      if (metaParts.length) {
+        const metaLine = document.createElement('div');
+        metaLine.className = 'chat-reference-summary-submeta';
+        metaLine.textContent = metaParts.join(' · ');
+        entry.appendChild(metaLine);
+      }
+
+      const textEl = document.createElement('div');
+      textEl.className = 'chat-reference-summary-text';
+      const summaryContent = match.summary && match.summary.trim()
+        ? this.buildReferenceSnippet(match.summary.trim())
+        : '暂无主题概述内容。';
+      textEl.textContent = summaryContent;
+      entry.appendChild(textEl);
+
+      list.appendChild(entry);
+    });
+
+    card.appendChild(list);
+    return card;
   }
 
   createReferenceItem(reference, metadata) {
@@ -3016,6 +3135,7 @@ class ChatModule {
       top_k: 5,
       stream: true,
       client_request_id: streamingMessage.id,
+      use_summary_search: this.shouldUseSummarySearch(),
       model: {
         source_id: this.selectedModel.sourceId,
         model_id: this.selectedModel.modelId,
