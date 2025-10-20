@@ -14,7 +14,9 @@ class SettingsBackendModule {
       kimiApiKey: '',
       claudeApiKey: '',
       siliconflwApiKey: '',
-      customModels: []
+      customModels: [],
+      enableModelSummary: false,
+      modelSummarySelection: null
     };
     
     // 初始化配置管理器

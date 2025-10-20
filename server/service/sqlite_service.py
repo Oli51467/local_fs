@@ -60,6 +60,18 @@ class SQLiteManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_document ON document_chunks(document_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_vector ON document_chunks(vector_id)")
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS document_summaries (
+                    document_id INTEGER PRIMARY KEY,
+                    summary_text TEXT NOT NULL,
+                    model_info TEXT,
+                    vector_id INTEGER,
+                    generated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (document_id) REFERENCES documents (id) ON DELETE CASCADE
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_document_summaries_vector ON document_summaries(vector_id)")
+
             # 创建文档图片表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS document_images (
@@ -207,6 +219,94 @@ class SQLiteManager:
                 ),
             )
             return cursor.lastrowid
+
+    def upsert_document_summary(
+        self,
+        document_id: int,
+        summary_text: str,
+        model_info: Optional[Dict[str, Any]],
+        vector_id: Optional[int]
+    ) -> None:
+        """插入或更新文档主题摘要记录"""
+        payload = json.dumps(model_info or {}, ensure_ascii=False)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO document_summaries (document_id, summary_text, model_info, vector_id, generated_time)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(document_id) DO UPDATE SET
+                    summary_text = excluded.summary_text,
+                    model_info = excluded.model_info,
+                    vector_id = excluded.vector_id,
+                    generated_time = CURRENT_TIMESTAMP
+                """,
+                (document_id, summary_text, payload, vector_id)
+            )
+            conn.commit()
+
+    def get_document_summary(self, document_id: int) -> Optional[Dict[str, Any]]:
+        """根据文档ID获取摘要记录"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT document_id, summary_text, model_info, vector_id, generated_time
+                FROM document_summaries
+                WHERE document_id = ?
+                """,
+                (document_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            model_info = {}
+            if row["model_info"]:
+                try:
+                    model_info = json.loads(row["model_info"])
+                except json.JSONDecodeError:
+                    model_info = {}
+            return {
+                "document_id": row["document_id"],
+                "summary_text": row["summary_text"],
+                "model_info": model_info,
+                "vector_id": row["vector_id"],
+                "generated_time": row["generated_time"],
+            }
+
+    def get_summary_vector_id_by_path(self, file_path: str) -> Optional[int]:
+        """根据文件路径获取摘要向量ID"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM documents WHERE file_path = ?", (file_path,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            document_id = row[0]
+            cursor.execute(
+                "SELECT vector_id FROM document_summaries WHERE document_id = ? AND vector_id IS NOT NULL",
+                (document_id,)
+            )
+            result = cursor.fetchone()
+            return result[0] if result else None
+
+    def get_summary_vector_ids_by_path_prefix(self, folder_path: str) -> List[int]:
+        """根据路径前缀获取摘要向量ID"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            if not folder_path.endswith('/'):
+                folder_path = f"{folder_path}/"
+            cursor.execute(
+                """
+                SELECT ds.vector_id
+                FROM document_summaries ds
+                JOIN documents d ON d.id = ds.document_id
+                WHERE ds.vector_id IS NOT NULL AND d.file_path LIKE ?
+                """,
+                (f"{folder_path}%",)
+            )
+            return [row[0] for row in cursor.fetchall()]
 
     def get_image_vector_records(
         self,
@@ -867,9 +967,20 @@ class SQLiteManager:
                 doc_id = result[0]
                 
                 # 获取所有相关的向量ID
-                cursor.execute("SELECT vector_id FROM document_chunks WHERE document_id = ? AND vector_id IS NOT NULL", (doc_id,))
+                cursor.execute(
+                    "SELECT vector_id FROM document_chunks WHERE document_id = ? AND vector_id IS NOT NULL",
+                    (doc_id,)
+                )
                 vector_ids = [row[0] for row in cursor.fetchall()]
-                
+
+                cursor.execute(
+                    "SELECT vector_id FROM document_summaries WHERE document_id = ? AND vector_id IS NOT NULL",
+                    (doc_id,)
+                )
+                summary_row = cursor.fetchone()
+                if summary_row and summary_row[0] is not None:
+                    vector_ids.append(summary_row[0])
+
                 return vector_ids
                 
         except Exception as e:
@@ -908,16 +1019,30 @@ class SQLiteManager:
                 if not folder_path.endswith('/'):
                     folder_path += '/'
                 
-                # 获取所有匹配的向量ID
-                cursor.execute("""
-                    SELECT dc.vector_id 
+                # 获取所有匹配的文本向量ID
+                cursor.execute(
+                    """
+                    SELECT dc.vector_id
                     FROM documents d
                     JOIN document_chunks dc ON d.id = dc.document_id
                     WHERE d.file_path LIKE ? AND dc.vector_id IS NOT NULL
-                """, (f"{folder_path}%",))
-                
+                    """,
+                    (f"{folder_path}%",)
+                )
                 vector_ids = [row[0] for row in cursor.fetchall()]
-                
+
+                # 获取摘要向量ID
+                cursor.execute(
+                    """
+                    SELECT ds.vector_id
+                    FROM documents d
+                    JOIN document_summaries ds ON d.id = ds.document_id
+                    WHERE d.file_path LIKE ? AND ds.vector_id IS NOT NULL
+                    """,
+                    (f"{folder_path}%",)
+                )
+                vector_ids.extend(row[0] for row in cursor.fetchall() if row[0] is not None)
+
                 return vector_ids
                 
         except Exception as e:

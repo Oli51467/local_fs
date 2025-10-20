@@ -11,6 +11,7 @@ import threading
 from datetime import datetime
 import tempfile
 from typing import Dict, Any
+import requests
 from PIL import Image
 import pypandoc
 from docx import Document
@@ -35,8 +36,11 @@ from config.config import ServerConfig, DatabaseConfig
 from api.status_api import status_broadcaster
 from model.document_request_model import (
     FileUploadRequest,
-    FileUploadResponse
+    FileUploadResponse,
+    DocumentSummaryConfig,
+    SummaryModelConfig
 )
+from service.llm_client import SiliconFlowClient, LLMClientError
 
 class UpdateDocumentPathRequest(BaseModel):
     """更新文档路径请求模型"""
@@ -72,6 +76,7 @@ class ReuploadDocumentRequest(BaseModel):
     """重新上传文档请求模型"""
     file_path: str
     force_reupload: bool = False  # 是否强制重新上传，忽略哈希检查
+    summary: Optional[DocumentSummaryConfig] = None
 
 class ReuploadDocumentResponse(BaseModel):
     """重新上传文档响应模型"""
@@ -113,12 +118,14 @@ class FolderUploadStatusResponse(BaseModel):
 class FolderOperationRequest(BaseModel):
     """文件夹挂载/取消挂载请求"""
     folder_path: str
+    summary: Optional[DocumentSummaryConfig] = None
 
 
 class FolderRemountRequest(BaseModel):
     """文件夹重新挂载请求"""
     folder_path: str
     force_reupload: bool = True
+    summary: Optional[DocumentSummaryConfig] = None
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +184,213 @@ def _clamp_progress(value: float) -> float:
         return max(0.0, min(1.0, float(value)))
     except (TypeError, ValueError):
         return 0.0
+
+
+SUMMARY_INPUT_MAX_CHARS = 12000
+SUMMARY_MAX_OUTPUT_CHARS = 500
+SUMMARY_DEFAULT_ENDPOINTS = {
+    "siliconflow": "https://api.siliconflow.cn/v1/chat/completions",
+    "openai": "https://api.openai.com/v1/chat/completions"
+}
+
+
+def _truncate_summary_input(text: str, limit: int = SUMMARY_INPUT_MAX_CHARS) -> Tuple[str, bool]:
+    normalized = (text or "").strip()
+    if not normalized:
+        return "", False
+    if len(normalized) <= limit:
+        return normalized, False
+    return normalized[:limit], True
+
+
+def _build_summary_messages(
+    filename: str,
+    truncated_text: str,
+    truncated: bool
+) -> List[Dict[str, str]]:
+    document_label = filename or "当前文档"
+    note = "以下内容可能因长度限制而截断，仅保留开头部分。\n" if truncated else ""
+    user_prompt = (
+        f"请阅读文档《{document_label}》的内容，并在不超过 {SUMMARY_MAX_OUTPUT_CHARS} 字内用中文概括其主题与核心要点。"
+        "务必输出结构紧凑的一段文字，避免使用项目符号或编号。"
+        "\n\n"
+        f"{note}文档内容如下：\n{truncated_text}"
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "你是一名资深的文档分析助手，擅长提炼企业知识。"
+                "请准确、客观地总结文档的主题、核心观点和关键信息。"
+                f"最终回答必须控制在 {SUMMARY_MAX_OUTPUT_CHARS} 字以内，且只输出总结内容本身。"
+            )
+        },
+        {
+            "role": "user",
+            "content": user_prompt
+        }
+    ]
+
+
+def _extract_summary_content(result: Dict[str, Any]) -> str:
+    choices = result.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") or {}
+    return (message.get("content") or "").strip()
+
+
+def _strip_think_tags(text: str) -> Tuple[str, bool]:
+    if not text:
+        return "", False
+    pattern = re.compile(r"<think\b[^>]*>([\s\S]*?)</think>", re.IGNORECASE)
+    cleaned, count = pattern.subn("", text)
+    return cleaned.strip(), count > 0
+
+
+def _invoke_summary_via_ollama(model: SummaryModelConfig, messages: List[Dict[str, str]]) -> str:
+    if not model.api_url:
+        raise LLMClientError("Ollama 模型缺少接口地址")
+
+    payload = {
+        "model": model.api_model,
+        "messages": messages,
+        "stream": False
+    }
+    try:
+        response = requests.post(
+            model.api_url,
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            timeout=120
+        )
+    except requests.RequestException as exc:
+        raise LLMClientError(str(exc)) from exc
+
+    if response.status_code != 200:
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        message = None
+        if isinstance(data, dict):
+            message = data.get("error") or data.get("message")
+        if not message:
+            message = response.text.strip() or f"HTTP {response.status_code}"
+        raise LLMClientError(message, status_code=response.status_code, payload=data)
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise LLMClientError("无法解析 Ollama 返回的数据") from exc
+
+    return _extract_summary_content(data)
+
+
+def _invoke_summary_via_completion_api(model: SummaryModelConfig, messages: List[Dict[str, str]]) -> str:
+    api_key = (model.api_key or "").strip()
+    if model.requires_api_key is not False and not api_key:
+        raise LLMClientError("缺少模型 API Key")
+
+    endpoint = model.api_url or SUMMARY_DEFAULT_ENDPOINTS.get(model.source_id, SUMMARY_DEFAULT_ENDPOINTS["siliconflow"])
+    client = SiliconFlowClient(endpoint=endpoint)
+    payload = {
+        "model": model.api_model,
+        "messages": messages,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "stream": False,
+        "max_tokens": 4096
+    }
+    result = client.chat_completion(api_key, payload)
+    return _extract_summary_content(result)
+
+
+def _invoke_summary_model(model: SummaryModelConfig, messages: List[Dict[str, str]]) -> str:
+    if model.source_id == "ollama":
+        return _invoke_summary_via_ollama(model, messages)
+    return _invoke_summary_via_completion_api(model, messages)
+
+
+async def generate_document_summary_if_enabled(
+    summary_request: Optional[DocumentSummaryConfig],
+    text_content: str,
+    filename: str,
+    relative_path: str
+) -> Optional[Dict[str, Any]]:
+    if not summary_request or not summary_request.enabled:
+        return None
+    model_config = summary_request.model
+    if not model_config:
+        logger.warning("启用了文档主题概括，但未提供模型信息，跳过。")
+        return None
+
+    normalized_text = (text_content or "").strip()
+    if not normalized_text:
+        logger.info("文档内容为空，跳过主题概括。")
+        return None
+
+    truncated_text, truncated = _truncate_summary_input(normalized_text)
+    messages = _build_summary_messages(filename, truncated_text, truncated)
+
+    await _broadcast_document_progress(
+        relative_path,
+        stage="生成主题",
+        message="正在概括文档主题…",
+        progress=0.52,
+        status="running"
+    )
+
+    try:
+        summary_text = _invoke_summary_model(model_config, messages)
+    except LLMClientError as exc:
+        logger.warning("生成文档主题失败: %s", exc)
+        await _broadcast_document_progress(
+            relative_path,
+            stage="生成主题",
+            message=f"生成文档主题失败：{exc}",
+            progress=0.54,
+            status="warning"
+        )
+        return None
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("生成文档主题出现异常: %s", exc)
+        await _broadcast_document_progress(
+            relative_path,
+            stage="生成主题",
+            message="生成文档主题失败，已跳过该步骤。",
+            progress=0.54,
+            status="warning"
+        )
+        return None
+
+    summary_text = (summary_text or "").strip()
+    summary_text, think_removed = _strip_think_tags(summary_text)
+    if not summary_text:
+        logger.warning("生成的文档主题为空，已跳过。")
+        return None
+
+    await _broadcast_document_progress(
+        relative_path,
+        stage="生成主题",
+        message="文档主题概括完成",
+        progress=0.56,
+        status="running"
+    )
+
+    model_dict = model_config.dict()
+    model_dict.pop("api_key", None)
+
+    return {
+        "text": summary_text,
+        "model": model_dict,
+        "input_truncated": truncated,
+        "think_removed": think_removed
+    }
+
 
 
 def _schedule_status_broadcast(payload: Dict[str, Any], keep_latest: bool = True) -> None:
@@ -1358,6 +1572,7 @@ async def upload_document(request: FileUploadRequest):
         chunks: List[str] = []
         vector_ids: List[int] = []
         chunk_ids: List[int] = []
+        summary_result: Optional[Dict[str, Any]] = None
         try:
             await _broadcast_document_progress(
                 relative_file_path,
@@ -1408,6 +1623,16 @@ async def upload_document(request: FileUploadRequest):
                     raise HTTPException(status_code=400, detail="文本分割后无有效内容")
             else:
                 logger.info("图片文件跳过文本分割流程")
+
+            if not is_image_document:
+                summary_result = await generate_document_summary_if_enabled(
+                    request.summary,
+                    text_content,
+                    filename,
+                    relative_file_path
+                )
+                if summary_result:
+                    logger.info("文档主题概括完成，摘要长度: %d 字", len(summary_result.get("text", "")))
 
             # 6. 存储文档到SQLite数据库
             if not sqlite_manager:
@@ -1476,8 +1701,9 @@ async def upload_document(request: FileUploadRequest):
                 document_id=document_id
             )
 
+            embedding_svc = embedding_service
+
             if chunks:
-                embedding_svc = embedding_service
                 if embedding_svc is None:
                     raise HTTPException(status_code=500, detail="嵌入服务未初始化")
 
@@ -1581,6 +1807,82 @@ async def upload_document(request: FileUploadRequest):
                     image_candidates=len(extracted_images)
                 )
 
+            summary_vector_id = None
+            if summary_result and summary_result.get("text"):
+                summary_text = (summary_result.get("text") or "").strip()
+                if summary_text:
+                    try:
+                        await _broadcast_document_progress(
+                            relative_file_path,
+                            stage="生成主题",
+                            message="正在保存文档主题信息…",
+                            progress=0.905,
+                            document_id=document_id
+                        )
+                        summary_embedding = None
+                        if embedding_svc is not None:
+                            try:
+                                summary_embedding = embedding_svc.encode_text(summary_text)
+                            except Exception as exc:  # pylint: disable=broad-except
+                                logger.warning("生成文档主题嵌入失败: %s", exc)
+                        if summary_embedding is not None and faiss_manager is not None:
+                            summary_metadata = {
+                                "vector_type": "summary",
+                                "document_id": document_id,
+                                "file_path": str(file_path.relative_to(project_root)),
+                                "filename": filename,
+                                "chunk_index": None,
+                                "chunk_text": summary_text,
+                                "chunk_size": len(summary_text),
+                                "summary_preview": summary_text[:200],
+                                "summary_length": len(summary_text),
+                                "file_type": file_type,
+                            }
+                            summary_metadata["summary_input_truncated"] = bool(summary_result.get("input_truncated"))
+                            summary_metadata["summary_think_removed"] = bool(summary_result.get("think_removed"))
+                            model_info = summary_result.get("model") or {}
+                            summary_metadata.update({
+                                "summary_model_source": model_info.get("source_id"),
+                                "summary_model_id": model_info.get("model_id"),
+                                "summary_model_name": model_info.get("name"),
+                                "summary_model_provider": model_info.get("provider_name"),
+                            })
+                            try:
+                                summary_vector_id = faiss_manager.add_vector(summary_embedding, summary_metadata)
+                            except Exception as exc:  # pylint: disable=broad-except
+                                summary_vector_id = None
+                                logger.warning("写入文档主题向量失败: %s", exc)
+                        model_payload = dict(summary_result.get("model") or {})
+                        if summary_result.get("input_truncated"):
+                            model_payload["input_truncated"] = True
+                        if summary_result.get("think_removed"):
+                            model_payload["think_removed"] = True
+                        sqlite_manager.upsert_document_summary(
+                            document_id=document_id,
+                            summary_text=summary_text,
+                            model_info=model_payload,
+                            vector_id=summary_vector_id
+                        )
+                        await _broadcast_document_progress(
+                            relative_file_path,
+                            stage="生成主题",
+                            message="文档主题信息已保存",
+                            progress=0.915,
+                            document_id=document_id
+                        )
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning("保存文档主题信息失败: %s", exc)
+                        await _broadcast_document_progress(
+                            relative_file_path,
+                            stage="生成主题",
+                            message="保存文档主题信息时发生错误，已跳过。",
+                            progress=0.915,
+                            status="warning",
+                            document_id=document_id
+                        )
+                else:
+                    logger.debug("文档主题内容为空，跳过保存摘要。")
+
             image_result = store_document_images(document_id, file_path, extracted_images)
             logger.info(
                 "图片处理完成: 文档ID=%s, 图片数=%d",
@@ -1615,6 +1917,10 @@ async def upload_document(request: FileUploadRequest):
                     "file_size": file_path.stat().st_size,
                     "chunks_count": len(chunks),
                     "vector_count": len(vector_ids),
+                    "summary_generated": bool(summary_result and summary_result.get("text")),
+                    "summary_vector_id": summary_vector_id if summary_result else None,
+                    "summary_length": len(summary_result.get("text", "")) if summary_result else 0,
+                    "summary_input_truncated": bool(summary_result.get("input_truncated")) if summary_result else False,
                     "image_count": image_result.get('stored', 0),
                     "image_vector_count": len(image_result.get('vector_ids', [])),
                     "image_folder": image_result.get('folder')
@@ -1748,7 +2054,7 @@ async def mount_folder(request: FolderOperationRequest) -> Dict[str, Any]:
     completed = 0
 
     async def mount_file(path: pathlib.Path):
-        upload_request = FileUploadRequest(file_path=str(path))
+        upload_request = FileUploadRequest(file_path=str(path), summary=request.summary)
         return await upload_document(upload_request)
 
     async def progress_callback(result: Dict[str, Any]) -> None:
@@ -1852,12 +2158,13 @@ async def remount_folder(request: FolderRemountRequest) -> Dict[str, Any]:
 
             reupload_request = ReuploadDocumentRequest(
                 file_path=str(resolved_path),
-                force_reupload=force
+                force_reupload=force,
+                summary=request.summary
             )
             return await reupload_document(reupload_request)
 
         logger.debug("文件未挂载，执行首次挂载: %s", relative_path)
-        upload_request = FileUploadRequest(file_path=str(resolved_path))
+        upload_request = FileUploadRequest(file_path=str(resolved_path), summary=request.summary)
         return await upload_document(upload_request)
 
     async def progress_callback(result: Dict[str, Any]) -> None:
@@ -2339,7 +2646,7 @@ async def reupload_document(request: ReuploadDocumentRequest):
             # 文档不存在，直接上传
             logger.info(f"文档不存在，直接上传: {relative_file_path}")
             # 调用现有的上传逻辑
-            upload_request = FileUploadRequest(file_path=request.file_path)
+            upload_request = FileUploadRequest(file_path=request.file_path, summary=request.summary)
             upload_response = await upload_document(upload_request)
             
             return ReuploadDocumentResponse(
@@ -2406,7 +2713,7 @@ async def reupload_document(request: ReuploadDocumentRequest):
         
         # 6. 重新上传文档（调用现有的上传逻辑）
         logger.info("开始重新上传文档")
-        upload_request = FileUploadRequest(file_path=request.file_path)
+        upload_request = FileUploadRequest(file_path=request.file_path, summary=request.summary)
         upload_response = await upload_document(upload_request)
         
         return ReuploadDocumentResponse(

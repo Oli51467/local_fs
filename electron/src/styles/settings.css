@@ -93,6 +93,115 @@
   padding: 10px 0;
 }
 
+.setting-item--stack {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.setting-item--column {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.setting-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 520px;
+}
+
+.setting-item-title {
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.setting-item-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted, #64748b);
+  line-height: 1.5;
+}
+
+.dark-mode .setting-item-desc {
+  color: rgba(226, 232, 240, 0.7);
+}
+
+.settings-hint-message {
+  font-size: 12px;
+  color: #4b5563;
+  margin: 4px 0 8px;
+}
+
+.settings-hint-message[data-variant="warning"] {
+  color: #b45309;
+}
+
+.settings-hint-message[data-variant="error"] {
+  color: #dc2626;
+}
+
+.settings-hint-message[data-variant="success"] {
+  color: #15803d;
+}
+
+.dark-mode .settings-hint-message {
+  color: rgba(203, 213, 225, 0.75);
+}
+
+.dark-mode .settings-hint-message[data-variant="warning"] {
+  color: #facc15;
+}
+
+.dark-mode .settings-hint-message[data-variant="error"] {
+  color: #fca5a5;
+}
+
+.dark-mode .settings-hint-message[data-variant="success"] {
+  color: #bbf7d0;
+}
+
+.settings-select {
+  width: 260px;
+  max-width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-color);
+  font-size: 14px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.settings-select:disabled {
+  background: rgba(248, 250, 252, 0.7);
+  color: rgba(71, 85, 105, 0.6);
+  cursor: not-allowed;
+}
+
+.dark-mode .settings-select {
+  background: rgba(24, 24, 24, 0.92);
+  border-color: rgba(148, 163, 184, 0.35);
+  color: rgba(226, 232, 240, 0.95);
+}
+
+.dark-mode .settings-select:focus {
+  border-color: rgba(59, 130, 246, 0.7);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+}
+
+.dark-mode .settings-select:disabled {
+  background: rgba(38, 38, 38, 0.85);
+  color: rgba(148, 163, 184, 0.5);
+}
+
 .settings-card h2 {
   border-bottom: none;
   padding-bottom: 0;

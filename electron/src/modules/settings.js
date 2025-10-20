@@ -58,11 +58,22 @@ class SettingsModule {
     this.apiSettingsOriginal = { ...this.apiSettings };
     this.apiSettingsKeys = Object.keys(this.apiSettings);
     this.apiSettingsDirty = false;
-    this.apiSettingsLoading = false;
-    this.apiStatusTimer = null;
+   this.apiSettingsLoading = false;
+   this.apiStatusTimer = null;
 
-    this.currentSettings = {};
-    this.customModels = [];
+   this.currentSettings = {};
+   this.customModels = [];
+    this.enableModelSummary = false;
+    this.modelSummarySelection = null;
+    this.availableSummaryModels = [];
+    this.modelSummaryRegistryDisposer = null;
+    this.modelSummaryToggleEl = null;
+    this.modelSummarySelectEl = null;
+    this.modelSummaryHintEl = null;
+    this.modelSummaryStatusEl = null;
+    this.modelSummarySelectorEl = null;
+    this.modelSummarySectionEl = null;
+    this.modelSummarySaveTimer = null;
     
     this.init();
   }
@@ -72,6 +83,7 @@ class SettingsModule {
    */
   async init() {
     await this.loadSettings();
+    this.setupModelSummaryControls();
     this.bindEvents();
     this.setupConfigListener();
     await this.loadRetrievalSettings();
@@ -92,6 +104,10 @@ class SettingsModule {
           this.updateApiSettingsFromConfig(newConfig, { replaceOriginal: true, silent: true, resetVisibility: true });
         }
         this.customModels = this.normalizeCustomModels(newConfig?.customModels);
+        this.enableModelSummary = Boolean(newConfig?.enableModelSummary);
+        this.modelSummarySelection = this.sanitizeModelSelection(newConfig?.modelSummarySelection);
+        this.refreshSummaryModelOptions();
+        this.syncSummaryControls();
         // 不需要保存，因为配置已经在主进程中更新了
       });
     }
@@ -153,6 +169,8 @@ class SettingsModule {
       this.updateApiSettingsFromConfig(settings, { replaceOriginal: true, silent: true, resetVisibility: true });
       this.updateApiSaveButtonState();
       this.customModels = this.normalizeCustomModels(settings?.customModels);
+      this.enableModelSummary = Boolean(settings?.enableModelSummary);
+      this.modelSummarySelection = this.sanitizeModelSelection(settings?.modelSummarySelection);
       // 确保标题栏主题在应用启动时正确应用
       await window.fsAPI.setTitleBarTheme(this.isDarkMode);
     } catch (error) {
@@ -167,6 +185,8 @@ class SettingsModule {
     const payload = {
       darkMode: this.isDarkMode,
       customModels: this.customModels,
+      enableModelSummary: this.enableModelSummary,
+      modelSummarySelection: this.sanitizeModelSelection(this.modelSummarySelection),
       ...overrides
     };
     const cleanedPayload = {};
@@ -924,6 +944,403 @@ class SettingsModule {
     return '';
   }
 
+  setupModelSummaryControls() {
+    this.modelSummarySectionEl = document.getElementById('model-summary-settings');
+    this.modelSummaryStatusEl = document.getElementById('model-summary-status');
+    this.modelSummaryToggleEl = document.getElementById('enable-model-summary-toggle');
+    this.modelSummarySelectorEl = document.getElementById('model-summary-selector');
+    this.modelSummarySelectEl = document.getElementById('model-summary-select');
+    this.modelSummaryHintEl = document.getElementById('model-summary-hint');
+
+    if (this.modelSummaryToggleEl) {
+      this.modelSummaryToggleEl.addEventListener('change', (event) => {
+        this.handleSummaryToggleChange(event);
+      });
+    }
+
+    if (this.modelSummarySelectEl) {
+      this.modelSummarySelectEl.addEventListener('change', (event) => {
+        this.handleSummaryModelChange(event);
+      });
+    }
+
+    this.refreshSummaryModelOptions();
+    this.syncSummaryControls();
+    this.registerModelSummaryRegistryListener();
+  }
+
+  registerModelSummaryRegistryListener() {
+    if (this.modelSummaryRegistryDisposer) {
+      try {
+        this.modelSummaryRegistryDisposer();
+      } catch (error) {
+        console.warn('移除模型监听器失败:', error);
+      }
+      this.modelSummaryRegistryDisposer = null;
+    }
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const { modelModule } = window;
+    if (modelModule && typeof modelModule.onModelRegistryChanged === 'function') {
+      try {
+        this.modelSummaryRegistryDisposer = modelModule.onModelRegistryChanged((models) => {
+          this.refreshSummaryModelOptions({ models });
+          this.syncSummaryControls();
+        });
+      } catch (error) {
+        console.warn('注册模型监听器失败:', error);
+      }
+    } else {
+      document.addEventListener('modelRegistryChanged', (event) => {
+        if (event?.detail && Array.isArray(event.detail.models)) {
+          this.refreshSummaryModelOptions({ models: event.detail.models });
+          this.syncSummaryControls();
+        }
+      });
+    }
+  }
+
+  refreshSummaryModelOptions(options = {}) {
+    const rawList = Array.isArray(options.models) ? options.models : this.getAvailableSummaryModels();
+    const prepared = [];
+    const seen = new Set();
+    rawList.forEach((item) => {
+      const record = this.prepareSummaryModelRecord(item);
+      if (!record) {
+        return;
+      }
+      if (seen.has(record.key)) {
+        return;
+      }
+      seen.add(record.key);
+      prepared.push(record);
+    });
+
+    this.availableSummaryModels = prepared;
+
+    if (!this.modelSummarySelectEl) {
+      return;
+    }
+
+    const previousValue = this.modelSummarySelectEl.value;
+    this.modelSummarySelectEl.innerHTML = '';
+
+    prepared.forEach((model) => {
+      const option = document.createElement('option');
+      option.value = model.key;
+      option.textContent = model.displayLabel;
+      this.modelSummarySelectEl.appendChild(option);
+    });
+
+    let selectedRecord = null;
+    if (this.modelSummarySelection) {
+      const currentKey = this.getSummaryModelKey(this.modelSummarySelection);
+      selectedRecord = prepared.find((model) => model.key === currentKey) || null;
+    }
+    if (!selectedRecord && prepared.length) {
+      selectedRecord = prepared[0];
+    }
+
+    if (selectedRecord) {
+      this.modelSummarySelectEl.value = selectedRecord.key;
+      this.modelSummarySelection = { ...selectedRecord };
+    } else {
+      this.modelSummarySelection = null;
+      this.modelSummarySelectEl.value = '';
+    }
+  }
+
+  getAvailableSummaryModels() {
+    let list = [];
+    if (typeof window !== 'undefined' && window.modelModule && typeof window.modelModule.getModels === 'function') {
+      try {
+        list = window.modelModule.getModels();
+      } catch (error) {
+        console.warn('获取模型模块列表失败:', error);
+      }
+    }
+    if (!Array.isArray(list) || !list.length) {
+      list = this.customModels.map((model) => ({ ...model }));
+    }
+    return list;
+  }
+
+  prepareSummaryModelRecord(model) {
+    const sanitized = this.sanitizeModelSelection(model);
+    if (!sanitized) {
+      return null;
+    }
+    const key = this.getSummaryModelKey(sanitized);
+    const displayProvider = sanitized.providerName || sanitized.sourceId || '自定义';
+    const displayName = sanitized.name || sanitized.apiModel || sanitized.modelId || '未命名模型';
+    return {
+      ...sanitized,
+      key,
+      displayLabel: displayProvider ? `${displayName}（${displayProvider}）` : displayName
+    };
+  }
+
+  sanitizeModelSelection(model) {
+    if (!model || typeof model !== 'object') {
+      return null;
+    }
+    const sourceId = (model.sourceId || model.source_id || '').trim();
+    const rawModelId = model.modelId || model.model_id || model.apiModel || model.api_model || model.name || '';
+    const modelId = rawModelId ? String(rawModelId).trim() : '';
+    const rawApiModel = model.apiModel || model.api_model || modelId;
+    const apiModel = rawApiModel ? String(rawApiModel).trim() : '';
+    const rawName = model.name || model.displayName || apiModel || modelId;
+    const name = rawName ? String(rawName).trim() : '';
+    if (!sourceId && !modelId && !apiModel && !name) {
+      return null;
+    }
+    const providerName = (model.providerName || model.provider_name || sourceId || '自定义').trim();
+    const apiKeySetting = model.apiKeySetting || model.api_key_setting || null;
+    const apiUrl = model.apiUrl || model.api_url || null;
+    const requiresApiKey = model.requiresApiKey !== undefined
+      ? model.requiresApiKey !== false
+      : model.requires_api_key !== undefined
+        ? model.requires_api_key !== false
+        : true;
+    return {
+      sourceId,
+      modelId: modelId || apiModel || name,
+      apiModel: apiModel || modelId || name,
+      name: name || modelId || apiModel || '未命名模型',
+      providerName,
+      apiKeySetting: apiKeySetting || null,
+      requiresApiKey,
+      apiUrl: apiUrl || null
+    };
+  }
+
+  getSummaryModelKey(model) {
+    if (!model) {
+      return '';
+    }
+    if (model.key) {
+      return model.key;
+    }
+    const sourceId = model.sourceId || '';
+    const identifier = model.modelId || model.apiModel || model.name || '';
+    return `${sourceId}::${identifier}`;
+  }
+
+  syncSummaryControls() {
+    if (!this.modelSummaryToggleEl) {
+      return;
+    }
+    const hasModels = Array.isArray(this.availableSummaryModels) && this.availableSummaryModels.length > 0;
+    const selection = this.modelSummarySelection;
+    let missingApiKey = false;
+    if (hasModels && selection && selection.requiresApiKey !== false) {
+      const keySetting = selection.apiKeySetting || 'siliconflwApiKey';
+      const apiKey = this.getApiKey(keySetting);
+      if (!apiKey) {
+        missingApiKey = true;
+        this.enableModelSummary = false;
+      }
+    }
+
+    if (!hasModels) {
+      this.enableModelSummary = false;
+      this.modelSummarySelection = null;
+    }
+    this.modelSummaryToggleEl.disabled = !hasModels;
+    this.modelSummaryToggleEl.checked = hasModels && this.enableModelSummary;
+
+    if (this.modelSummarySelectorEl) {
+      this.modelSummarySelectorEl.style.display = (this.enableModelSummary && hasModels) ? 'flex' : 'none';
+    }
+
+    if (this.modelSummarySelectEl) {
+      this.modelSummarySelectEl.disabled = !hasModels || !this.enableModelSummary;
+      if (this.enableModelSummary && hasModels && this.modelSummarySelection) {
+        this.modelSummarySelectEl.value = this.getSummaryModelKey(this.modelSummarySelection);
+      }
+    }
+
+    if (hasModels) {
+      if (missingApiKey) {
+        this.setModelSummaryHint('所选模型需要 API Key，请先在“API-Key”部分填写后再启用。', 'warning');
+        return;
+      }
+      if (this.enableModelSummary) {
+        this.setModelSummaryHint('选择用于生成文档主题概述的模型。', 'info');
+      } else {
+        this.setModelSummaryHint('启用后，挂载文档时会自动生成并保存文档主题概述。', 'info');
+      }
+    } else {
+      this.setModelSummaryHint('暂无可用模型，请在“模型库”页面添加模型后再试。', 'warning');
+    }
+  }
+
+  handleSummaryToggleChange(event) {
+    const shouldEnable = Boolean(event?.target?.checked);
+    if (shouldEnable && (!this.availableSummaryModels || !this.availableSummaryModels.length)) {
+      if (event?.target) {
+        event.target.checked = false;
+      }
+      this.enableModelSummary = false;
+      this.setModelSummaryHint('暂无可用模型，请先在“模型库”页面添加模型。', 'warning');
+      this.syncSummaryControls();
+      return;
+    }
+    this.enableModelSummary = shouldEnable;
+    if (this.enableModelSummary) {
+      if ((!this.modelSummarySelection) && this.availableSummaryModels.length) {
+        this.modelSummarySelection = { ...this.availableSummaryModels[0] };
+        if (this.modelSummarySelectEl) {
+          this.modelSummarySelectEl.value = this.getSummaryModelKey(this.modelSummarySelection);
+        }
+      }
+      const selection = this.modelSummarySelection;
+      if (selection && selection.requiresApiKey !== false) {
+        const keySetting = selection.apiKeySetting || 'siliconflwApiKey';
+        const apiKey = this.getApiKey(keySetting);
+        if (!apiKey) {
+          if (event?.target) {
+            event.target.checked = false;
+          }
+          this.enableModelSummary = false;
+          this.setModelSummaryHint('所选模型需要 API Key，请先在“API-Key”部分填写后再启用。', 'warning');
+          this.syncSummaryControls();
+          return;
+        }
+      }
+    }
+    this.syncSummaryControls();
+    this.persistModelSummarySettings();
+  }
+
+  handleSummaryModelChange(event) {
+    const selectedKey = event?.target?.value;
+    if (!selectedKey) {
+      return;
+    }
+    const matched = this.availableSummaryModels.find((model) => model.key === selectedKey);
+    if (!matched) {
+      return;
+    }
+    this.modelSummarySelection = { ...matched };
+    let missingApiKey = false;
+    if (this.enableModelSummary && matched.requiresApiKey !== false) {
+      const keySetting = matched.apiKeySetting || 'siliconflwApiKey';
+      const apiKey = this.getApiKey(keySetting);
+      if (!apiKey) {
+        missingApiKey = true;
+        if (this.modelSummaryToggleEl) {
+          this.modelSummaryToggleEl.checked = false;
+        }
+        this.enableModelSummary = false;
+        this.setModelSummaryHint('所选模型需要 API Key，请先在“API-Key”部分填写后再启用。', 'warning');
+      }
+    }
+    this.syncSummaryControls();
+    this.persistModelSummarySettings({ silent: !this.enableModelSummary || missingApiKey });
+  }
+
+  async persistModelSummarySettings(options = {}) {
+    const silent = Boolean(options?.silent);
+    if (this.modelSummarySaveTimer) {
+      clearTimeout(this.modelSummarySaveTimer);
+      this.modelSummarySaveTimer = null;
+    }
+    if (!silent) {
+      this.setModelSummaryStatus('保存中…', 'info');
+    }
+    const result = await this.saveSettings({
+      enableModelSummary: this.enableModelSummary,
+      modelSummarySelection: this.sanitizeModelSelection(this.modelSummarySelection)
+    });
+    if (silent) {
+      return;
+    }
+    if (result && result.success === false) {
+      this.setModelSummaryStatus(result.error || '保存失败，请稍后重试。', 'error');
+      return;
+    }
+    this.setModelSummaryStatus('设置已保存。', 'success');
+    this.modelSummarySaveTimer = setTimeout(() => {
+      this.clearModelSummaryStatus();
+    }, 2000);
+  }
+
+  setModelSummaryHint(message, variant = 'info') {
+    if (!this.modelSummaryHintEl) {
+      return;
+    }
+    this.modelSummaryHintEl.textContent = message || '';
+    if (variant) {
+      this.modelSummaryHintEl.dataset.variant = variant;
+    } else {
+      delete this.modelSummaryHintEl.dataset.variant;
+    }
+  }
+
+  setModelSummaryStatus(message, variant = 'info') {
+    if (!this.modelSummaryStatusEl) {
+      return;
+    }
+    this.modelSummaryStatusEl.textContent = message || '';
+    if (variant) {
+      this.modelSummaryStatusEl.dataset.status = variant;
+    } else {
+      this.modelSummaryStatusEl.removeAttribute('data-status');
+    }
+  }
+
+  clearModelSummaryStatus() {
+    if (!this.modelSummaryStatusEl) {
+      return;
+    }
+    this.modelSummaryStatusEl.textContent = '';
+    this.modelSummaryStatusEl.removeAttribute('data-status');
+    if (this.modelSummarySaveTimer) {
+      clearTimeout(this.modelSummarySaveTimer);
+      this.modelSummarySaveTimer = null;
+    }
+  }
+
+  getModelSummaryConfig() {
+    const selection = this.sanitizeModelSelection(this.modelSummarySelection);
+    const hasModels = Array.isArray(this.availableSummaryModels) && this.availableSummaryModels.length > 0;
+    const enabled = Boolean(this.enableModelSummary && hasModels && selection);
+    if (!enabled || !selection) {
+      return {
+        enabled: false,
+        model: null
+      };
+    }
+    let apiKey = '';
+    if (selection.requiresApiKey !== false) {
+      const keySetting = selection.apiKeySetting || 'siliconflwApiKey';
+      apiKey = this.getApiKey(keySetting);
+      if (!apiKey) {
+        return {
+          enabled: false,
+          model: null,
+          missingApiKey: true
+        };
+      }
+    }
+    return {
+      enabled: true,
+      model: {
+        source_id: selection.sourceId,
+        model_id: selection.modelId,
+        api_model: selection.apiModel,
+        name: selection.name,
+        provider_name: selection.providerName,
+        api_key_setting: selection.apiKeySetting,
+        requires_api_key: selection.requiresApiKey !== false,
+        api_url: selection.apiUrl,
+        api_key: apiKey || undefined
+      }
+    };
+  }
+
   normalizeCustomModels(models) {
     if (!Array.isArray(models)) {
       return [];
@@ -941,6 +1358,8 @@ class SettingsModule {
       return;
     }
     this.customModels = sanitized;
+    this.refreshSummaryModelOptions();
+    this.syncSummaryControls();
     const result = await this.saveSettings({ customModels: this.customModels });
     if (result && result.success === false) {
       console.error('保存模型列表失败:', result.error || '未知错误');

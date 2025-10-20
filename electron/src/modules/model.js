@@ -1125,7 +1125,7 @@ class ModelModule {
       messages: [
         {
           role: 'user',
-          content: 'What opportunities and challenges will the Chinese large model industry face in 2025?'
+          content: '你好，如果你能够正常工作，请回复我“你好”，不需要输出其他内容。'
         }
       ],
       stream: false
@@ -1175,7 +1175,7 @@ class ModelModule {
       messages: [
         {
           role: 'user',
-          content: 'What opportunities and challenges will the Chinese large model industry face in 2025?'
+          content: '你好，如果你能够正常工作，请回复我“你好”，不需要输出其他内容。'
         }
       ]
     };
@@ -1226,9 +1226,9 @@ class ModelModule {
       body: JSON.stringify({
         model: model,
         messages: [
-          { role: "user", content: "测试连接是否正常，请回答'OK'" }
+          { role: "user", content: '你好，如果你能够正常工作，请回复我“你好”，不需要输出其他内容。' }
         ],
-        max_tokens: 5  // 限制返回字数，减少开销
+        max_tokens: 20  // 限制返回字数，减少开销
       })
     });
 

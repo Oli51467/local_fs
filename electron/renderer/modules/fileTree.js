@@ -207,6 +207,29 @@
     return computeRelativeFromRuntime(absolute);
   }
 
+  function buildModelSummaryPayload() {
+    const settingsModule = window.settingsModule;
+    if (!settingsModule || typeof settingsModule.getModelSummaryConfig !== 'function') {
+      return { enabled: false, model: null };
+    }
+    try {
+      const config = settingsModule.getModelSummaryConfig();
+      if (!config || typeof config !== 'object') {
+        return { enabled: false, model: null };
+      }
+      if (!config.enabled || !config.model) {
+        return { enabled: false, model: null };
+      }
+      return {
+        enabled: true,
+        model: { ...config.model }
+      };
+    } catch (error) {
+      console.warn('读取模型摘要配置失败:', error);
+      return { enabled: false, model: null };
+    }
+  }
+
   function toFileUrl(pathValue) {
     if (!pathValue) {
       return '';
@@ -934,10 +957,14 @@
           completed: 0
         });
       }
+      const summaryPayload = buildModelSummaryPayload();
       const response = await fetch('http://localhost:8000/api/document/mount-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_path: normalizedPath })
+        body: JSON.stringify({
+          folder_path: normalizedPath,
+          summary: summaryPayload
+        })
       });
       const data = await response.json();
       if (!response.ok) {
@@ -972,10 +999,15 @@
           completed: 0
         });
       }
+      const summaryPayload = buildModelSummaryPayload();
       const response = await fetch('http://localhost:8000/api/document/remount-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_path: normalizedPath, force_reupload: true })
+        body: JSON.stringify({
+          folder_path: normalizedPath,
+          force_reupload: true,
+          summary: summaryPayload
+        })
       });
       const data = await response.json();
       if (!response.ok) {
@@ -1438,10 +1470,14 @@
         }
       }
 
+      const summaryPayload = buildModelSummaryPayload();
       const response = await fetch('http://localhost:8000/api/document/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_path: uploadPath })
+        body: JSON.stringify({
+          file_path: uploadPath,
+          summary: summaryPayload
+        })
       });
 
       const result = await response.json();
@@ -1488,10 +1524,15 @@
           indicator.classList.add('reuploading');
         }
       }
+      const summaryPayload = buildModelSummaryPayload();
       const response = await fetch('http://localhost:8000/api/document/reupload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_path: uploadPath, force_reupload: false })
+        body: JSON.stringify({
+          file_path: uploadPath,
+          force_reupload: false,
+          summary: summaryPayload
+        })
       });
       const result = await response.json();
       if (!response.ok) {

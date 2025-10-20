@@ -319,6 +319,29 @@
         </div>
       </section>
 
+      <section class="settings-section" id="model-summary-settings">
+        <div class="settings-section-header">
+          <h2>文档处理</h2>
+          <span id="model-summary-status" class="settings-status-text" aria-live="polite"></span>
+        </div>
+        <div class="settings-divider"></div>
+        <div class="setting-item setting-item--stack">
+          <div class="setting-item-text">
+            <span class="setting-item-title">启用模型主题总结</span>
+            <p class="setting-item-desc">挂载文档时，使用所选模型生成文档主题概述。</p>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="enable-model-summary-toggle">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div id="model-summary-hint" class="settings-hint-message"></div>
+        <div class="setting-item setting-item--column" id="model-summary-selector">
+          <label for="model-summary-select" class="settings-input-label">选择模型</label>
+          <select id="model-summary-select" class="settings-select" aria-describedby="model-summary-hint"></select>
+        </div>
+      </section>
+
       <section class="settings-section">
         <div class="settings-section-header">
           <h2>检索</h2>

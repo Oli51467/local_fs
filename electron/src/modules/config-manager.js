@@ -21,7 +21,9 @@ class ConfigManager extends EventEmitter {
       kimiApiKey: '',
       claudeApiKey: '',
       siliconflwApiKey: '',
-      customModels: []
+      customModels: [],
+      enableModelSummary: false,
+      modelSummarySelection: null
     };
 
     this.ensureSettingsDirExists();
