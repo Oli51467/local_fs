@@ -574,9 +574,9 @@
 }
 
 .chat-reference-item.is-summary {
-  border-color: rgba(59, 130, 246, 0.38);
-  background: rgba(37, 99, 235, 0.08);
-  box-shadow: none;
+  border-color: rgba(148, 163, 184, 0.5);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(241, 245, 249, 0.96));
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
 }
 
 .chat-reference-item.is-expanded {
@@ -649,12 +649,12 @@
 .chat-reference-summary-title {
   font-size: 14px;
   font-weight: 600;
-  color: rgba(30, 64, 175, 0.92);
+  color: rgba(51, 65, 85, 0.95);
 }
 
 .chat-reference-summary-meta {
   font-size: 11px;
-  color: rgba(37, 99, 235, 0.85);
+  color: rgba(100, 116, 139, 0.9);
   letter-spacing: 0.02em;
 }
 
@@ -667,30 +667,31 @@
 
 .chat-reference-summary-item {
   border-radius: 10px;
-  border: 1px solid rgba(59, 130, 246, 0.26);
-  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(203, 213, 225, 0.6);
+  background: rgba(248, 250, 252, 0.98);
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
 }
 
 .chat-reference-summary-name {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-color);
+  color: rgba(51, 65, 85, 0.95);
 }
 
 .chat-reference-summary-submeta {
   font-size: 11px;
-  color: rgba(59, 130, 246, 0.9);
+  color: rgba(100, 116, 139, 0.88);
   letter-spacing: 0.02em;
 }
 
 .chat-reference-summary-text {
   font-size: 13px;
   line-height: 1.6;
-  color: rgba(30, 41, 59, 0.88);
+  color: rgba(51, 65, 85, 0.88);
   white-space: pre-wrap;
 }
 
@@ -813,8 +814,9 @@
 }
 
 .dark-mode .chat-reference-item.is-summary {
-  border-color: rgba(96, 165, 250, 0.48);
-  background: rgba(30, 64, 175, 0.22);
+  border-color: rgba(94, 113, 151, 0.55);
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(15, 23, 42, 0.92));
+  box-shadow: 0 12px 30px rgba(3, 7, 18, 0.55);
 }
 
 .dark-mode .chat-reference-item.is-expanded {
@@ -856,24 +858,25 @@
 }
 
 .dark-mode .chat-reference-summary-title {
-  color: rgba(191, 219, 254, 0.94);
+  color: rgba(226, 232, 240, 0.9);
 }
 
 .dark-mode .chat-reference-summary-meta {
-  color: rgba(147, 197, 253, 0.9);
+  color: rgba(148, 163, 184, 0.88);
 }
 
 .dark-mode .chat-reference-summary-item {
-  background: rgba(30, 64, 175, 0.28);
-  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(30, 41, 59, 0.9);
+  border-color: rgba(75, 85, 99, 0.6);
+  box-shadow: 0 10px 28px rgba(3, 7, 18, 0.55);
 }
 
 .dark-mode .chat-reference-summary-submeta {
-  color: rgba(191, 219, 254, 0.84);
+  color: rgba(203, 213, 225, 0.82);
 }
 
 .dark-mode .chat-reference-summary-text {
-  color: rgba(226, 232, 240, 0.9);
+  color: rgba(226, 232, 240, 0.88);
 }
 
 .dark-mode .chat-reference-name:hover,
