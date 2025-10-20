@@ -535,6 +535,12 @@ class ChatModule {
     if (normalized.api_key_setting && !normalized.apiKeySetting) {
       normalized.apiKeySetting = normalized.api_key_setting;
     }
+    if (normalized.api_url && !normalized.apiUrl) {
+      normalized.apiUrl = normalized.api_url;
+    }
+    if (typeof normalized.requires_api_key === 'boolean' && typeof normalized.requiresApiKey !== 'boolean') {
+      normalized.requiresApiKey = normalized.requires_api_key;
+    }
     return normalized;
   }
 
@@ -566,7 +572,20 @@ class ChatModule {
       prepared.apiModel = prepared.apiModel || prepared.modelId || '';
       prepared.name = prepared.name || prepared.apiModel || prepared.modelId || '未命名模型';
       prepared.providerName = prepared.providerName || prepared.sourceId || '自定义';
-      prepared.apiKeySetting = prepared.apiKeySetting || 'siliconflwApiKey';
+      if (typeof prepared.requiresApiKey !== 'boolean') {
+        prepared.requiresApiKey = true;
+      }
+      prepared.requiresApiKey = prepared.requiresApiKey !== false;
+      if (prepared.requiresApiKey) {
+        prepared.apiKeySetting = prepared.apiKeySetting || 'siliconflwApiKey';
+      } else {
+        prepared.apiKeySetting = prepared.apiKeySetting || null;
+      }
+      if (typeof prepared.apiUrl === 'string') {
+        prepared.apiUrl = prepared.apiUrl.trim();
+      } else {
+        prepared.apiUrl = '';
+      }
 
       const key = this.getModelKey(prepared);
       if (!key || seen.has(key)) {
@@ -1154,8 +1173,8 @@ class ChatModule {
 
       if (isWaitingMessage) {
         const waitingStage = (this.streamingState && String(this.streamingState.messageId) === String(message.id))
-          ? (this.streamingState.stageMessage || '正在思考中')
-          : '正在思考中';
+          ? (this.streamingState.stageMessage || '')
+          : '';
         this.renderWaitingIndicator(contentEl, waitingStage);
       } else {
         const content = rawContent;
@@ -1188,7 +1207,7 @@ class ChatModule {
     }
   }
 
-  renderWaitingIndicator(target, message = '正在思考中') {
+  renderWaitingIndicator(target, message = '') {
     if (!target) {
       return;
     }
@@ -1217,7 +1236,8 @@ class ChatModule {
     }
     const textNode = indicator.querySelector('.chat-waiting-text');
     if (textNode) {
-      textNode.textContent = message;
+      textNode.textContent = message || '';
+      textNode.style.display = message ? '' : 'none';
     }
     if (bubble) {
       bubble.style.display = 'none';
@@ -1318,7 +1338,7 @@ class ChatModule {
     const trimmed = content.trim();
     const role = state.message?.role || 'assistant';
     if (!trimmed) {
-      const waitingStage = state.stageMessage || '正在思考中';
+      const waitingStage = state.stageMessage || '';
       this.renderWaitingIndicator(state.content, waitingStage);
       this.removeCopyButton(state.bubble);
       this.applyWaitingState(state.wrapper, state.avatar, state.bubble, true, role);
@@ -1696,15 +1716,118 @@ class ChatModule {
     });
     const text = cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
     if (role === 'assistant') {
-      const rendered = this.renderAssistantMarkdownElement(text);
-      if (rendered) {
+      const { answerText, thinkingSegments } = this.extractThinkingSegments(text);
+      const rendered = this.renderAssistantMarkdownElement(answerText);
+      if (rendered || thinkingSegments.length) {
         target.innerHTML = '';
-        target.appendChild(rendered);
+        if (thinkingSegments.length) {
+          const thinkingPanel = this.renderThinkingPanel(thinkingSegments);
+          if (thinkingPanel) {
+            target.appendChild(thinkingPanel);
+          }
+        }
+        if (rendered) {
+          target.appendChild(rendered);
+        } else if (answerText) {
+          const fallback = document.createElement('div');
+          fallback.className = 'chat-plaintext';
+          fallback.textContent = answerText;
+          target.appendChild(fallback);
+        }
         return;
       }
     }
 
     target.textContent = text;
+  }
+
+  extractThinkingSegments(text) {
+    if (!text || typeof text !== 'string') {
+      return { answerText: '', thinkingSegments: [] };
+    }
+    const segments = [];
+    const parts = [];
+    let lastIndex = 0;
+    const startTagRegex = /<think\b[^>]*>/gi;
+    let match;
+    while ((match = startTagRegex.exec(text)) !== null) {
+      const tagStart = match.index;
+      const tagEnd = startTagRegex.lastIndex;
+      parts.push(text.slice(lastIndex, tagStart));
+      const closeIndex = text.indexOf('</think>', tagEnd);
+      if (closeIndex === -1) {
+        const fragment = text.slice(tagEnd);
+        if (fragment && fragment.trim()) {
+          segments.push({
+            content: fragment.trim(),
+            completed: false
+          });
+        }
+        lastIndex = text.length;
+        break;
+      }
+      const fragment = text.slice(tagEnd, closeIndex);
+      if (fragment && fragment.trim()) {
+        segments.push({
+          content: fragment.trim(),
+          completed: true
+        });
+      }
+      lastIndex = closeIndex + '</think>'.length;
+      startTagRegex.lastIndex = lastIndex;
+    }
+    parts.push(text.slice(lastIndex));
+    const answerText = parts.join('').trim();
+    return { answerText, thinkingSegments: segments };
+  }
+
+  renderThinkingPanel(segments) {
+    if (!Array.isArray(segments) || segments.length === 0) {
+      return null;
+    }
+    const details = document.createElement('details');
+    details.className = 'chat-thinking-panel';
+    const hasIncomplete = segments.some((segment) => !segment.completed);
+    details.open = hasIncomplete;
+
+    const summary = document.createElement('summary');
+    summary.className = 'chat-thinking-summary';
+    const segmentCount = segments.length;
+    if (hasIncomplete) {
+      summary.textContent = segmentCount > 1 ? `思考过程（进行中，${segmentCount} 段）` : '思考过程（进行中）';
+    } else {
+      summary.textContent = segmentCount > 1 ? `思考过程（${segmentCount} 段）` : '思考过程';
+    }
+    details.appendChild(summary);
+
+    const contentWrapper = document.createElement('div');
+    contentWrapper.className = 'chat-thinking-content';
+
+    segments.forEach((segment, index) => {
+      if (!segment || typeof segment.content !== 'string') {
+        return;
+      }
+      const block = document.createElement('div');
+      block.className = 'chat-thinking-block';
+      if (!segment.completed) {
+        block.classList.add('is-partial');
+      }
+      const pre = document.createElement('pre');
+      pre.className = 'chat-thinking-pre';
+      pre.textContent = segment.content;
+      block.appendChild(pre);
+      contentWrapper.appendChild(block);
+      if (index < segments.length - 1) {
+        block.classList.add('has-divider');
+      }
+    });
+
+    if (contentWrapper.children.length === 0) {
+      return null;
+    }
+
+    details.appendChild(contentWrapper);
+    return details;
   }
 
   normalizePath(value) {
@@ -2803,13 +2926,28 @@ class ChatModule {
     }
 
     const settingsModule = window.settingsModule;
-    const apiKeySetting = this.selectedModel.apiKeySetting || 'siliconflwApiKey';
-    const apiKey = settingsModule && typeof settingsModule.getApiKey === 'function'
-      ? settingsModule.getApiKey(apiKeySetting)
+    const requiresApiKey = this.selectedModel.requiresApiKey !== false;
+    let apiKeySetting = this.selectedModel.apiKeySetting || null;
+    let apiKey = '';
+
+    if (requiresApiKey) {
+      const keyId = apiKeySetting || 'siliconflwApiKey';
+      apiKeySetting = keyId;
+      apiKey = settingsModule && typeof settingsModule.getApiKey === 'function'
+        ? settingsModule.getApiKey(keyId)
+        : '';
+      if (!apiKey) {
+        this.setStatus('请先在设置页面填写模型所需的 API Key。', 'warning');
+        return;
+      }
+    }
+
+    const apiUrl = typeof this.selectedModel.apiUrl === 'string'
+      ? this.selectedModel.apiUrl.trim()
       : '';
 
-    if (!apiKey) {
-      this.setStatus('请先在设置页面填写模型所需的 API Key。', 'warning');
+    if (!requiresApiKey && (!apiUrl || !apiUrl.length) && this.selectedModel.sourceId === 'ollama') {
+      this.setStatus('当前模型缺少接口 URL，请重新添加。', 'warning');
       return;
     }
 
@@ -2883,7 +3021,10 @@ class ChatModule {
         model_id: this.selectedModel.modelId,
         api_model: this.selectedModel.apiModel,
         provider_name: this.selectedModel.providerName || '',
-        api_key: apiKey
+        api_key: requiresApiKey ? apiKey : '',
+        api_key_setting: apiKeySetting || undefined,
+        api_url: apiUrl || undefined,
+        requires_api_key: requiresApiKey
       }
     };
 

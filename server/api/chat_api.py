@@ -9,6 +9,8 @@ from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+import requests
+from requests.exceptions import RequestException, Timeout
 import numpy as np
 
 from config.config import ServerConfig
@@ -113,6 +115,10 @@ def _schedule_chat_progress(
     if client_request_id is None and assistant_message_id is None:
         return
 
+    display_message = message
+    if stage == "thinking":
+        display_message = ""
+
     payload = {
         "event": "chat_progress",
         "conversation_id": conversation_id,
@@ -120,7 +126,7 @@ def _schedule_chat_progress(
         "user_message_id": user_message_id,
         "client_request_id": client_request_id,
         "stage": stage,
-        "message": message,
+        "message": display_message,
         "step": step,
         "total_steps": total_steps,
         "status": status,
@@ -180,10 +186,16 @@ class ModelSelection(BaseModel):
     source_id: str = Field(..., description="模型来源 ID")
     model_id: str = Field(..., description="模型标识")
     api_model: str = Field(..., description="调用使用的模型名称")
-    api_key: str = Field(..., description="对应的 API Key")
+    api_key: Optional[str] = Field(default=None, description="对应的 API Key")
     provider_name: Optional[str] = Field(default=None, description="模型提供方名称")
     api_key_setting: Optional[str] = Field(
         default=None, description="设置页面中的 API Key 标识"
+    )
+    api_url: Optional[str] = Field(
+        default=None, description="自定义模型接口 URL（适用于本地或第三方兼容端点）"
+    )
+    requires_api_key: Optional[bool] = Field(
+        default=None, description="是否需要提供 API Key"
     )
 
 
@@ -209,6 +221,128 @@ class ChatResponse(BaseModel):
     assistant_message: ChatMessageModel
     chunks: List[RetrievedChunk]
     references: List[ReferenceDocument] = Field(default_factory=list)
+
+
+OLLAMA_REQUEST_TIMEOUT = 60
+
+
+def _ensure_ollama_url(selection: ModelSelection) -> str:
+    url = (selection.api_url or "").strip()
+    if not url:
+        raise LLMClientError("Ollama 接口 URL 未配置")
+    return url
+
+
+def _call_ollama_chat_completion(
+    selection: ModelSelection, payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    url = _ensure_ollama_url(selection)
+    request_payload = dict(payload)
+    request_payload["stream"] = False
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    try:
+        response = requests.post(
+            url,
+            json=request_payload,
+            headers=headers,
+            timeout=OLLAMA_REQUEST_TIMEOUT,
+        )
+    except (Timeout, RequestException) as exc:
+        raise LLMClientError(str(exc)) from exc
+
+    body_text = ""
+    try:
+        body_text = response.text or ""
+    except Exception:  # pragma: no cover - defensive
+        body_text = ""
+
+    if response.status_code != 200:
+        error_payload: Optional[Dict[str, Any]] = None
+        try:
+            error_payload = response.json()
+        except ValueError:
+            error_payload = None
+
+        message = None
+        if isinstance(error_payload, dict):
+            message = error_payload.get("error") or error_payload.get("message")
+        if not message:
+            message = body_text.strip() or response.reason or "Ollama 调用失败"
+        raise LLMClientError(message, status_code=response.status_code, payload=error_payload)
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise LLMClientError("无法解析 Ollama 返回的数据") from exc
+
+    return data
+
+
+def _stream_ollama_chat(
+    selection: ModelSelection, payload: Dict[str, Any]
+) -> Generator[Dict[str, Any], None, None]:
+    url = _ensure_ollama_url(selection)
+    stream_payload = dict(payload)
+    stream_payload["stream"] = True
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    try:
+        response = requests.post(
+            url,
+            json=stream_payload,
+            headers=headers,
+            timeout=OLLAMA_REQUEST_TIMEOUT,
+            stream=True,
+        )
+    except (Timeout, RequestException) as exc:
+        raise LLMClientError(str(exc)) from exc
+
+    if response.status_code != 200:
+        body_text = ""
+        try:
+            body_text = response.text or ""
+        except Exception:  # pragma: no cover - defensive
+            body_text = ""
+        error_payload: Optional[Dict[str, Any]] = None
+        try:
+            error_payload = response.json()
+        except ValueError:
+            error_payload = None
+        message = None
+        if isinstance(error_payload, dict):
+            message = error_payload.get("error") or error_payload.get("message")
+        if not message:
+            message = body_text.strip() or response.reason or "Ollama 调用失败"
+        raise LLMClientError(message, status_code=response.status_code, payload=error_payload)
+
+    response.encoding = "utf-8"
+
+    try:
+        for raw_line in response.iter_lines(decode_unicode=True):
+            if raw_line is None:
+                continue
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if not line or line == "[DONE]":
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                logger.debug("忽略无法解析的 Ollama 流数据: %s", line)
+                continue
+            yield event
+    finally:
+        response.close()
 
 
 class ConversationSummary(BaseModel):
@@ -1280,7 +1414,6 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
     )
 
     try:
-        assert llm_client is not None
         _schedule_chat_progress(
             conversation_id,
             assistant_message_id=assistant_message_id,
@@ -1290,12 +1423,29 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
             message="正在思考中",
             step=5,
         )
-        for raw_chunk in llm_client.stream_chat(selection.api_key, llm_payload):
-            delta = _extract_stream_delta(raw_chunk)
-            if not delta:
-                continue
-            buffer_parts.append(delta)
-            yield _sse_event("chunk", {"delta": delta})
+
+        if selection.source_id == "ollama":
+            for raw_chunk in _stream_ollama_chat(selection, llm_payload):
+                if isinstance(raw_chunk, dict):
+                    usage_info = raw_chunk.get("usage")
+                    if usage_info:
+                        assistant_metadata["usage"] = usage_info
+                delta = _extract_stream_delta(raw_chunk)
+                if not delta:
+                    continue
+                buffer_parts.append(delta)
+                yield _sse_event("chunk", {"delta": delta})
+        else:
+            assert llm_client is not None
+            api_key = (selection.api_key or "").strip()
+            if not api_key:
+                raise LLMClientError("缺少模型 API Key")
+            for raw_chunk in llm_client.stream_chat(api_key, llm_payload):
+                delta = _extract_stream_delta(raw_chunk)
+                if not delta:
+                    continue
+                buffer_parts.append(delta)
+                yield _sse_event("chunk", {"delta": delta})
 
         final_content = "".join(buffer_parts).strip()
         if not final_content:
@@ -1438,7 +1588,6 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     )
 
     try:
-        assert llm_client is not None
         _schedule_chat_progress(
             conversation_id,
             assistant_message_id=assistant_message_id,
@@ -1448,7 +1597,14 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
             message="正在思考中",
             step=5,
         )
-        result = llm_client.chat_completion(selection.api_key, llm_payload)
+        if selection.source_id == "ollama":
+            result = _call_ollama_chat_completion(selection, llm_payload)
+        else:
+            assert llm_client is not None
+            api_key = (selection.api_key or "").strip()
+            if not api_key:
+                raise LLMClientError("缺少模型 API Key")
+            result = llm_client.chat_completion(api_key, llm_payload)
     except LLMClientError as exc:
         sqlite_manager.update_chat_message(
             context["assistant_message_id"],

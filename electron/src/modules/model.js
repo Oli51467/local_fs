@@ -57,6 +57,12 @@ class ModelModule {
     this.systemUninstallRequests = new Set();
     this.registryListeners = new Set();
 
+    this.ollamaModels = [];
+    this.ollamaFetchPromise = null;
+    this.ollamaFetchInFlight = false;
+    this.ollamaFetchError = null;
+    this.modalConfirmGuardDisabled = false;
+
     this.dependencies = {
       getSettingsModule: () => null
     };
@@ -70,6 +76,7 @@ class ModelModule {
         name: '硅基流动',
         icon: '../dist/assets/qwen.png',
         apiKeySetting: 'siliconflwApiKey',
+        requiresApiKey: true,
         models: [
           {
             modelId: 'Qwen/Qwen3-8B',
@@ -82,10 +89,20 @@ class ModelModule {
         ]
       },
       {
+        sourceId: 'ollama',
+        name: 'Ollama',
+        icon: null,
+        apiKeySetting: null,
+        requiresApiKey: false,
+        defaultApiUrl: 'http://localhost:11434/v1/chat/completions',
+        models: []
+      },
+      {
         sourceId: 'openai',
         name: 'Open AI',
         icon: './dist/assets/openai.png',
         apiKeySetting: 'openaiApiKey',
+        requiresApiKey: true,
         models: []
       }
     ];
@@ -214,12 +231,164 @@ class ModelModule {
   }
 
   populateModelOptionsForSource(sourceId) {
-    if (!this.modelInputEl) {
+    const source = this.getSourceById(sourceId);
+    const isOllama = sourceId === 'ollama';
+
+    if (this.modelInputEl) {
+      this.modelInputEl.value = '';
+      this.modelInputEl.style.display = isOllama ? 'none' : '';
+    }
+    if (this.modelSelectEl) {
+      this.modelSelectEl.innerHTML = '';
+      this.modelSelectEl.value = '';
+      this.modelSelectEl.style.display = isOllama ? '' : 'none';
+    }
+
+    this.updateModalControlsState();
+
+    if (this.modelUrlFieldEl && this.modelUrlEl) {
+      if (isOllama) {
+        this.modelUrlFieldEl.style.display = '';
+        const defaultUrl = source?.defaultApiUrl || 'http://localhost:11434/v1/chat/completions';
+        this.modelUrlEl.value = defaultUrl;
+      } else {
+        this.modelUrlFieldEl.style.display = 'none';
+        this.modelUrlEl.value = '';
+      }
+    }
+
+    if (isOllama) {
+      this.prepareOllamaModelSelect();
+    } else {
+      this.modalConfirmGuardDisabled = false;
+      this.ollamaFetchInFlight = false;
+      this.updateModalControlsState();
+      if (this.modelInputEl) {
+        this.modelInputEl.focus();
+      }
+      if (source && Array.isArray(source.models) && source.models.length && this.modelInputEl) {
+        const firstModel = source.models[0];
+        this.modelInputEl.placeholder = firstModel?.name || firstModel?.modelId || '';
+      } else if (this.modelInputEl) {
+        this.modelInputEl.placeholder = '';
+      }
+    }
+  }
+
+  async prepareOllamaModelSelect() {
+    if (!this.modelSelectEl) {
       return;
     }
-    const source = this.getSourceById(sourceId);
+    this.modalConfirmGuardDisabled = true;
+    this.ollamaFetchInFlight = true;
+    this.updateModalControlsState();
+    this.setModalStatus('正在获取 Ollama 模型列表…', 'info');
 
-    this.modelInputEl.value = '';
+    try {
+      const models = await this.loadOllamaModels({ revalidate: false });
+      this.ollamaModels = models.slice();
+      this.ollamaFetchError = null;
+      this.modelSelectEl.innerHTML = '';
+
+      if (!models.length) {
+        this.setModalStatus('未在本地找到 Ollama 模型，请先使用 ollama pull 下载模型。', 'warning');
+        this.modalConfirmGuardDisabled = true;
+        return;
+      }
+
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = '请选择模型';
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      this.modelSelectEl.appendChild(placeholder);
+
+      models.forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        this.modelSelectEl.appendChild(option);
+      });
+
+      this.modalConfirmGuardDisabled = false;
+      this.clearModalStatus();
+      this.modelSelectEl.focus();
+    } catch (error) {
+      this.ollamaFetchError = error;
+      console.error('加载 Ollama 模型失败:', error);
+      let message = '无法获取 Ollama 模型列表。';
+      if (error && typeof error.message === 'string' && error.message.trim()) {
+        message = error.message.trim();
+      }
+      this.setModalStatus(`获取 Ollama 模型失败：${message}`, 'error');
+      this.modalConfirmGuardDisabled = true;
+    } finally {
+      this.ollamaFetchInFlight = false;
+      this.updateModalControlsState();
+    }
+  }
+
+  async loadOllamaModels(options = {}) {
+    const { revalidate = false } = options || {};
+    if (!revalidate && Array.isArray(this.ollamaModels) && this.ollamaModels.length) {
+      return this.ollamaModels.slice();
+    }
+    if (this.ollamaFetchPromise) {
+      return this.ollamaFetchPromise;
+    }
+
+    const request = async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        const response = await fetch('http://localhost:11434/api/tags', {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          },
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(text || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        const rawModels = Array.isArray(data?.models) ? data.models : [];
+        const names = rawModels
+          .map((item) => {
+            if (!item) {
+              return null;
+            }
+            if (typeof item === 'string') {
+              return item.trim();
+            }
+            if (item.name) {
+              return String(item.name).trim();
+            }
+            if (item.model) {
+              return String(item.model).trim();
+            }
+            return null;
+          })
+          .filter((name) => typeof name === 'string' && name.length > 0);
+        this.ollamaModels = names;
+        return names.slice();
+      } catch (error) {
+        if (error && error.name === 'AbortError') {
+          throw new Error('连接 Ollama 超时，请确认本地服务已启动并监听 11434 端口。');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
+    this.ollamaFetchPromise = request();
+    try {
+      return await this.ollamaFetchPromise;
+    } finally {
+      this.ollamaFetchPromise = null;
+    }
   }
 
   async fetchSystemModels(options = {}) {
@@ -713,9 +882,14 @@ class ModelModule {
           <label for="model-add-source">来源</label>
           <select id="model-add-source" data-role="source"></select>
         </div>
-        <div class="model-add-modal__field">
+        <div class="model-add-modal__field" data-role="model-field">
           <label for="model-add-model">模型名称</label>
-          <input id="model-add-model" data-role="model" type="text" />
+          <input id="model-add-model" data-role="model-input" type="text" autocomplete="off" />
+          <select id="model-add-model-select" data-role="model-select" style="display: none;"></select>
+        </div>
+        <div class="model-add-modal__field" data-role="model-url-field" style="display: none;">
+          <label for="model-add-url">接口 URL</label>
+          <input id="model-add-url" data-role="model-url" type="text" placeholder="http://localhost:11434/v1/chat/completions" />
         </div>
         <div class="model-add-modal__field">
           <label for="model-add-description">模型描述</label>
@@ -731,7 +905,11 @@ class ModelModule {
 
     this.addModalEl = overlay;
     this.sourceSelectEl = overlay.querySelector('[data-role="source"]');
-    this.modelInputEl = overlay.querySelector('[data-role="model"]');
+    this.modelFieldEl = overlay.querySelector('[data-role="model-field"]');
+    this.modelInputEl = overlay.querySelector('[data-role="model-input"]');
+    this.modelSelectEl = overlay.querySelector('[data-role="model-select"]');
+    this.modelUrlFieldEl = overlay.querySelector('[data-role="model-url-field"]');
+    this.modelUrlEl = overlay.querySelector('[data-role="model-url"]');
     this.modelDescriptionEl = overlay.querySelector('[data-role="model-description"]');
     this.modalStatusEl = overlay.querySelector('[data-role="status"]');
     this.modalConfirmBtn = overlay.querySelector('[data-action="confirm"]');
@@ -745,6 +923,12 @@ class ModelModule {
     if (this.sourceSelectEl) {
       this.sourceSelectEl.addEventListener('change', () => {
         this.populateModelOptionsForSource(this.sourceSelectEl.value);
+        this.clearModalStatus();
+      });
+    }
+
+    if (this.modelSelectEl) {
+      this.modelSelectEl.addEventListener('change', () => {
         this.clearModalStatus();
       });
     }
@@ -783,13 +967,26 @@ class ModelModule {
       return;
     }
     this.clearModalStatus();
+    this.modalConfirmGuardDisabled = false;
+    this.ollamaFetchError = null;
+    this.ollamaFetchInFlight = false;
     if (this.modelInputEl) {
       this.modelInputEl.value = '';
+    }
+    if (this.modelSelectEl) {
+      this.modelSelectEl.innerHTML = '';
+      this.modelSelectEl.value = '';
+    }
+    if (this.modelUrlEl) {
+      this.modelUrlEl.value = '';
     }
     if (this.modelDescriptionEl) {
       this.modelDescriptionEl.value = '';
     }
     this.setModalLoading(false);
+    if (this.sourceSelectEl) {
+      this.populateModelOptionsForSource(this.sourceSelectEl.value);
+    }
     this.addModalEl.classList.add('visible');
     if (this.modelInputEl) {
       this.modelInputEl.focus();
@@ -802,6 +999,8 @@ class ModelModule {
       return;
     }
     this.addModalEl.classList.remove('visible');
+    this.modalConfirmGuardDisabled = false;
+    this.ollamaFetchInFlight = false;
     this.setModalLoading(false);
     this.clearModalStatus();
     document.removeEventListener('keydown', this.handleModalKeydown);
@@ -813,7 +1012,11 @@ class ModelModule {
     }
 
     const sourceId = this.sourceSelectEl?.value;
-    const modelName = this.modelInputEl?.value?.trim();
+    const isOllama = sourceId === 'ollama';
+    const modelName = isOllama
+      ? this.modelSelectEl?.value?.trim()
+      : this.modelInputEl?.value?.trim();
+    const modelUrl = isOllama ? this.modelUrlEl?.value?.trim() : '';
     const modelDescription = this.modelDescriptionEl?.value?.trim() || '';
 
     const source = this.getSourceById(sourceId);
@@ -828,18 +1031,42 @@ class ModelModule {
       return;
     }
 
+    if (isOllama && !modelName) {
+      this.setModalStatus('请选择要接入的 Ollama 模型。', 'error');
+      return;
+    }
+
+    if (isOllama && !modelUrl) {
+      this.setModalStatus('请输入 Ollama 接口的 URL。', 'error');
+      return;
+    }
+
+    if (isOllama && modelUrl) {
+      try {
+        const parsedUrl = new URL(modelUrl);
+        if (!/^https?:$/i.test(parsedUrl.protocol)) {
+          this.setModalStatus('接口 URL 仅支持 http 或 https 协议。', 'error');
+          return;
+        }
+      } catch (error) {
+        this.setModalStatus('接口 URL 无效，请检查格式。', 'error');
+        return;
+      }
+    }
+
     if (this.userModels.some((item) => item.sourceId === source.sourceId && item.modelId === modelName)) {
       this.setModalStatus('该模型已在列表中，无需重复添加。', 'warning');
       return;
     }
 
-    const apiKeySetting = source.apiKeySetting || 'siliconflwApiKey';
+    const requiresApiKey = source.requiresApiKey !== false;
+    const apiKeySetting = source.apiKeySetting || (requiresApiKey ? 'siliconflwApiKey' : null);
     const settingsModule = this.dependencies.getSettingsModule ? this.dependencies.getSettingsModule() : null;
-    const apiKey = settingsModule && typeof settingsModule.getApiKey === 'function'
+    const apiKey = requiresApiKey && settingsModule && typeof settingsModule.getApiKey === 'function'
       ? settingsModule.getApiKey(apiKeySetting)
       : '';
 
-    if (!apiKey) {
+    if (requiresApiKey && !apiKey) {
       this.setModalStatus('请先在设置页面填写对应的 API Key。', 'error');
       return;
     }
@@ -851,6 +1078,8 @@ class ModelModule {
       // 根据来源选择不同的验证方法
       if (sourceId === 'openai') {
         await this.testOpenAIConnection(apiKey, modelName);
+      } else if (isOllama) {
+        await this.testOllamaConnection(modelUrl, modelName);
       } else {
         await this.testSiliconflowConnection(apiKey, modelName);
       }
@@ -862,6 +1091,8 @@ class ModelModule {
         apiModel: modelName,
         apiKeySetting,
         name: modelName,
+        apiUrl: isOllama ? modelUrl : null,
+        requiresApiKey,
         providerName: source.name,
         providerIcon: source.icon || null,
         description: modelDescription,
@@ -874,6 +1105,9 @@ class ModelModule {
       if (this.modelDescriptionEl) {
         this.modelDescriptionEl.value = '';
       }
+      if (this.modelSelectEl) {
+        this.modelSelectEl.value = '';
+      }
 
       setTimeout(() => {
         this.hideAddModal();
@@ -882,6 +1116,55 @@ class ModelModule {
       const message = error?.message || '测试失败，请稍后重试。';
       this.setModalStatus(`测试失败：${message}`, 'error');
       this.setModalLoading(false);
+    }
+  }
+
+  async testOllamaConnection(url, apiModel) {
+    const payload = {
+      model: apiModel,
+      messages: [
+        {
+          role: 'user',
+          content: 'What opportunities and challenges will the Chinese large model industry face in 2025?'
+        }
+      ],
+      stream: false
+    };
+
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      throw new Error(error?.message || '无法连接到 Ollama 服务，请检查本地服务是否已启动。');
+    }
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      console.warn('解析 Ollama 响应失败:', parseError);
+    }
+
+    if (!response.ok) {
+      const errorMessage =
+        data?.error ||
+        data?.message ||
+        `调用失败，状态码 ${response.status}`;
+      throw new Error(errorMessage);
+    }
+
+    if (data && data.choices) {
+      console.debug('Ollama 测试响应已接收', {
+        status: response.status,
+        model: apiModel
+      });
     }
   }
 
@@ -981,10 +1264,10 @@ class ModelModule {
     this.persistModels();
   }
 
-  setModalLoading(isLoading) {
-    this.addModalLoading = Boolean(isLoading);
+  updateModalControlsState() {
+    const confirmDisabled = this.addModalLoading || this.modalConfirmGuardDisabled;
     if (this.modalConfirmBtn) {
-      this.modalConfirmBtn.disabled = this.addModalLoading;
+      this.modalConfirmBtn.disabled = confirmDisabled;
       this.modalConfirmBtn.textContent = this.addModalLoading ? '测试中…' : '添加';
     }
     if (this.modalCancelBtn) {
@@ -994,11 +1277,25 @@ class ModelModule {
       this.sourceSelectEl.disabled = this.addModalLoading;
     }
     if (this.modelInputEl) {
-      this.modelInputEl.disabled = this.addModalLoading;
+      const hidden = this.modelInputEl.style.display === 'none';
+      this.modelInputEl.disabled = this.addModalLoading || hidden;
+    }
+    if (this.modelSelectEl) {
+      const hidden = this.modelSelectEl.style.display === 'none';
+      this.modelSelectEl.disabled = this.addModalLoading || hidden || this.ollamaFetchInFlight;
+    }
+    if (this.modelUrlEl) {
+      const hidden = this.modelUrlFieldEl && this.modelUrlFieldEl.style.display === 'none';
+      this.modelUrlEl.disabled = this.addModalLoading || Boolean(hidden);
     }
     if (this.modelDescriptionEl) {
       this.modelDescriptionEl.disabled = this.addModalLoading;
     }
+  }
+
+  setModalLoading(isLoading) {
+    this.addModalLoading = Boolean(isLoading);
+    this.updateModalControlsState();
   }
 
   setModalStatus(message, type = 'info') {
@@ -1308,7 +1605,17 @@ class ModelModule {
     if (source) {
       enriched.providerName = enriched.providerName || source.name;
       enriched.providerIcon = enriched.providerIcon || source.icon || null;
-      enriched.apiKeySetting = enriched.apiKeySetting || source.apiKeySetting || 'siliconflwApiKey';
+      if (typeof enriched.requiresApiKey !== 'boolean') {
+        enriched.requiresApiKey = source.requiresApiKey !== false;
+      }
+      if (!enriched.apiUrl && typeof source.defaultApiUrl === 'string' && source.defaultApiUrl) {
+        enriched.apiUrl = source.defaultApiUrl;
+      }
+      if (enriched.requiresApiKey !== false) {
+        enriched.apiKeySetting = enriched.apiKeySetting || source.apiKeySetting || 'siliconflwApiKey';
+      } else if (!enriched.apiKeySetting) {
+        enriched.apiKeySetting = null;
+      }
       if (!enriched.apiModel) {
         const catalogModel = this.getModelById(enriched.sourceId, enriched.modelId);
         if (catalogModel && catalogModel.apiModel) {
@@ -1320,7 +1627,22 @@ class ModelModule {
     if (enriched.providerIcon) {
       enriched.providerIcon = getAssetUrl(enriched.providerIcon);
     }
-    enriched.apiKeySetting = enriched.apiKeySetting || 'siliconflwApiKey';
+    if (typeof enriched.requiresApiKey !== 'boolean') {
+      enriched.requiresApiKey = true;
+    }
+    if (typeof enriched.apiUrl === 'string') {
+      enriched.apiUrl = enriched.apiUrl.trim();
+      if (!enriched.apiUrl) {
+        enriched.apiUrl = null;
+      }
+    } else {
+      enriched.apiUrl = null;
+    }
+    if (enriched.requiresApiKey !== false) {
+      enriched.apiKeySetting = enriched.apiKeySetting || 'siliconflwApiKey';
+    } else {
+      enriched.apiKeySetting = enriched.apiKeySetting || null;
+    }
     enriched.description = typeof enriched.description === 'string' ? enriched.description : '';
     enriched.parameterSize = enriched.parameterSize || this.extractParameterSize(enriched.apiModel || enriched.name || enriched.modelId);
     enriched.tags = this.buildModelTags(enriched, source);

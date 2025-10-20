@@ -1038,7 +1038,6 @@
 .chat-bubble .chat-markdown-body pre code.hljs .hljs-comment,
 .chat-bubble .chat-markdown-body pre code.hljs .hljs-quote {
   color: #64748b;
-  font-style: italic;
 }
 
 .chat-bubble .chat-markdown-body pre code.hljs .hljs-keyword,
@@ -1105,6 +1104,75 @@
   width: 100% !important;
   border-color: rgba(148, 163, 184, 0.3) !important;
   margin: 10px 0;
+}
+
+.chat-thinking-panel {
+  margin-bottom: 12px;
+  border: 1px solid rgba(144, 147, 153, 0.3);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: rgba(144, 147, 153, 0.08);
+}
+
+.chat-thinking-panel summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+  user-select: none;
+}
+
+.chat-thinking-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-thinking-panel summary::after {
+  content: '▾';
+  font-size: 12px;
+  color: #909399;
+  transition: transform 0.2s ease;
+}
+
+.chat-thinking-panel[open] summary::after {
+  transform: rotate(-180deg);
+}
+
+.chat-thinking-content {
+  margin-top: 8px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.chat-thinking-block {
+  margin: 0;
+}
+
+.chat-thinking-block.has-divider {
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px dashed rgba(144, 147, 153, 0.3);
+}
+
+.chat-thinking-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
+.chat-thinking-block.is-partial .chat-thinking-pre {
+  opacity: 0.85;
+}
+
+.chat-plaintext {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-bubble .chat-markdown-body a {
@@ -1443,6 +1511,27 @@
   background: var(--tree-bg);
   border: 1px solid rgba(148, 163, 184, 0.28);
   box-shadow: 0 12px 28px rgba(8, 11, 18, 0.5);
+}
+
+.dark-mode .chat-thinking-panel {
+  background: rgba(148, 163, 184, 0.08);
+  border-color: rgba(148, 163, 184, 0.36);
+}
+
+.dark-mode .chat-thinking-panel summary {
+  color: rgba(226, 232, 240, 0.88);
+}
+
+.dark-mode .chat-thinking-panel summary::after {
+  color: rgba(203, 213, 225, 0.7);
+}
+
+.dark-mode .chat-thinking-content {
+  color: rgba(203, 213, 225, 0.7);
+}
+
+.dark-mode .chat-thinking-block.has-divider {
+  border-bottom-color: rgba(148, 163, 184, 0.36);
 }
 
 .dark-mode .chat-copy-button {
