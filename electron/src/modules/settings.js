@@ -1160,9 +1160,14 @@ class SettingsModule {
       }
     }
 
+    let summarySearchChanged = false;
     if (!hasModels) {
       this.enableModelSummary = false;
       this.modelSummarySelection = null;
+      if (this.enableSummarySearch) {
+        this.enableSummarySearch = false;
+        summarySearchChanged = true;
+      }
     }
     this.modelSummaryToggleEl.disabled = !hasModels;
     this.modelSummaryToggleEl.checked = hasModels && this.enableModelSummary;
@@ -1180,14 +1185,29 @@ class SettingsModule {
 
     this.syncSummarySearchControl();
 
+    if (summarySearchChanged) {
+      this.persistModelSummarySettings({ silent: true });
+    }
+
     if (hasModels) {
       if (missingApiKey) {
         this.setModelSummaryHint('所选模型需要 API Key，请先在“API-Key”部分填写后再启用。', 'warning');
         return;
       }
-    } else {
-      this.setModelSummaryHint('暂无可用模型，请在“模型库”页面添加模型后再试。', 'warning');
+
+      const selection = this.modelSummarySelection || (this.availableSummaryModels.length ? this.availableSummaryModels[0] : null);
+      if (this.enableModelSummary && selection) {
+        const displayName = selection.name || selection.apiModel || selection.modelId || '当前模型';
+        const provider = selection.providerName || selection.sourceId || '';
+        const label = provider ? `${displayName}（${provider}）` : displayName;
+        this.setModelSummaryHint(`当前使用模型 ${label} 进行主题检索。`, 'success');
+      } else {
+        this.setModelSummaryHint('已检测到可用模型，开启主题检索后即可使用。', 'info');
+      }
+      return;
     }
+
+    this.setModelSummaryHint('暂无可用模型，请在“模型库”页面添加模型。', 'warning');
   }
 
   handleSummaryToggleChange(event) {
@@ -1232,6 +1252,13 @@ class SettingsModule {
     if (!this.summarySearchToggleEl) {
       return;
     }
+    const hasModels = Array.isArray(this.availableSummaryModels) && this.availableSummaryModels.length > 0;
+    if (!hasModels) {
+      this.summarySearchToggleEl.checked = false;
+      this.enableSummarySearch = false;
+      this.setModelSummaryHint('暂无可用模型，请先在“模型库”页面添加模型。', 'warning');
+      return;
+    }
     const shouldEnable = Boolean(this.summarySearchToggleEl.checked);
     this.enableSummarySearch = shouldEnable;
     this.persistModelSummarySettings({ silent: true });
@@ -1269,8 +1296,14 @@ class SettingsModule {
     if (!this.summarySearchToggleEl) {
       return;
     }
-    this.summarySearchToggleEl.disabled = false;
-    this.summarySearchToggleEl.checked = this.enableSummarySearch;
+    const hasModels = Array.isArray(this.availableSummaryModels) && this.availableSummaryModels.length > 0;
+    this.summarySearchToggleEl.disabled = !hasModels;
+    const shouldBeChecked = hasModels && this.enableSummarySearch;
+    if (!shouldBeChecked && this.summarySearchToggleEl.checked) {
+      this.summarySearchToggleEl.checked = false;
+    } else if (shouldBeChecked && !this.summarySearchToggleEl.checked) {
+      this.summarySearchToggleEl.checked = true;
+    }
   }
 
   async persistModelSummarySettings(options = {}) {

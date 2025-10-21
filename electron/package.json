@@ -1,6 +1,6 @@
 {
   "name": "LoFS",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "LoFS (Load once Fast Search) is a desktop-first knowledge base manager for local files. Mount a directory once and enjoy millisecond hybrid search afterwards.",
   "main": "main.js",
   "scripts": {

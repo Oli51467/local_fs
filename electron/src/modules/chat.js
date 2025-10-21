@@ -125,6 +125,11 @@ class ChatModule {
     this.isStreaming = false;
     this.activeRequestController = null;
     this.abortRequested = false;
+    this.searchDialogEl = null;
+    this.searchInputEl = null;
+    this.searchCloseBtnEl = null;
+    this.searchResultsEl = null;
+    this.searchDialogBound = false;
 
     if (window.fsAPI && typeof window.fsAPI.onSettingsUpdated === 'function') {
       window.fsAPI.onSettingsUpdated((config) => {
@@ -143,6 +148,7 @@ class ChatModule {
 
     this.bindEvents();
     this.tryAttachModelModuleListener();
+    this.ensureSearchDialog();
     await this.refreshAvailableModels();
     this.initialized = true;
   }
@@ -223,6 +229,153 @@ class ChatModule {
       this.chatSendBtn.classList.remove('is-stop');
       this.chatSendBtn.disabled = Boolean(this.pendingRequest);
     }
+  }
+
+  ensureSearchDialog() {
+    if (this.searchDialogEl) {
+      return;
+    }
+    const existing = document.getElementById('chat-search-dialog');
+    if (existing) {
+      this.searchDialogEl = existing;
+      this.searchInputEl = existing.querySelector('.chat-search-input');
+      this.searchCloseBtnEl = existing.querySelector('.chat-search-close');
+      this.searchResultsEl = existing.querySelector('.chat-search-results');
+      if (this.searchInputEl && !this.searchInputEl.placeholder) {
+        this.searchInputEl.placeholder = '搜索聊天';
+      }
+      this.bindSearchDialogEvents();
+      return;
+    }
+
+    const dialog = document.createElement('div');
+    dialog.id = 'chat-search-dialog';
+    dialog.className = 'chat-search-dialog';
+    dialog.innerHTML = `
+      <div class="chat-search-dialog-backdrop"></div>
+      <div class="chat-search-dialog-content" role="dialog" aria-modal="true">
+        <header class="chat-search-dialog-header">
+          <div class="chat-search-input-wrapper">
+            <input type="text" class="chat-search-input" placeholder="搜索聊天" />
+          </div>
+          <button type="button" class="chat-search-close" aria-label="关闭搜索">
+            ${window.icons?.close || '&times;'}
+          </button>
+        </header>
+        <div class="chat-search-dialog-body">
+          <div class="chat-search-results" data-state="empty">
+            <div class="chat-search-result-empty">暂无搜索结果</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    this.searchDialogEl = dialog;
+    this.searchInputEl = dialog.querySelector('.chat-search-input');
+    this.searchCloseBtnEl = dialog.querySelector('.chat-search-close');
+    this.searchResultsEl = dialog.querySelector('.chat-search-results');
+    if (this.searchInputEl && !this.searchInputEl.placeholder) {
+      this.searchInputEl.placeholder = '搜索聊天';
+    }
+
+    this.searchDialogBound = false;
+    this.bindSearchDialogEvents();
+    this.resetSearchResults();
+  }
+
+  resetSearchResults() {
+    if (!this.searchResultsEl) {
+      return;
+    }
+    this.searchResultsEl.dataset.state = 'empty';
+    this.searchResultsEl.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'chat-search-result-empty';
+    empty.textContent = '暂无搜索结果';
+    this.searchResultsEl.appendChild(empty);
+  }
+
+  bindSearchDialogEvents() {
+    if (!this.searchDialogEl) {
+      return;
+    }
+    if (this.searchDialogBound) {
+      return;
+    }
+
+    const hide = () => this.hideSearchDialog();
+    const submit = () => this.handleSearchSubmit();
+
+    if (this.searchCloseBtnEl) {
+      this.searchCloseBtnEl.addEventListener('click', hide);
+    }
+    this.searchDialogEl.addEventListener('click', (event) => {
+      if (
+        event.target === this.searchDialogEl
+        || event.target.classList.contains('chat-search-dialog-backdrop')
+      ) {
+        hide();
+      }
+    });
+
+    if (this.searchInputEl) {
+      this.searchInputEl.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submit();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          hide();
+        }
+      });
+    }
+
+    this.searchDialogBound = true;
+  }
+
+  showSearchDialog() {
+    this.ensureSearchDialog();
+    if (!this.searchDialogEl) {
+      return;
+    }
+    this.searchDialogEl.classList.add('visible');
+    if (this.searchInputEl) {
+      this.searchInputEl.value = '';
+      this.searchInputEl.focus();
+    }
+    this.resetSearchResults();
+  }
+
+  hideSearchDialog() {
+    if (!this.searchDialogEl) {
+      return;
+    }
+    this.searchDialogEl.classList.remove('visible');
+  }
+
+  handleSearchSubmit() {
+    if (!this.searchInputEl) {
+      return;
+    }
+    const keyword = this.searchInputEl.value.trim();
+    if (!keyword) {
+      this.resetSearchResults();
+      return;
+    }
+
+    if (!this.searchResultsEl) {
+      return;
+    }
+
+    this.searchResultsEl.dataset.state = 'placeholder';
+    this.searchResultsEl.innerHTML = '';
+
+    const item = document.createElement('div');
+    item.className = 'chat-search-result-placeholder';
+    item.textContent = `搜索功能尚未实现，关键词：“${keyword}”`;
+    this.searchResultsEl.appendChild(item);
   }
 
   handleSendClick() {
@@ -889,7 +1042,6 @@ class ChatModule {
 
     this.historyListEl.innerHTML = '';
 
-    // 添加固定的"新对话"行
     const newChatItem = document.createElement('div');
     newChatItem.className = 'chat-history-item new-chat-item';
     newChatItem.innerHTML = `
@@ -899,7 +1051,30 @@ class ChatModule {
     newChatItem.addEventListener('click', () => {
       this.startNewConversation();
     });
-    this.historyListEl.appendChild(newChatItem);
+
+    // 添加 Logo 行（包含新对话入口）
+    const logoRow = document.createElement('div');
+    logoRow.className = 'chat-history-logo-row';
+    const logoImg = document.createElement('img');
+    logoImg.className = 'chat-history-logo';
+    logoImg.src = getAssetUrl('dist/assets/logo.png');
+    logoImg.alt = '应用 Logo';
+    logoRow.appendChild(logoImg);
+    logoRow.appendChild(newChatItem);
+    this.historyListEl.appendChild(logoRow);
+
+    // 添加“搜索聊天”入口
+    const searchRow = document.createElement('button');
+    searchRow.type = 'button';
+    searchRow.className = 'chat-history-search-row';
+    searchRow.innerHTML = `
+      <span class="chat-history-search-icon">${window.icons?.search || ''}</span>
+      <span class="chat-history-search-text">搜索聊天</span>
+    `;
+    searchRow.addEventListener('click', () => {
+      this.showSearchDialog();
+    });
+    this.historyListEl.appendChild(searchRow);
 
     if (!this.conversations.length) {
       return;

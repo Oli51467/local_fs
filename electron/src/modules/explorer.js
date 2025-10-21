@@ -44,6 +44,7 @@ class ExplorerModule {
     this.selectedItemPath = null;
     this.expandedFolders = new Set();
     this.fileTreeEl = document.getElementById('file-tree');
+    this.fileTreeContainerEl = document.getElementById('file-tree-container');
     this.fileContentEl = document.getElementById('file-content');
     this.fileViewer = null;
     this.isRenaming = false; // 添加重命名状态标志
@@ -118,7 +119,7 @@ class ExplorerModule {
       if (!this.selectedItemPath) {
         return;
       }
-      
+
       // 只有在不在重命名状态时才处理键盘事件
       if (this.isRenaming) {
         return;
@@ -126,8 +127,23 @@ class ExplorerModule {
       
       // 检查是否按下了Enter键
       if (e.key === 'Enter') {
-        // 检查当前焦点是否在文本编辑区域
         const activeElement = document.activeElement;
+        const target = e.target instanceof Node ? e.target : null;
+        const isWithinTree = (
+          (target && (
+            (this.fileTreeEl && this.fileTreeEl.contains(target)) ||
+            (this.fileTreeContainerEl && this.fileTreeContainerEl.contains(target))
+          )) ||
+          (activeElement && (
+            (this.fileTreeEl && this.fileTreeEl.contains(activeElement)) ||
+            (this.fileTreeContainerEl && this.fileTreeContainerEl.contains(activeElement))
+          ))
+        );
+        if (!isWithinTree) {
+          return;
+        }
+
+        // 检查当前焦点是否在文本编辑区域
         if (activeElement) {
           // 如果焦点在文本输入区域，不触发重命名
           const tagName = activeElement.tagName.toLowerCase();
