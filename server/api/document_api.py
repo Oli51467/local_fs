@@ -8,9 +8,10 @@ import re
 import asyncio
 import shutil
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import tempfile
 from typing import Dict, Any
+from urllib.parse import unquote
 import requests
 from PIL import Image
 import pypandoc
@@ -86,6 +87,23 @@ class ReuploadDocumentResponse(BaseModel):
     file_info: Optional[Dict[str, Any]] = None
 
 
+class DocumentInfoResponse(BaseModel):
+    """文档详细信息响应模型"""
+    document_id: int
+    filename: str
+    file_path: str
+    file_type: str
+    file_size: Optional[int] = None
+    file_hash: Optional[str] = None
+    upload_time: Optional[str] = None
+    upload_time_iso: Optional[str] = None
+    updated_time: Optional[str] = None
+    updated_time_iso: Optional[str] = None
+    total_chunks: Optional[int] = None
+    summary_text: Optional[str] = None
+    summary_preview: Optional[str] = None
+
+
 class PdfParseRequest(BaseModel):
     """PDF解析请求模型"""
     file_path: str
@@ -156,6 +174,38 @@ SUPPORTED_FILE_TYPES = TEXT_TYPES.union(MARKDOWN_TYPES, WORD_TYPES, PDF_TYPES, P
 
 _pdf_parse_tasks: Dict[str, Dict[str, Any]] = {}
 _pdf_parse_lock = threading.Lock()
+
+CHINA_TZ = timezone(timedelta(hours=8))
+
+
+def _normalize_timestamp(value: Optional[Any]) -> Tuple[Optional[str], Optional[str]]:
+    """将时间值标准化为可读字符串和 ISO8601 表示。"""
+    if value is None or value == "":
+        return None, None
+
+    if isinstance(value, datetime):
+        dt_obj = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None, None
+        dt_obj = None
+        try:
+            dt_obj = datetime.fromisoformat(text)
+        except ValueError:
+            try:
+                dt_obj = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return text, None
+    else:
+        return str(value), None
+
+    if dt_obj.tzinfo is None:
+        dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+
+    dt_china = dt_obj.astimezone(CHINA_TZ)
+    readable = dt_china.strftime("%Y-%m-%d %H:%M:%S")
+    return readable, dt_china.isoformat()
 
 
 def _create_pdf_task(task_id: str, data: Dict[str, Any]) -> None:
@@ -1323,6 +1373,71 @@ async def run_folder_tasks(
     tasks = [wrapped_worker(path) for path in files]
     results = await asyncio.gather(*tasks)
     return results
+
+
+@router.get("/info", response_model=DocumentInfoResponse)
+async def get_document_info(file_path: str) -> DocumentInfoResponse:
+    """获取指定文档的元数据与主题信息。"""
+    if sqlite_manager is None:
+        raise HTTPException(status_code=503, detail="数据库管理器未初始化")
+
+    raw_path = unquote(file_path or "").strip()
+    if not raw_path:
+        raise HTTPException(status_code=400, detail="文件路径不能为空")
+
+    try:
+        normalized_path = normalize_project_relative_path(raw_path)
+    except HTTPException as exc:
+        raise exc
+
+    document_record = sqlite_manager.get_document_by_path(normalized_path)
+    if not document_record:
+        raise HTTPException(status_code=404, detail="未找到对应的文档记录")
+
+    upload_time_display, upload_time_iso = _normalize_timestamp(
+        document_record.get("upload_time")
+    )
+
+    summary_record = sqlite_manager.get_document_summary(document_record["id"])
+    summary_text = None
+    summary_preview = None
+    if summary_record and isinstance(summary_record, dict):
+        summary_text = summary_record.get("summary_text")
+        if summary_text:
+            summary_preview = summary_text[:50]
+
+    absolute_path = (ServerConfig.PROJECT_ROOT / pathlib.Path(normalized_path)).resolve()
+    updated_time_display: Optional[str] = None
+    updated_time_iso: Optional[str] = None
+    if absolute_path.exists():
+        try:
+            mtime = absolute_path.stat().st_mtime
+            dt_obj = datetime.fromtimestamp(mtime, tz=timezone.utc).astimezone(CHINA_TZ)
+            updated_time_display = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
+            updated_time_iso = dt_obj.isoformat()
+        except (OSError, ValueError):
+            updated_time_display = None
+            updated_time_iso = None
+
+    file_size = document_record.get("file_size")
+    total_chunks = document_record.get("total_chunks")
+    file_type = document_record.get("file_type") or absolute_path.suffix.lstrip(".")
+
+    return DocumentInfoResponse(
+        document_id=int(document_record["id"]),
+        filename=document_record.get("filename") or absolute_path.name,
+        file_path=normalized_path,
+        file_type=str(file_type or "").lower(),
+        file_size=int(file_size) if file_size is not None else None,
+        file_hash=document_record.get("file_hash"),
+        upload_time=upload_time_display,
+        upload_time_iso=upload_time_iso,
+        updated_time=updated_time_display,
+        updated_time_iso=updated_time_iso,
+        total_chunks=int(total_chunks) if total_chunks is not None else None,
+        summary_text=summary_text,
+        summary_preview=summary_preview,
+    )
 
 def init_document_api(
     faiss_mgr: FaissManager,

@@ -627,13 +627,19 @@ class SQLiteManager:
             """, (total_chunks, document_id))
     
     def update_document_path(self, old_path: str, new_path: str) -> bool:
-        """更新文档的文件路径"""
+        """更新文档的文件路径和文件名"""
         try:
+            new_filename = pathlib.Path(new_path).name
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE documents SET file_path = ? WHERE file_path = ?
-                """, (new_path, old_path))
+                cursor.execute(
+                    """
+                    UPDATE documents
+                    SET file_path = ?, filename = ?
+                    WHERE file_path = ?
+                    """,
+                    (new_path, new_filename, old_path),
+                )
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"更新文档路径失败: {str(e)}")

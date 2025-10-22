@@ -769,6 +769,121 @@ def _retrieve_chunks_from_document_summaries(
     return retrieved_chunks, retrieval_context
 
 
+def _expand_with_adjacent_chunks(chunks: List[RetrievedChunk]) -> List[RetrievedChunk]:
+    """补充位于检索片段之间的相邻上下文块。"""
+    if not chunks or sqlite_manager is None:
+        return chunks
+
+    valid_entries = [
+        chunk
+        for chunk in chunks
+        if chunk.document_id is not None
+        and chunk.document_id >= 0
+        and isinstance(chunk.chunk_index, int)
+        and chunk.chunk_index >= 0
+    ]
+    if len(valid_entries) < 2:
+        return chunks
+
+    seen_keys: Set[Tuple[int, int]] = {
+        (int(chunk.document_id), int(chunk.chunk_index)) for chunk in valid_entries
+    }
+    doc_groups: Dict[int, List[RetrievedChunk]] = {}
+    for chunk in valid_entries:
+        doc_groups.setdefault(int(chunk.document_id), []).append(chunk)
+
+    additional_chunks: List[RetrievedChunk] = []
+
+    for document_id, doc_chunks in doc_groups.items():
+        ordered = sorted(doc_chunks, key=lambda item: int(item.chunk_index or 0))
+        for left, right in zip(ordered, ordered[1:]):
+            left_index = int(left.chunk_index or 0)
+            right_index = int(right.chunk_index or 0)
+            if abs(right_index - left_index) != 2:
+                continue
+
+            target_index = min(left_index, right_index) + 1
+            key = (document_id, target_index)
+            if key in seen_keys:
+                continue
+
+            try:
+                chunk_record = sqlite_manager.get_chunk_by_document_and_index(
+                    document_id, target_index
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                chunk_record = None
+
+            if not chunk_record:
+                continue
+
+            raw_content = chunk_record.get("content") or ""
+            if isinstance(raw_content, bytes):
+                raw_content = raw_content.decode("utf-8", "ignore")
+            content = raw_content.strip()
+            if not content:
+                continue
+
+            score_candidates = [
+                value
+                for value in (left.score, right.score)
+                if isinstance(value, (int, float))
+            ]
+            base_score = (
+                sum(score_candidates) / len(score_candidates)
+                if score_candidates
+                else 0.0
+            )
+            adjusted_score = max(0.0, float(base_score) * 0.95)
+
+            combined_sources: Set[str] = set(left.sources) | set(right.sources)
+            combined_sources.add("adjacent_fill")
+
+            additional_chunks.append(
+                RetrievedChunk(
+                    document_id=document_id,
+                    filename=(
+                        chunk_record.get("filename")
+                        or left.filename
+                        or right.filename
+                        or ""
+                    ),
+                    file_path=(
+                        chunk_record.get("file_path")
+                        or left.file_path
+                        or right.file_path
+                        or ""
+                    ),
+                    chunk_index=target_index,
+                    content=content,
+                    score=adjusted_score,
+                    embedding_score=None,
+                    embedding_score_normalized=None,
+                    bm25_score=None,
+                    bm25_raw_score=None,
+                    rerank_score=None,
+                    rerank_score_normalized=None,
+                    vector_id=chunk_record.get("vector_id"),
+                    sources=sorted(combined_sources),
+                    score_breakdown={"adjacent_fill": 1.0},
+                    score_weights={"adjacent_fill": 1.0},
+                    dense_rank=None,
+                    lexical_rank=None,
+                    rerank_rank=None,
+                    clip_score=None,
+                    clip_score_normalized=None,
+                    clip_rank=None,
+                )
+            )
+            seen_keys.add(key)
+
+    if not additional_chunks:
+        return chunks
+
+    # 保留原有排序，将补充块附加在尾部，确保主检索结果优先展示。
+    return chunks + additional_chunks
+
+
 def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
     assert (
         embedding_service is not None
@@ -1242,7 +1357,9 @@ def _retrieve_chunks(question: str, top_k: int) -> List[RetrievedChunk]:
     if not confident_chunks:
         confident_chunks = [top_chunk]
 
-    return confident_chunks[:top_k]
+    final_chunks = confident_chunks[:top_k]
+    final_chunks = _expand_with_adjacent_chunks(final_chunks)
+    return final_chunks
 
 
 def _build_references_from_chunks(

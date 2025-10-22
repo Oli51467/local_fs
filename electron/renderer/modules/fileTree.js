@@ -14,7 +14,11 @@
     pasteShortcutListener: null,
     arrowNavigationListener: null,
     renameStylesInjected: false,
-    dataRootPath: null
+    dataRootPath: null,
+    lastContextMenu: {
+      path: null,
+      timestamp: 0
+    }
   };
 
   const dependencies = {
@@ -102,6 +106,10 @@
       return 'data';
     }
   };
+
+  const DOCUMENT_INFO_ENDPOINT = 'http://localhost:8000/api/document/info';
+  let fileDetailOverlayElement = null;
+  let fileDetailOverlayKeyHandler = null;
 
   async function resolveProjectAbsolutePath(pathValue) {
     if (!pathValue) {
@@ -205,6 +213,261 @@
 
     const absolute = resolveProjectAbsolutePathSync(pathValue);
     return computeRelativeFromRuntime(absolute);
+  }
+
+  function escapeCssIdentifier(value) {
+    if (typeof window.CSS?.escape === 'function') {
+      return window.CSS.escape(String(value));
+    }
+    return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
+  function findTreeElementByPath(pathValue) {
+    if (!pathValue) {
+      return null;
+    }
+    const escaped = escapeCssIdentifier(pathValue);
+    return document.querySelector(`.file-item[data-path="${escaped}"]`);
+  }
+
+  async function resolveRelativePathForDetail(pathValue) {
+    const element = findTreeElementByPath(pathValue);
+    const datasetPath = element?.dataset?.relativePath;
+    if (datasetPath && datasetPath !== 'data') {
+      return datasetPath;
+    }
+    try {
+      const relative = await toProjectRelativePath(pathValue);
+      if (relative) {
+        if (relative.startsWith('data')) {
+          return relative;
+        }
+        return `data/${relative.replace(/^\/+/, '')}`;
+      }
+    } catch (error) {
+      console.warn('获取文件相对路径失败:', error);
+    }
+    return datasetPath || null;
+  }
+
+  function formatBytes(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return '0 B';
+    }
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const normalized = bytes / (1024 ** exponent);
+    const decimals = exponent === 0 ? 0 : normalized >= 100 ? 0 : normalized >= 10 ? 1 : 2;
+    return `${normalized.toFixed(decimals)} ${units[exponent]}`;
+  }
+
+  function formatDisplayTime(displayValue, isoValue) {
+    if (displayValue) {
+      return displayValue;
+    }
+    if (!isoValue) {
+      return null;
+    }
+    const parsed = new Date(isoValue);
+    if (Number.isNaN(parsed.getTime())) {
+      return isoValue;
+    }
+    try {
+      return parsed.toLocaleString();
+    } catch (error) {
+      return parsed.toISOString();
+    }
+  }
+
+  function closeFileDetailOverlay() {
+    if (fileDetailOverlayElement) {
+      fileDetailOverlayElement.remove();
+      fileDetailOverlayElement = null;
+    }
+    if (fileDetailOverlayKeyHandler) {
+      document.removeEventListener('keydown', fileDetailOverlayKeyHandler);
+      fileDetailOverlayKeyHandler = null;
+    }
+  }
+
+  function showFileDetailOverlay(detail) {
+    closeFileDetailOverlay();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'file-detail-overlay';
+
+    const card = document.createElement('div');
+    card.className = 'file-detail-card';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', '文件详细信息');
+
+    const header = document.createElement('div');
+    header.className = 'file-detail-header';
+
+    const title = document.createElement('div');
+    title.className = 'file-detail-title';
+    title.textContent = '文件详细信息';
+
+    header.appendChild(title);
+
+    const body = document.createElement('div');
+    body.className = 'file-detail-body';
+
+    const appendRow = (label, value, options = {}) => {
+      const row = document.createElement('div');
+      row.className = 'file-detail-row';
+
+      const labelEl = document.createElement('span');
+      labelEl.className = 'file-detail-label';
+      labelEl.textContent = label;
+
+      const valueEl = document.createElement('span');
+      valueEl.className = 'file-detail-value';
+      if (options.monospace) {
+        valueEl.classList.add('file-detail-monospace');
+      }
+      if (options.summary) {
+        valueEl.classList.add('file-detail-summary');
+      }
+      if (options.empty) {
+        valueEl.classList.add('file-detail-empty');
+      }
+      const displayText = value ?? '';
+      if (options.title) {
+        valueEl.title = options.title;
+      } else if (displayText) {
+        valueEl.title = displayText;
+      }
+      valueEl.textContent = displayText || options.placeholder || '';
+
+      valueEl.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const textForCopy = options.copyValue ?? displayText ?? '';
+        if (!textForCopy) {
+          return;
+        }
+        try {
+          const clipboardText = String(textForCopy);
+          if (navigator?.clipboard?.writeText) {
+            await navigator.clipboard.writeText(clipboardText);
+          } else if (window?.fsAPI?.writeClipboardText) {
+            await window.fsAPI.writeClipboardText(clipboardText);
+          } else {
+            throw new Error('当前环境不支持复制到剪贴板');
+          }
+        } catch (copyError) {
+          console.warn('复制失败:', copyError);
+        }
+      });
+
+      row.appendChild(labelEl);
+      row.appendChild(valueEl);
+      body.appendChild(row);
+      return valueEl;
+    };
+
+    const ellipsis = '…';
+    const typeDisplay = (detail?.file_type || '').toString().toUpperCase() || ellipsis;
+    const sizeDisplay = detail?.file_size != null ? formatBytes(detail.file_size) : ellipsis;
+    const hashValue = detail?.file_hash || ellipsis;
+    const mountTime = formatDisplayTime(detail?.upload_time, detail?.upload_time_iso) || ellipsis;
+    const updatedTime = formatDisplayTime(detail?.updated_time, detail?.updated_time_iso) || ellipsis;
+    const chunkCount = detail?.total_chunks != null ? String(detail.total_chunks) : ellipsis;
+
+    const filenameRaw = detail?.filename || ellipsis;
+    const filenameWithoutExt = (() => {
+      if (!filenameRaw || filenameRaw === ellipsis) {
+        return filenameRaw;
+      }
+      const parsed = filenameRaw.split('.');
+      if (parsed.length <= 1) {
+        return filenameRaw;
+      }
+      parsed.pop();
+      return parsed.join('.') || filenameRaw;
+    })();
+
+    appendRow('文件名', filenameWithoutExt, {
+      copyValue: filenameRaw,
+      placeholder: ellipsis
+    });
+    appendRow('文件类型', typeDisplay);
+    appendRow('文件大小', sizeDisplay);
+    appendRow('内容哈希', hashValue, {
+      monospace: true,
+      title: hashValue
+    });
+    appendRow('挂载时间', mountTime);
+    appendRow('更新时间', updatedTime);
+    appendRow('切分块数量', chunkCount);
+
+    const summaryRaw = (detail?.summary_text || detail?.summary_preview || '').trim();
+    const summaryDisplay = summaryRaw || ellipsis;
+    appendRow('主题信息', summaryDisplay, {
+      summary: true,
+      empty: !summaryRaw,
+      title: summaryRaw || ''
+    });
+
+    card.appendChild(header);
+    card.appendChild(body);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) {
+        closeFileDetailOverlay();
+      }
+    });
+
+    fileDetailOverlayKeyHandler = (event) => {
+      if (event.key === 'Escape') {
+        closeFileDetailOverlay();
+      }
+    };
+    document.addEventListener('keydown', fileDetailOverlayKeyHandler);
+
+    fileDetailOverlayElement = overlay;
+  }
+
+  async function handleShowDocumentDetails(itemPath) {
+    if (!itemPath) {
+      return;
+    }
+    const relativePath = await resolveRelativePathForDetail(itemPath);
+    if (!relativePath || relativePath === 'data') {
+      dependencies.showModal({
+        type: 'warning',
+        title: '无法获取详细信息',
+        message: '该文件尚未挂载或不在数据目录中。',
+        showCancel: false
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(`${DOCUMENT_INFO_ENDPOINT}?file_path=${encodeURIComponent(relativePath)}`);
+      const payload = await response.json();
+      if (!response.ok) {
+        const errorMessage = payload?.detail || payload?.message || `HTTP ${response.status}`;
+        const errorInfo = Object.assign(new Error(errorMessage), {
+          status: response.status,
+          detail: payload?.detail || payload?.message || null
+        });
+        throw errorInfo;
+      }
+      showFileDetailOverlay(payload);
+    } catch (error) {
+      const message = error?.detail || error?.message || '请确认后端服务已启动并可访问。';
+      const isNotMounted = error?.status === 404 && /未找到对应的文档记录/.test(message);
+      dependencies.showModal({
+        type: isNotMounted ? 'warning' : 'error',
+        title: isNotMounted ? '文件尚未挂载' : '获取详细信息失败',
+        message: isNotMounted ? '请先挂载该文件后，再查看详细信息。' : message,
+        showCancel: false
+      });
+    }
   }
 
   function buildModelSummaryPayload() {
@@ -1961,6 +2224,14 @@
 
     addSeparator();
 
+    if (!isFolder) {
+      addMenuItem({
+        label: '详细信息',
+        icon: global.icons.file,
+        onClick: () => handleShowDocumentDetails(itemPath)
+      });
+    }
+
     addMenuItem({
       label: '重命名',
       icon: global.icons.newFile,
@@ -2235,6 +2506,19 @@
         if (explorer && typeof explorer.setSelectedItemPath === 'function') {
           explorer.setSelectedItemPath(node.path);
         }
+        const now = Date.now();
+        const last = state.lastContextMenu;
+        if (
+          last &&
+          last.path === node.path &&
+          now - last.timestamp <= 400
+        ) {
+          hideContextMenu();
+          state.lastContextMenu = { path: null, timestamp: 0 };
+          handleShowDocumentDetails(node.path);
+          return;
+        }
+        state.lastContextMenu = { path: node.path, timestamp: now };
         createContextMenu(event.pageX, event.pageY, node.path, false);
       });
       if (node.name && node.name.toLowerCase().endsWith('.zip')) {

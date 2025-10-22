@@ -1042,17 +1042,7 @@ class ChatModule {
 
     this.historyListEl.innerHTML = '';
 
-    const newChatItem = document.createElement('div');
-    newChatItem.className = 'chat-history-item new-chat-item';
-    newChatItem.innerHTML = `
-      <div class="new-chat-icon">${window.icons?.edit || ''}</div>
-      <div class="chat-history-title">新对话</div>
-    `;
-    newChatItem.addEventListener('click', () => {
-      this.startNewConversation();
-    });
-
-    // 添加 Logo 行（包含新对话入口）
+    // 添加 Logo
     const logoRow = document.createElement('div');
     logoRow.className = 'chat-history-logo-row';
     const logoImg = document.createElement('img');
@@ -1060,21 +1050,37 @@ class ChatModule {
     logoImg.src = getAssetUrl('dist/assets/logo.png');
     logoImg.alt = '应用 Logo';
     logoRow.appendChild(logoImg);
-    logoRow.appendChild(newChatItem);
     this.historyListEl.appendChild(logoRow);
 
-    // 添加“搜索聊天”入口
-    const searchRow = document.createElement('button');
-    searchRow.type = 'button';
-    searchRow.className = 'chat-history-search-row';
-    searchRow.innerHTML = `
-      <span class="chat-history-search-icon">${window.icons?.search || ''}</span>
-      <span class="chat-history-search-text">搜索聊天</span>
+    // 新对话和搜索聊天入口
+    const quickActionsRow = document.createElement('div');
+    quickActionsRow.className = 'chat-history-quick-actions';
+
+    const newChatButton = document.createElement('button');
+    newChatButton.type = 'button';
+    newChatButton.className = 'chat-history-action-btn new-chat-action';
+    newChatButton.innerHTML = `
+      <span class="chat-history-action-icon">${window.icons?.edit || ''}</span>
+      <span class="chat-history-action-text">新对话</span>
     `;
-    searchRow.addEventListener('click', () => {
+    newChatButton.addEventListener('click', () => {
+      this.startNewConversation();
+    });
+    quickActionsRow.appendChild(newChatButton);
+
+    const searchButton = document.createElement('button');
+    searchButton.type = 'button';
+    searchButton.className = 'chat-history-action-btn search-chat-action';
+    searchButton.innerHTML = `
+      <span class="chat-history-action-icon">${window.icons?.search || ''}</span>
+      <span class="chat-history-action-text">搜索聊天</span>
+    `;
+    searchButton.addEventListener('click', () => {
       this.showSearchDialog();
     });
-    this.historyListEl.appendChild(searchRow);
+    quickActionsRow.appendChild(searchButton);
+
+    this.historyListEl.appendChild(quickActionsRow);
 
     if (!this.conversations.length) {
       return;
