@@ -73,9 +73,23 @@
       if (!Array.isArray(raw) || !raw.length) {
         return [];
       }
-      return raw
+      const seen = new Set();
+      const result = [];
+      raw
         .filter((item) => item && typeof item === 'object')
-        .filter((item) => (item.selected === undefined) || Boolean(item.selected));
+        .filter((item) => (item.selected === undefined) || Boolean(item.selected))
+        .forEach((reference) => {
+          const key = this.getReferenceKey(reference);
+          if (key) {
+            if (!seen.has(key)) {
+              seen.add(key);
+              result.push(reference);
+            }
+          } else {
+            result.push(reference);
+          }
+        });
+      return result;
     }
 
     renderReferenceSection(references, metadata) {
@@ -129,6 +143,7 @@
         return null;
       }
 
+      const seen = new Set();
       const matches = rawMatches.map((match, index) => {
         if (!match || typeof match !== 'object') {
           return null;
@@ -136,6 +151,13 @@
         const summaryText = typeof match.summary_text === 'string'
           ? match.summary_text
           : (match.summary_preview || '');
+        const key = this.getSummaryMatchKey(match, index);
+        if (key && seen.has(key)) {
+          return null;
+        }
+        if (key) {
+          seen.add(key);
+        }
         return {
           name: (match.filename || '').trim() || `文档-${match.rank || index + 1}`,
           summary: summaryText,
@@ -215,6 +237,50 @@
 
       card.appendChild(list);
       return card;
+    }
+
+    getReferenceKey(reference) {
+      if (!reference || typeof reference !== 'object') {
+        return '';
+      }
+      const absolute = ChatUtils.normalizePath(reference.absolute_path);
+      if (absolute) {
+        return `abs:${absolute}`;
+      }
+      const projectPath = ChatUtils.normalizePath(reference.project_relative_path);
+      if (projectPath) {
+        return `proj:${projectPath}`;
+      }
+      const filePath = ChatUtils.normalizePath(reference.file_path);
+      if (filePath) {
+        return `file:${filePath}`;
+      }
+      if (reference.reference_id) {
+        return `id:${reference.reference_id}`;
+      }
+      const displayName = (reference.display_name || reference.filename || '').trim();
+      if (displayName) {
+        return `name:${displayName}`;
+      }
+      if (reference.snippet) {
+        return `snippet:${String(reference.snippet).slice(0, 64)}`;
+      }
+      return '';
+    }
+
+    getSummaryMatchKey(match, index) {
+      if (!match || typeof match !== 'object') {
+        return `idx:${index}`;
+      }
+      const filename = (match.filename || '').trim();
+      const summary = typeof match.summary_text === 'string'
+        ? match.summary_text.trim()
+        : (typeof match.summary_preview === 'string' ? match.summary_preview.trim() : '');
+      const scorePart = Number.isFinite(match.score) ? match.score.toFixed(3) : 'na';
+      if (filename || summary) {
+        return `summary:${filename || summary}:${scorePart}`;
+      }
+      return `idx:${index}`;
     }
 
     createReferenceItem(reference, metadata) {
