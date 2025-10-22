@@ -1,83 +1,51 @@
-const WINDOWS_1252_REVERSE = new Map([
-  [0x20AC, 0x80],
-  [0x201A, 0x82],
-  [0x0192, 0x83],
-  [0x201E, 0x84],
-  [0x2026, 0x85],
-  [0x2020, 0x86],
-  [0x2021, 0x87],
-  [0x02C6, 0x88],
-  [0x2030, 0x89],
-  [0x0160, 0x8A],
-  [0x2039, 0x8B],
-  [0x0152, 0x8C],
-  [0x017D, 0x8E],
-  [0x2018, 0x91],
-  [0x2019, 0x92],
-  [0x201C, 0x93],
-  [0x201D, 0x94],
-  [0x2022, 0x95],
-  [0x2013, 0x96],
-  [0x2014, 0x97],
-  [0x02DC, 0x98],
-  [0x2122, 0x99],
-  [0x0161, 0x9A],
-  [0x203A, 0x9B],
-  [0x0153, 0x9C],
-  [0x017E, 0x9E],
-  [0x0178, 0x9F]
-]);
+const ChatUtils = window.ChatUtils;
+if (!ChatUtils) {
+  throw new Error('ChatUtils 模块未能正确加载');
+}
 
-// 资源路径解析（参考 fileTree.js 的 getAssetUrl）
-const CHAT_ASSET_URL_CACHE = new Map();
-function getAssetUrl(relativePath) {
-  if (!relativePath) {
-    return '';
-  }
-  if (CHAT_ASSET_URL_CACHE.has(relativePath)) {
-    return CHAT_ASSET_URL_CACHE.get(relativePath);
-  }
-  const raw = String(relativePath).trim();
-  if (!raw) {
-    CHAT_ASSET_URL_CACHE.set(relativePath, '');
-    return '';
-  }
-  if (/^(?:file|https?|data):/i.test(raw)) {
-    CHAT_ASSET_URL_CACHE.set(relativePath, raw);
-    return raw;
-  }
-  let resolved = `./${raw.replace(/^([./\\])+/, '')}`;
-  try {
-    if (window.fsAPI && typeof window.fsAPI.getAssetPathSync === 'function') {
-      const candidate = window.fsAPI.getAssetPathSync(raw);
-      if (candidate) {
-        resolved = candidate;
-      }
-    } else if (typeof window !== 'undefined' && window.location) {
-      resolved = new URL(resolved.replace(/^\.\//, ''), window.location.href).href;
-    }
-  } catch (error) {
-    console.warn('解析资源路径失败，使用默认相对路径:', error);
-  }
-  if (!/^(?:file|https?):/i.test(resolved) && typeof window !== 'undefined' && window.location) {
-    try {
-      resolved = new URL(resolved, window.location.href).href;
-    } catch (error) {
-      // ignore
-    }
-  }
-  CHAT_ASSET_URL_CACHE.set(relativePath, resolved);
-  return resolved;
+const ChatSearchDialog = window.ChatSearchDialog;
+if (!ChatSearchDialog) {
+  throw new Error('ChatSearchDialog 模块未能正确加载');
+}
+
+const ChatModelSelector = window.ChatModelSelector;
+if (!ChatModelSelector) {
+  throw new Error('ChatModelSelector 模块未能正确加载');
+}
+
+const ChatReferenceManager = window.ChatReferenceManager;
+if (!ChatReferenceManager) {
+  throw new Error('ChatReferenceManager 模块未能正确加载');
 }
 
 class ChatModule {
   constructor() {
-    this.baseApiUrl = 'http://localhost:8000/api/chat';
+    this.cacheDomElements();
+    this.initializeState();
+    this.initializeManagers();
+    this.attachSettingsListener();
+    this.tryAttachModelModuleListener();
+    this.ensureModelSelector();
+    this.updateSendButtonState();
+  }
 
+  async init() {
+    if (this.initialized) {
+      return;
+    }
+
+    this.bindEvents();
+    this.tryAttachModelModuleListener();
+    this.ensureSearchDialog();
+    this.ensureModelSelector();
+    await this.refreshAvailableModels();
+    this.initialized = true;
+  }
+
+  cacheDomElements() {
     this.historyContainer = document.getElementById('chat-history-container');
     this.historyListEl = document.getElementById('chat-history-list');
     this.historyTitleEl = document.getElementById('chat-history-title');
-
     this.chatPageEl = document.getElementById('chat-page');
     this.chatMessagesContainer = document.getElementById('chat-messages-container');
     this.chatMessagesEl = document.getElementById('chat-messages');
@@ -90,7 +58,6 @@ class ChatModule {
     this.chatModelButtonEl = document.getElementById('chat-model-button');
     this.chatModelButtonTextEl = document.getElementById('chat-model-button-text');
     this.chatModelDropdownEl = document.getElementById('chat-model-dropdown');
-
     this.sendBtnDefaultContent = this.chatSendBtn ? this.chatSendBtn.innerHTML : '';
     this.sendBtnDefaultAriaLabel = this.chatSendBtn
       ? (this.chatSendBtn.getAttribute('aria-label') || '发送消息')
@@ -100,7 +67,10 @@ class ChatModule {
       + '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"></rect>'
       + '</svg>'
     );
+  }
 
+  initializeState() {
+    this.baseApiUrl = 'http://localhost:8000/api/chat';
     this.currentConversationId = null;
     this.conversations = [];
     this.messages = [];
@@ -114,8 +84,6 @@ class ChatModule {
     this.selectedModel = null;
     this.modelDropdownVisible = false;
     this.modelRegistryHandler = (event) => this.handleModelRegistryChanged(event);
-    this.handleDocumentClick = (event) => this.handleGlobalClick(event);
-    this.handleDocumentKeydown = (event) => this.handleGlobalKeydown(event);
     this.handleBackendStatusEvent = (event) => this.handleBackendStatus(event);
     this.streamingState = null;
     this.markdownViewer = null;
@@ -125,32 +93,24 @@ class ChatModule {
     this.isStreaming = false;
     this.activeRequestController = null;
     this.abortRequested = false;
-    this.searchDialogEl = null;
-    this.searchInputEl = null;
-    this.searchCloseBtnEl = null;
-    this.searchResultsEl = null;
-    this.searchDialogBound = false;
+    this.searchDialog = null;
+    this.modelSelector = null;
+  }
 
+  initializeManagers() {
+    this.referenceManager = new ChatReferenceManager({
+      setStatus: (message, type) => this.setStatus(message, type),
+      appendSystemError: (message) => this.appendSystemErrorToChat(message),
+      getStatusElement: () => this.chatStatusTextEl
+    });
+  }
+
+  attachSettingsListener() {
     if (window.fsAPI && typeof window.fsAPI.onSettingsUpdated === 'function') {
       window.fsAPI.onSettingsUpdated((config) => {
         this.handleSettingsUpdated(config);
       });
     }
-
-    this.tryAttachModelModuleListener();
-    this.updateSendButtonState();
-  }
-
-  async init() {
-    if (this.initialized) {
-      return;
-    }
-
-    this.bindEvents();
-    this.tryAttachModelModuleListener();
-    this.ensureSearchDialog();
-    await this.refreshAvailableModels();
-    this.initialized = true;
   }
 
   bindEvents() {
@@ -195,22 +155,7 @@ class ChatModule {
       });
     }
 
-    if (this.chatModelButtonEl) {
-      this.chatModelButtonEl.addEventListener('click', (event) => {
-        event.stopPropagation();
-        this.toggleModelDropdown();
-      });
-    }
-
-    if (this.chatModelDropdownEl) {
-      this.chatModelDropdownEl.addEventListener('click', (event) => {
-        event.stopPropagation();
-      });
-    }
-
     document.addEventListener('backendStatus', this.handleBackendStatusEvent);
-    document.addEventListener('click', this.handleDocumentClick);
-    document.addEventListener('keydown', this.handleDocumentKeydown);
     document.addEventListener('modelRegistryChanged', this.modelRegistryHandler);
   }
 
@@ -232,150 +177,120 @@ class ChatModule {
   }
 
   ensureSearchDialog() {
-    if (this.searchDialogEl) {
-      return;
+    if (this.searchDialog) {
+      return this.searchDialog;
     }
-    const existing = document.getElementById('chat-search-dialog');
-    if (existing) {
-      this.searchDialogEl = existing;
-      this.searchInputEl = existing.querySelector('.chat-search-input');
-      this.searchCloseBtnEl = existing.querySelector('.chat-search-close');
-      this.searchResultsEl = existing.querySelector('.chat-search-results');
-      if (this.searchInputEl && !this.searchInputEl.placeholder) {
-        this.searchInputEl.placeholder = '搜索聊天';
-      }
-      this.bindSearchDialogEvents();
-      return;
+    if (typeof ChatSearchDialog !== 'function') {
+      console.warn('ChatSearchDialog 模块不可用，跳过聊天搜索弹窗初始化。');
+      return null;
     }
-
-    const dialog = document.createElement('div');
-    dialog.id = 'chat-search-dialog';
-    dialog.className = 'chat-search-dialog';
-    dialog.innerHTML = `
-      <div class="chat-search-dialog-backdrop"></div>
-      <div class="chat-search-dialog-content" role="dialog" aria-modal="true">
-        <header class="chat-search-dialog-header">
-          <div class="chat-search-input-wrapper">
-            <input type="text" class="chat-search-input" placeholder="搜索聊天" />
-          </div>
-          <button type="button" class="chat-search-close" aria-label="关闭搜索">
-            ${window.icons?.close || '&times;'}
-          </button>
-        </header>
-        <div class="chat-search-dialog-body">
-          <div class="chat-search-results" data-state="empty">
-            <div class="chat-search-result-empty">暂无搜索结果</div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(dialog);
-
-    this.searchDialogEl = dialog;
-    this.searchInputEl = dialog.querySelector('.chat-search-input');
-    this.searchCloseBtnEl = dialog.querySelector('.chat-search-close');
-    this.searchResultsEl = dialog.querySelector('.chat-search-results');
-    if (this.searchInputEl && !this.searchInputEl.placeholder) {
-      this.searchInputEl.placeholder = '搜索聊天';
-    }
-
-    this.searchDialogBound = false;
-    this.bindSearchDialogEvents();
-    this.resetSearchResults();
-  }
-
-  resetSearchResults() {
-    if (!this.searchResultsEl) {
-      return;
-    }
-    this.searchResultsEl.dataset.state = 'empty';
-    this.searchResultsEl.innerHTML = '';
-    const empty = document.createElement('div');
-    empty.className = 'chat-search-result-empty';
-    empty.textContent = '暂无搜索结果';
-    this.searchResultsEl.appendChild(empty);
-  }
-
-  bindSearchDialogEvents() {
-    if (!this.searchDialogEl) {
-      return;
-    }
-    if (this.searchDialogBound) {
-      return;
-    }
-
-    const hide = () => this.hideSearchDialog();
-    const submit = () => this.handleSearchSubmit();
-
-    if (this.searchCloseBtnEl) {
-      this.searchCloseBtnEl.addEventListener('click', hide);
-    }
-    this.searchDialogEl.addEventListener('click', (event) => {
-      if (
-        event.target === this.searchDialogEl
-        || event.target.classList.contains('chat-search-dialog-backdrop')
-      ) {
-        hide();
-      }
-    });
-
-    if (this.searchInputEl) {
-      this.searchInputEl.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          submit();
-        } else if (event.key === 'Escape') {
-          event.preventDefault();
-          hide();
-        }
+    try {
+      this.searchDialog = new ChatSearchDialog({
+        icons: window.icons,
+        onSubmit: (keyword, dialog) => this.handleSearchSubmit(keyword, dialog)
       });
+    } catch (error) {
+      console.warn('初始化聊天搜索弹窗失败:', error);
+      this.searchDialog = null;
     }
-
-    this.searchDialogBound = true;
+    return this.searchDialog;
   }
 
   showSearchDialog() {
-    this.ensureSearchDialog();
-    if (!this.searchDialogEl) {
-      return;
+    const dialog = this.ensureSearchDialog();
+    if (dialog) {
+      dialog.show();
     }
-    this.searchDialogEl.classList.add('visible');
-    if (this.searchInputEl) {
-      this.searchInputEl.value = '';
-      this.searchInputEl.focus();
-    }
-    this.resetSearchResults();
   }
 
   hideSearchDialog() {
-    if (!this.searchDialogEl) {
-      return;
+    if (this.searchDialog) {
+      this.searchDialog.hide();
     }
-    this.searchDialogEl.classList.remove('visible');
   }
 
-  handleSearchSubmit() {
-    if (!this.searchInputEl) {
+  handleSearchSubmit(keyword, dialogInstance) {
+    const dialog = dialogInstance || this.searchDialog;
+    if (!dialog) {
+      return true;
+    }
+    const trimmed = typeof keyword === 'string' ? keyword.trim() : '';
+    if (!trimmed) {
+      dialog.resetResults();
+      return true;
+    }
+    dialog.showPlaceholder(trimmed);
+    return true;
+  }
+
+  ensureModelSelector() {
+    if (!this.chatModelButtonEl || !this.chatModelButtonTextEl || !this.chatModelDropdownEl) {
+      return null;
+    }
+    if (this.modelSelector) {
+      this.modelSelector.setElements({
+        buttonEl: this.chatModelButtonEl,
+        buttonTextEl: this.chatModelButtonTextEl,
+        dropdownEl: this.chatModelDropdownEl
+      });
+      this.modelDropdownVisible = Boolean(this.modelSelector.visible);
+      return this.modelSelector;
+    }
+    try {
+      this.modelSelector = new ChatModelSelector({
+        buttonEl: this.chatModelButtonEl,
+        buttonTextEl: this.chatModelButtonTextEl,
+        dropdownEl: this.chatModelDropdownEl,
+        onChange: (model) => this.handleModelSelectionChange(model),
+        onToggle: (visible) => {
+          this.modelDropdownVisible = Boolean(visible);
+        },
+        onClose: () => {
+          this.modelDropdownVisible = false;
+        }
+      });
+      this.modelDropdownVisible = false;
+    } catch (error) {
+      console.warn('初始化聊天模型选择器失败:', error);
+      this.modelSelector = null;
+    }
+    return this.modelSelector;
+  }
+
+  handleModelSelectionChange(model) {
+    this.selectedModel = model ? { ...model } : null;
+  }
+
+  refreshModelButtonFallback() {
+    if (!this.chatModelButtonEl || !this.chatModelButtonTextEl) {
       return;
     }
-    const keyword = this.searchInputEl.value.trim();
-    if (!keyword) {
-      this.resetSearchResults();
+    const hasModels = this.availableModels.length > 0;
+    this.chatModelButtonEl.disabled = !hasModels;
+    if (!hasModels) {
+      this.selectedModel = null;
+      this.chatModelButtonTextEl.textContent = '暂无可用模型';
+      this.modelDropdownVisible = false;
+      if (this.chatModelDropdownEl) {
+        this.chatModelDropdownEl.classList.remove('visible');
+        this.chatModelDropdownEl.innerHTML = '';
+        const empty = document.createElement('div');
+        empty.className = 'chat-model-dropdown-empty';
+        empty.textContent = '尚未添加模型';
+        this.chatModelDropdownEl.appendChild(empty);
+      }
       return;
     }
-
-    if (!this.searchResultsEl) {
-      return;
+    const active = this.selectedModel || this.availableModels[0];
+    if (active) {
+      this.selectedModel = { ...active };
+      this.chatModelButtonTextEl.textContent = active.name || '未命名模型';
+    } else {
+      this.selectedModel = null;
+      this.chatModelButtonTextEl.textContent = '请选择模型';
     }
-
-    this.searchResultsEl.dataset.state = 'placeholder';
-    this.searchResultsEl.innerHTML = '';
-
-    const item = document.createElement('div');
-    item.className = 'chat-search-result-placeholder';
-    item.textContent = `搜索功能尚未实现，关键词：“${keyword}”`;
-    this.searchResultsEl.appendChild(item);
+    this.chatModelButtonEl.setAttribute('aria-expanded', 'false');
+    this.modelDropdownVisible = false;
   }
 
   handleSendClick() {
@@ -538,127 +453,22 @@ class ChatModule {
   }
 
   updateModelSelect(models) {
-    if (!this.chatModelButtonEl || !this.chatModelDropdownEl || !this.chatModelButtonTextEl) {
-      return;
-    }
-
     this.closeModelDropdown();
-
     this.availableModels = Array.isArray(models) ? models.map((model) => ({ ...model })) : [];
-    const previousKey = this.selectedModel ? this.getModelKey(this.selectedModel) : '';
-    let effectiveKey = previousKey;
-
-    if (effectiveKey && !this.availableModels.some((model) => this.getModelKey(model) === effectiveKey)) {
-      this.selectedModel = null;
-      effectiveKey = '';
-    }
-
-    if (!effectiveKey && this.availableModels.length) {
-      const firstModel = this.availableModels[0];
-      this.selectedModel = { ...firstModel };
-      effectiveKey = this.getModelKey(firstModel);
-    }
-
-    this.renderModelDropdown(effectiveKey);
-    this.updateModelButtonState(effectiveKey);
-  }
-
-  renderModelDropdown(activeKey) {
-    if (!this.chatModelDropdownEl) {
+    const selector = this.ensureModelSelector();
+    if (selector) {
+      selector.updateModels(this.availableModels);
+      const current = selector.getSelectedModel();
+      this.selectedModel = current ? { ...current } : null;
+      this.modelDropdownVisible = Boolean(selector.visible);
       return;
     }
-
-    this.chatModelDropdownEl.innerHTML = '';
-
-    if (!this.availableModels.length) {
-      const empty = document.createElement('div');
-      empty.className = 'chat-model-dropdown-empty';
-      empty.textContent = '尚未添加模型';
-      this.chatModelDropdownEl.appendChild(empty);
-      return;
-    }
-
-    this.availableModels.forEach((model) => {
-      const key = this.getModelKey(model);
-      const option = document.createElement('button');
-      option.type = 'button';
-      option.className = 'chat-model-option';
-      option.setAttribute('role', 'option');
-      option.dataset.modelKey = key;
-      if (key === activeKey) {
-        option.classList.add('active');
-      }
-
-      const label = document.createElement('div');
-      label.className = 'chat-model-option-label';
-
-      const name = document.createElement('span');
-      name.className = 'chat-model-option-name';
-      name.textContent = model.name || '未命名模型';
-      label.appendChild(name);
-
-      const provider = document.createElement('span');
-      provider.className = 'chat-model-option-provider';
-      const providerName = model.providerName || model.sourceId || '自定义';
-      provider.textContent = ` - ${providerName}`;
-      label.appendChild(provider);
-
-      const check = document.createElement('span');
-      check.className = 'chat-model-option-check';
-      check.textContent = '✓';
-
-      option.appendChild(label);
-      option.appendChild(check);
-
-      option.addEventListener('click', () => {
-        this.selectModel(model);
-      });
-
-      this.chatModelDropdownEl.appendChild(option);
-    });
-  }
-
-  updateModelButtonState(activeKey) {
-    if (!this.chatModelButtonEl || !this.chatModelButtonTextEl) {
-      return;
-    }
-
-    const hasModels = this.availableModels.length > 0;
-    this.chatModelButtonEl.disabled = !hasModels;
-
-    if (!hasModels) {
-      this.selectedModel = null;
-      this.chatModelButtonTextEl.textContent = '暂无可用模型';
-      this.chatModelButtonEl.setAttribute('aria-expanded', 'false');
-      this.closeModelDropdown();
-      return;
-    }
-
-    if (!activeKey && this.availableModels.length) {
-      const firstModel = this.availableModels[0];
-      this.selectedModel = { ...firstModel };
-      activeKey = this.getModelKey(firstModel);
-      this.renderModelDropdown(activeKey);
-    }
-
-    const active = this.selectedModel || this.availableModels.find((model) => this.getModelKey(model) === activeKey);
-    if (active) {
-      this.selectedModel = { ...active };
-      this.chatModelButtonTextEl.textContent = active.name || '未命名模型';
+    if (this.availableModels.length) {
+      this.selectedModel = { ...this.availableModels[0] };
     } else {
       this.selectedModel = null;
-      this.chatModelButtonTextEl.textContent = '请选择模型';
     }
-
-    this.chatModelButtonEl.setAttribute('aria-expanded', this.modelDropdownVisible ? 'true' : 'false');
-  }
-
-  selectModel(model) {
-    this.selectedModel = model ? { ...model } : null;
-    const key = this.selectedModel ? this.getModelKey(this.selectedModel) : '';
-    this.updateModelButtonState(key);
-    this.renderModelDropdown(key);
-    this.closeModelDropdown();
+    this.refreshModelButtonFallback();
   }
 
   getModelKey(model) {
@@ -811,59 +621,42 @@ class ChatModule {
   }
 
   toggleModelDropdown() {
-    if (this.chatModelButtonEl && this.chatModelButtonEl.disabled) {
+    const selector = this.ensureModelSelector();
+    if (!selector || !this.availableModels.length) {
       return;
     }
-
-    if (this.modelDropdownVisible) {
-      this.closeModelDropdown();
+    if (selector.visible) {
+      selector.hideDropdown();
+      this.modelDropdownVisible = false;
     } else {
-      this.openModelDropdown();
+      selector.showDropdown();
+      this.modelDropdownVisible = true;
     }
   }
 
   openModelDropdown() {
-    if (!this.chatModelDropdownEl || !this.availableModels.length) {
+    const selector = this.ensureModelSelector();
+    if (!selector || !this.availableModels.length) {
       return;
     }
-    const activeKey = this.selectedModel ? this.getModelKey(this.selectedModel) : '';
-    this.renderModelDropdown(activeKey);
+    selector.showDropdown();
     this.modelDropdownVisible = true;
-    this.chatModelDropdownEl.classList.add('visible');
-    if (this.chatModelButtonEl) {
-      this.chatModelButtonEl.setAttribute('aria-expanded', 'true');
-    }
   }
 
   closeModelDropdown() {
-    if (!this.chatModelDropdownEl) {
+    const selector = this.modelSelector || this.ensureModelSelector();
+    if (selector) {
+      selector.hideDropdown();
+      this.modelDropdownVisible = false;
       return;
     }
-    this.modelDropdownVisible = false;
-    this.chatModelDropdownEl.classList.remove('visible');
+    if (this.chatModelDropdownEl) {
+      this.chatModelDropdownEl.classList.remove('visible');
+    }
     if (this.chatModelButtonEl) {
       this.chatModelButtonEl.setAttribute('aria-expanded', 'false');
     }
-  }
-
-  handleGlobalClick(event) {
-    if (!this.modelDropdownVisible) {
-      return;
-    }
-    const target = event.target;
-    if (this.chatModelButtonEl && this.chatModelButtonEl.contains(target)) {
-      return;
-    }
-    if (this.chatModelDropdownEl && this.chatModelDropdownEl.contains(target)) {
-      return;
-    }
-    this.closeModelDropdown();
-  }
-
-  handleGlobalKeydown(event) {
-    if (event.key === 'Escape' && this.modelDropdownVisible) {
-      this.closeModelDropdown();
-    }
+    this.modelDropdownVisible = false;
   }
 
 
@@ -1047,7 +840,7 @@ class ChatModule {
     logoRow.className = 'chat-history-logo-row';
     const logoImg = document.createElement('img');
     logoImg.className = 'chat-history-logo';
-    logoImg.src = getAssetUrl('dist/assets/logo.png');
+    logoImg.src = ChatUtils.getAssetUrl('dist/assets/logo.png');
     logoImg.alt = '应用 Logo';
     logoRow.appendChild(logoImg);
     this.historyListEl.appendChild(logoRow);
@@ -1234,10 +1027,10 @@ class ChatModule {
       const conversationSummary = data.conversation ? { ...data.conversation } : null;
       if (conversationSummary) {
         if (typeof conversationSummary.title === 'string' && conversationSummary.title) {
-          conversationSummary.title = this.normalizeModelText(conversationSummary.title) || conversationSummary.title;
+          conversationSummary.title = ChatUtils.normalizeModelText(conversationSummary.title) || conversationSummary.title;
         }
         if (typeof conversationSummary.last_message === 'string' && conversationSummary.last_message) {
-          conversationSummary.last_message = this.normalizeModelText(conversationSummary.last_message);
+          conversationSummary.last_message = ChatUtils.normalizeModelText(conversationSummary.last_message);
         }
       }
       this.updateConversationHeader(conversationSummary || data.conversation);
@@ -1260,7 +1053,7 @@ class ChatModule {
     }
     if (this.chatTimestampEl) {
       this.chatTimestampEl.textContent = conversation.updated_time
-        ? `最近更新：${this.formatTimestamp(conversation.updated_time)}`
+        ? `最近更新：${ChatUtils.formatTimestamp(conversation.updated_time)}`
         : '';
     }
   }
@@ -1343,7 +1136,7 @@ class ChatModule {
         avatar.classList.add('is-user');
         // 显式设置用户头像的背景图，兼容打包后的资源路径
         try {
-          avatar.style.backgroundImage = `url('${getAssetUrl('dist/assets/user.png')}')`;
+          avatar.style.backgroundImage = `url('${ChatUtils.getAssetUrl('dist/assets/user.png')}')`;
         } catch (_) {}
       } else {
         avatar.classList.add('is-assistant');
@@ -1351,7 +1144,7 @@ class ChatModule {
         try {
           const isDark = document.body && document.body.classList && document.body.classList.contains('dark-mode');
           const assistantAsset = isDark ? 'dist/assets/gpt-dark.png' : 'dist/assets/gpt.png';
-          avatar.style.backgroundImage = `url('${getAssetUrl(assistantAsset)}')`;
+          avatar.style.backgroundImage = `url('${ChatUtils.getAssetUrl(assistantAsset)}')`;
         } catch (_) {}
       }
       header.appendChild(avatar);
@@ -1387,7 +1180,9 @@ class ChatModule {
       this.applyWaitingState(wrapper, avatar, bubble, isWaitingMessage, message.role);
 
       if (message.role === 'assistant') {
-        this.updateReferenceSection(wrapper, message.metadata);
+        if (this.referenceManager) {
+          this.referenceManager.updateReferenceSection(wrapper, message.metadata);
+        }
       }
     });
 
@@ -1545,55 +1340,9 @@ class ChatModule {
 
     if (role === 'assistant' && state.wrapper) {
       const metadata = state.message?.metadata || state.metadata;
-      this.updateReferenceSection(state.wrapper, metadata);
-    }
-  }
-
-  normalizeModelText(text) {
-    if (typeof text !== 'string') {
-      return '';
-    }
-    if (!text) {
-      return '';
-    }
-    const normalized = text.replace(/\r\n/g, '\n');
-    const containsMojibake = /[\u0080-\u00FF]/.test(normalized) && !/[\u4e00-\u9fff]/.test(normalized);
-    if (!containsMojibake) {
-      return normalized;
-    }
-    try {
-      const byteValues = [];
-      for (const char of normalized) {
-        const codePoint = char.codePointAt(0);
-        if (codePoint === undefined) {
-          continue;
-        }
-        if (codePoint <= 0xff) {
-          byteValues.push(codePoint);
-          continue;
-        }
-        const mapped = WINDOWS_1252_REVERSE.get(codePoint);
-        if (mapped !== undefined) {
-          byteValues.push(mapped);
-          continue;
-        }
-        return normalized;
+      if (this.referenceManager) {
+        this.referenceManager.updateReferenceSection(state.wrapper, metadata);
       }
-      const decoded = new TextDecoder('utf-8', { fatal: false }).decode(Uint8Array.from(byteValues));
-      if (!decoded || /[\uFFFD]/.test(decoded)) {
-        return normalized;
-      }
-      return decoded.replace(/\r\n/g, '\n');
-    } catch (error) {
-      console.debug('normalizeModelText fallback triggered:', error);
-      if (typeof decodeURIComponent === 'function' && typeof escape === 'function') {
-        try {
-          return decodeURIComponent(escape(normalized));
-        } catch (decodeError) {
-          console.debug('decodeURIComponent fallback failed:', decodeError);
-        }
-      }
-      return normalized;
     }
   }
 
@@ -1607,7 +1356,7 @@ class ChatModule {
       }
       const normalized = { ...message };
       if (typeof normalized.content === 'string') {
-        normalized.content = this.normalizeModelText(normalized.content);
+        normalized.content = ChatUtils.normalizeModelText(normalized.content);
       }
       return normalized;
     });
@@ -1623,10 +1372,10 @@ class ChatModule {
       }
       const normalized = { ...item };
       if (typeof normalized.title === 'string' && normalized.title) {
-        normalized.title = this.normalizeModelText(normalized.title) || normalized.title;
+        normalized.title = ChatUtils.normalizeModelText(normalized.title) || normalized.title;
       }
       if (typeof normalized.last_message === 'string' && normalized.last_message) {
-        normalized.last_message = this.normalizeModelText(normalized.last_message);
+        normalized.last_message = ChatUtils.normalizeModelText(normalized.last_message);
       }
       return normalized;
     });
@@ -2024,712 +1773,6 @@ class ChatModule {
     return details;
   }
 
-  normalizePath(value) {
-    if (!value || typeof value !== 'string') {
-      return '';
-    }
-    return value
-      .trim()
-      .replace(/^file:\/\//i, '')
-      .replace(/\\/g, '/')
-      .replace(/\/{2,}/g, '/');
-  }
-
-  expandPathVariants(value) {
-    const variants = new Set();
-    const normalized = this.normalizePath(value);
-    if (!normalized) {
-      return variants;
-    }
-
-    variants.add(normalized);
-
-    const withoutLeading = normalized.replace(/^\/+/, '');
-    if (withoutLeading !== normalized) {
-      variants.add(withoutLeading);
-    }
-
-    const runtimePaths = typeof window.fsAPI?.getRuntimePathsSync === 'function'
-      ? window.fsAPI.getRuntimePathsSync()
-      : null;
-    const externalRoot = this.normalizePath(runtimePaths?.externalRoot);
-    if (externalRoot && normalized.startsWith(externalRoot)) {
-      const trimmed = normalized.slice(externalRoot.length).replace(/^\/+/, '');
-      if (trimmed) {
-        variants.add(trimmed);
-      }
-    }
-
-    return variants;
-  }
-
-  delay(ms = 150) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  updateReferenceSection(wrapper, metadata) {
-    if (!wrapper) {
-      return;
-    }
-    const existingSection = wrapper.querySelector('.chat-reference-section');
-    const references = this.extractReferences(metadata);
-    // 若无参考资料，移除参考区与分割线
-    if (!references.length) {
-      if (existingSection && existingSection.parentElement) {
-        existingSection.parentElement.removeChild(existingSection);
-      }
-      const existingSeparator = wrapper.querySelector('.chat-reference-separator');
-      if (existingSeparator && existingSeparator.parentElement) {
-        existingSeparator.parentElement.removeChild(existingSeparator);
-      }
-      return;
-    }
-    const section = this.renderReferenceSection(references, metadata);
-    if (!section) {
-      if (existingSection && existingSection.parentElement) {
-        existingSection.parentElement.removeChild(existingSection);
-      }
-      const existingSeparator = wrapper.querySelector('.chat-reference-separator');
-      if (existingSeparator && existingSeparator.parentElement) {
-        existingSeparator.parentElement.removeChild(existingSeparator);
-      }
-      return;
-    }
-
-    // 确保分割线存在
-    let separator = wrapper.querySelector('.chat-reference-separator');
-    if (!separator) {
-      separator = document.createElement('div');
-      separator.className = 'chat-reference-separator';
-    }
-
-    // 更新参考区
-    if (existingSection && existingSection.parentElement) {
-      existingSection.replaceWith(section);
-    } else {
-      wrapper.appendChild(section);
-    }
-
-    // 将分割线插入到参考区之前
-    if (separator.parentElement !== wrapper) {
-      wrapper.insertBefore(separator, section);
-    } else {
-      if (separator.nextElementSibling !== section) {
-        wrapper.insertBefore(separator, section);
-      }
-    }
-  }
-
-  extractReferences(metadata) {
-    if (!metadata || typeof metadata !== 'object') {
-      return [];
-    }
-    const raw = metadata.references;
-    if (!Array.isArray(raw) || !raw.length) {
-      return [];
-    }
-    return raw
-      .filter((item) => item && typeof item === 'object')
-      .filter((item) => (item.selected === undefined) || Boolean(item.selected));
-  }
-
-  renderReferenceSection(references, metadata) {
-    const summaryCard = this.createSummaryReferenceCard(metadata);
-    const referenceList = Array.isArray(references) ? references : [];
-    if (!summaryCard && !referenceList.length) {
-      return null;
-    }
-    const section = document.createElement('div');
-    section.className = 'chat-reference-section';
-
-    const header = document.createElement('div');
-    header.className = 'chat-reference-title';
-    header.textContent = '参考资料';
-    section.appendChild(header);
-
-    const list = document.createElement('div');
-    list.className = 'chat-reference-list';
-
-    if (summaryCard) {
-      list.appendChild(summaryCard);
-    }
-
-    referenceList.forEach((reference) => {
-      const item = this.createReferenceItem(reference, metadata);
-      if (item) {
-        list.appendChild(item);
-      }
-    });
-
-    if (!list.children.length) {
-      return null;
-    }
-
-    section.appendChild(list);
-    return section;
-  }
-
-  createSummaryReferenceCard(metadata) {
-    if (!metadata || typeof metadata !== 'object') {
-      return null;
-    }
-    const useSummarySearch = Boolean(metadata.use_summary_search);
-    const retrievalContext = metadata.retrieval_context || {};
-    if (!useSummarySearch || retrievalContext.mode !== 'summary' || !retrievalContext.summary_search_applied) {
-      return null;
-    }
-    const rawMatches = Array.isArray(retrievalContext.summary_matches) ? retrievalContext.summary_matches : [];
-    if (!rawMatches.length) {
-      return null;
-    }
-
-    const matches = rawMatches.map((match, index) => {
-      if (!match || typeof match !== 'object') {
-        return null;
-      }
-      const summaryText = typeof match.summary_text === 'string' ? match.summary_text : (match.summary_preview || '');
-      return {
-        name: (match.filename || '').trim() || `文档-${match.rank || index + 1}`,
-        summary: summaryText,
-        score: Number.isFinite(match.score) ? Number(match.score) : null,
-        vectorScore: Number.isFinite(match.vector_score) ? Number(match.vector_score) : null,
-        lexicalScore: Number.isFinite(match.lexical_score) ? Number(match.lexical_score) : null,
-        modelName: (match.summary_model_name || '').trim(),
-      };
-    }).filter(Boolean);
-
-    if (!matches.length) {
-      return null;
-    }
-
-    const card = document.createElement('div');
-    card.className = 'chat-reference-item is-summary';
-
-    const header = document.createElement('div');
-    header.className = 'chat-reference-summary-header';
-    const title = document.createElement('span');
-    title.className = 'chat-reference-summary-title';
-    title.textContent = '参考文档主题';
-    header.appendChild(title);
-
-    const summaryMeta = document.createElement('span');
-    summaryMeta.className = 'chat-reference-summary-meta';
-    const thresholdValue = Number(retrievalContext.summary_threshold);
-    const threshold = Number.isFinite(thresholdValue) ? thresholdValue.toFixed(2) : '0.70';
-    summaryMeta.textContent = `命中 ${matches.length} 篇 · 阈值 ≥ ${threshold}`;
-    header.appendChild(summaryMeta);
-
-    card.appendChild(header);
-
-    const list = document.createElement('div');
-    list.className = 'chat-reference-summary-list';
-
-    matches.forEach((match) => {
-      const entry = document.createElement('div');
-      entry.className = 'chat-reference-summary-item';
-
-      const nameEl = document.createElement('div');
-      nameEl.className = 'chat-reference-summary-name';
-      nameEl.textContent = match.name;
-      entry.appendChild(nameEl);
-
-      const metaParts = [];
-      if (Number.isFinite(match.score)) {
-        metaParts.push(`综合 ${match.score.toFixed(2)}`);
-      }
-      if (Number.isFinite(match.vectorScore)) {
-        metaParts.push(`语义 ${match.vectorScore.toFixed(2)}`);
-      }
-      if (Number.isFinite(match.lexicalScore)) {
-        metaParts.push(`词法 ${match.lexicalScore.toFixed(2)}`);
-      }
-      if (match.modelName) {
-        metaParts.push(`模型 ${match.modelName}`);
-      }
-
-      if (metaParts.length) {
-        const metaLine = document.createElement('div');
-        metaLine.className = 'chat-reference-summary-submeta';
-        metaLine.textContent = metaParts.join(' · ');
-        entry.appendChild(metaLine);
-      }
-
-      const textEl = document.createElement('div');
-      textEl.className = 'chat-reference-summary-text';
-      const summaryContent = match.summary && match.summary.trim()
-        ? this.buildReferenceSnippet(match.summary.trim())
-        : '暂无主题概述内容。';
-      textEl.textContent = summaryContent;
-      entry.appendChild(textEl);
-
-      list.appendChild(entry);
-    });
-
-    card.appendChild(list);
-    return card;
-  }
-
-  createReferenceItem(reference, metadata) {
-    if (!reference || typeof reference !== 'object') {
-      return null;
-    }
-
-    const chunkList = this.collectReferenceChunks(reference, metadata);
-    const chunkCount = chunkList.length || (Array.isArray(reference.chunk_indices) ? reference.chunk_indices.length : 0);
-
-    const item = document.createElement('div');
-    item.className = 'chat-reference-item';
-    item.setAttribute('data-file-path', reference.file_path || '');
-
-    const header = document.createElement('div');
-    header.className = 'chat-reference-header';
-
-    const headerMain = document.createElement('div');
-    headerMain.className = 'chat-reference-header-main';
-
-    const toggleButton = document.createElement('button');
-    toggleButton.type = 'button';
-    toggleButton.className = 'chat-reference-toggle';
-    toggleButton.setAttribute('aria-label', '折叠参考片段');
-    toggleButton.setAttribute('aria-expanded', 'true');
-
-    const toggleIcon = document.createElement('span');
-    toggleIcon.className = 'chat-reference-toggle-icon';
-    toggleButton.appendChild(toggleIcon);
-
-    const textWrapper = document.createElement('div');
-    textWrapper.className = 'chat-reference-texts';
-
-    const docButton = document.createElement('button');
-    docButton.type = 'button';
-    docButton.className = 'chat-reference-name';
-    const displayName = reference.display_name || reference.filename || '未命名文件';
-    docButton.textContent = reference.reference_id ? `${reference.reference_id} · ${displayName}` : displayName;
-    docButton.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.handleReferenceClick(reference, metadata, docButton);
-    });
-    textWrapper.appendChild(docButton);
-
-    headerMain.appendChild(toggleButton);
-    headerMain.appendChild(textWrapper);
-    header.appendChild(headerMain);
-
-    const meta = document.createElement('span');
-    meta.className = 'chat-reference-meta';
-    const metaParts = [];
-    if (reference.score && Number.isFinite(reference.score)) {
-      metaParts.push(`相关性 ${Number(reference.score).toFixed(2)}`);
-    }
-    if (chunkCount) {
-      metaParts.push(`片段 ${chunkCount} 个`);
-    } else if (reference.snippet) {
-      metaParts.push('片段摘要 1 条');
-    }
-    meta.textContent = metaParts.length ? metaParts.join(' · ') : '暂无片段预览';
-    header.appendChild(meta);
-
-    const chunkContainer = document.createElement('div');
-    chunkContainer.className = 'chat-reference-chunks';
-    chunkContainer.hidden = false;
-    chunkContainer.style.display = 'flex';
-
-    const setExpanded = (expanded) => {
-      if (expanded) {
-        item.classList.remove('is-collapsed');
-        item.classList.add('is-expanded');
-        chunkContainer.hidden = false;
-        chunkContainer.style.display = 'flex';
-        toggleButton.setAttribute('aria-expanded', 'true');
-        toggleButton.setAttribute('aria-label', '折叠参考片段');
-      } else {
-        item.classList.remove('is-expanded');
-        item.classList.add('is-collapsed');
-        chunkContainer.hidden = true;
-        chunkContainer.style.display = 'none';
-        toggleButton.setAttribute('aria-expanded', 'false');
-        toggleButton.setAttribute('aria-label', '展开参考片段');
-      }
-    };
-
-    const handleToggle = () => {
-      const expanded = item.classList.contains('is-expanded');
-      setExpanded(!expanded);
-    };
-
-    toggleButton.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      handleToggle();
-    });
-
-    // 支持点击头部进行展开/收起
-    header.addEventListener('click', (event) => {
-      // 点击文件名或右侧元信息不触发展开/收起
-      if (event.target.closest('.chat-reference-name')) return;
-      if (event.target.closest('.chat-reference-meta')) return;
-      if (event.target.closest('.chat-reference-toggle')) return;
-      handleToggle();
-    });
-
-    if (chunkList.length) {
-      chunkList.forEach((chunk, index) => {
-        const chunkBlock = document.createElement('button');
-        chunkBlock.type = 'button';
-        chunkBlock.className = 'chat-reference-chunk';
-        chunkBlock.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          this.handleReferenceClick(reference, metadata, chunkBlock, chunk);
-        });
-
-        const chunkContent = document.createElement('div');
-        chunkContent.className = 'chat-reference-chunk-content';
-        chunkContent.textContent = this.buildReferenceSnippet(chunk.content);
-
-        const chunkLabel = document.createElement('div');
-        chunkLabel.className = 'chat-reference-chunk-label';
-        chunkLabel.textContent = `片段 ${index + 1}`;
-
-        chunkBlock.appendChild(chunkLabel);
-        chunkBlock.appendChild(chunkContent);
-
-        chunkContainer.appendChild(chunkBlock);
-      });
-    } else if (reference.snippet) {
-      const snippetBlock = document.createElement('div');
-      snippetBlock.className = 'chat-reference-chunk is-static';
-      snippetBlock.setAttribute('tabindex', '-1');
-
-      const snippetLabel = document.createElement('div');
-      snippetLabel.className = 'chat-reference-chunk-label';
-      snippetLabel.textContent = '片段摘要';
-
-      const snippetContent = document.createElement('div');
-      snippetContent.className = 'chat-reference-chunk-content';
-      snippetContent.textContent = this.buildReferenceSnippet(reference.snippet);
-
-      snippetBlock.appendChild(snippetLabel);
-      snippetBlock.appendChild(snippetContent);
-      chunkContainer.appendChild(snippetBlock);
-    } else {
-      const empty = document.createElement('div');
-      empty.className = 'chat-reference-empty';
-      empty.textContent = '未找到片段内容，可尝试打开文档查看详情。';
-      chunkContainer.appendChild(empty);
-    }
-
-    item.appendChild(header);
-    item.appendChild(chunkContainer);
-    setExpanded(true);
-
-    return item;
-  }
-
-  async handleReferenceClick(reference, metadata, trigger, preferredChunk = null) {
-    if (!reference || typeof reference !== 'object') {
-      return;
-    }
-
-    const targetButton = trigger instanceof HTMLElement ? trigger : null;
-    if (targetButton) {
-      targetButton.classList.add('is-activating');
-    }
-
-    try {
-      const chunks = this.collectReferenceChunks(reference, metadata).slice();
-      if (preferredChunk) {
-        const matchIndex = chunks.findIndex((candidate) => this.isSameReferenceChunk(candidate, preferredChunk));
-        if (matchIndex > 0) {
-          const [selected] = chunks.splice(matchIndex, 1);
-          chunks.unshift(selected);
-        } else if (matchIndex === -1) {
-          chunks.unshift(preferredChunk);
-        }
-      }
-      const targetPath = await this.resolveReferencePath(reference, chunks);
-      if (!targetPath) {
-        this.setStatus('无法定位参考资料路径。', 'warning');
-        return;
-      }
-
-      // 在跳转前检查文件是否存在，不存在则在底部显示红色错误并拒绝跳转
-      try {
-        const exists = typeof window.fsAPI?.fileExists === 'function'
-          ? await window.fsAPI.fileExists(targetPath)
-          : true;
-        if (!exists) {
-          if (this.chatStatusTextEl) {
-            this.chatStatusTextEl.textContent = '该文件已不存在';
-            this.chatStatusTextEl.dataset.statusType = 'error';
-          } else {
-            this.appendSystemErrorToChat('该文件已不存在');
-          }
-          return;
-        }
-      } catch (e) {
-        if (this.chatStatusTextEl) {
-          this.chatStatusTextEl.textContent = '该文件已不存在';
-          this.chatStatusTextEl.dataset.statusType = 'error';
-        } else {
-          this.appendSystemErrorToChat('该文件已不存在');
-        }
-        return;
-      }
-
-      if (typeof window.switchToFileMode === 'function') {
-        window.switchToFileMode();
-      }
-
-      const searchModule = window.RendererModules?.search;
-      if (searchModule && typeof searchModule.openSearchResult === 'function') {
-        const primaryChunk = Array.isArray(chunks) && chunks.length ? chunks[0] : null;
-        const referencePayload = {
-          source: 'chat_reference',
-          sources: ['chat-reference'],
-          absolute_path: this.normalizePath(targetPath),
-          file_path: reference.project_relative_path || reference.file_path || '',
-          path: reference.project_relative_path || reference.file_path || '',
-          chunk_text: primaryChunk?.content || '',
-          text: primaryChunk?.content || '',
-          match_preview: primaryChunk?.content || '',
-          match_field: 'chunk_text',
-          chunk_index: primaryChunk?.chunk_index,
-          filename: reference.display_name || reference.filename || '',
-          display_name: reference.display_name || reference.filename || '',
-        };
-
-        try {
-          await searchModule.openSearchResult(referencePayload);
-          await this.highlightReferenceChunk(targetPath, reference, chunks, metadata);
-        } catch (error) {
-          console.warn('调用搜索模块打开参考资料失败，尝试备用逻辑:', error);
-          await this.openReferenceManually(targetPath, reference, chunks, metadata);
-        }
-      } else {
-        await this.openReferenceManually(targetPath, reference, chunks, metadata);
-      }
-    } finally {
-      if (targetButton) {
-        targetButton.classList.remove('is-activating');
-      }
-    }
-  }
-
-  async openReferenceManually(targetPath, reference, chunks, metadata) {
-    let viewer = window.fileViewer;
-    if ((!viewer || typeof viewer.openFile !== 'function') && window.explorerModule && typeof window.explorerModule.getFileViewer === 'function') {
-      viewer = window.explorerModule.getFileViewer();
-      if (viewer) {
-        window.fileViewer = viewer;
-      }
-    }
-
-    if (viewer && typeof viewer.openFile === 'function') {
-      if (typeof window.switchToFileMode === 'function') {
-        window.switchToFileMode();
-      }
-
-      try {
-        await viewer.openFile(targetPath);
-        await this.delay();
-      } catch (error) {
-        console.error('打开参考资料失败:', error);
-        this.setStatus('打开参考资料失败，请稍后重试。', 'error');
-      }
-    }
-
-    await this.focusFileInTree(targetPath);
-    await this.highlightReferenceChunk(targetPath, reference, chunks, metadata);
-  }
-
-  async resolveReferencePath(reference, chunks = []) {
-    const candidateSet = new Set();
-    const addCandidate = (value) => {
-      this.expandPathVariants(value).forEach((variant) => {
-        if (variant) {
-          candidateSet.add(variant);
-        }
-      });
-    };
-
-    addCandidate(reference.absolute_path);
-    addCandidate(reference.project_relative_path);
-    addCandidate(reference.file_path);
-
-    (Array.isArray(chunks) ? chunks : []).forEach((chunk) => {
-      if (!chunk) {
-        return;
-      }
-      addCandidate(chunk.absolute_path);
-      addCandidate(chunk.file_path || chunk.path);
-    });
-
-    for (const candidate of candidateSet) {
-      if (!candidate) {
-        continue;
-      }
-
-      if (/^[a-zA-Z]:/.test(candidate)) {
-        return candidate.replace(/\\/g, '/');
-      }
-
-      if (candidate.startsWith('/')) {
-        return candidate;
-      }
-
-      let resolved = null;
-      if (typeof window.fsAPI?.resolveProjectPath === 'function') {
-        try {
-          resolved = await window.fsAPI.resolveProjectPath(candidate);
-        } catch (error) {
-          resolved = null;
-        }
-      }
-      if (!resolved && typeof window.fsAPI?.resolveProjectPathSync === 'function') {
-        try {
-          resolved = window.fsAPI.resolveProjectPathSync(candidate);
-        } catch (error) {
-          resolved = null;
-        }
-      }
-      if (resolved) {
-        return this.normalizePath(resolved);
-      }
-
-      if (window.fileTreeData && window.fileTreeData.path) {
-        const rootPath = this.normalizePath(window.fileTreeData.path);
-        if (rootPath) {
-          const combined = this.normalizePath(`${rootPath}/${candidate}`);
-          if (combined.startsWith('/')) {
-            return combined;
-          }
-        }
-      }
-    }
-
-    return null;
-  }
-
-  async focusFileInTree(targetPath) {
-    if (!targetPath) {
-      return;
-    }
-
-    if (window.RendererModules?.fileTree?.setSelectedItemPath) {
-      window.RendererModules.fileTree.setSelectedItemPath(targetPath);
-    }
-    if (window.explorerModule && typeof window.explorerModule.setSelectedItemPath === 'function') {
-      window.explorerModule.setSelectedItemPath(targetPath);
-    }
-
-    const selector = `[data-path="${this.cssEscape(targetPath)}"]`;
-    const treeElement = document.querySelector(selector);
-    if (treeElement) {
-      document.querySelectorAll('.file-item.selected').forEach((el) => el.classList.remove('selected'));
-      treeElement.classList.add('selected');
-      treeElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }
-  }
-
-  cssEscape(value) {
-    if (typeof value !== 'string') {
-      return '';
-    }
-    if (window.CSS && typeof window.CSS.escape === 'function') {
-      return window.CSS.escape(value);
-    }
-    return value.replace(/['"\\]/g, '\\$&');
-  }
-
-  collectReferenceChunks(reference, metadata) {
-    if (!metadata || !Array.isArray(metadata.chunks)) {
-      return [];
-    }
-    const referenceVariants = new Set();
-    this.expandPathVariants(reference.file_path).forEach((variant) => referenceVariants.add(variant));
-    this.expandPathVariants(reference.project_relative_path).forEach((variant) => referenceVariants.add(variant));
-    this.expandPathVariants(reference.absolute_path).forEach((variant) => referenceVariants.add(variant));
-
-    const displayName = (reference.display_name || reference.filename || '').trim();
-
-    return metadata.chunks.filter((chunk) => {
-      if (!chunk) {
-        return false;
-      }
-      const chunkVariants = new Set();
-      this.expandPathVariants(chunk.file_path || chunk.path).forEach((variant) => chunkVariants.add(variant));
-      this.expandPathVariants(chunk.absolute_path).forEach((variant) => chunkVariants.add(variant));
-
-      const hasMatch = [...chunkVariants].some((variant) => {
-        if (!variant) {
-          return false;
-        }
-        if (referenceVariants.has(variant)) {
-          return true;
-        }
-        for (const refVariant of referenceVariants) {
-          if (!refVariant) {
-            continue;
-          }
-          if (variant === refVariant || variant.endsWith(refVariant) || refVariant.endsWith(variant)) {
-            return true;
-          }
-        }
-        return false;
-      });
-
-      if (hasMatch) {
-        return true;
-      }
-
-      if (displayName) {
-        const chunkName = (chunk.filename || '').trim();
-        if (chunkName && chunkName === displayName) {
-          return true;
-        }
-      }
-
-      return false;
-    });
-  }
-
-  isSameReferenceChunk(left, right) {
-    if (!left || !right) {
-      return false;
-    }
-    if (typeof left.vector_id === 'number' && typeof right.vector_id === 'number' && left.vector_id === right.vector_id) {
-      return true;
-    }
-    if (typeof left.chunk_index === 'number' && typeof right.chunk_index === 'number') {
-      const leftPath = (left.file_path || left.path || '').trim();
-      const rightPath = (right.file_path || right.path || '').trim();
-      if (left.chunk_index === right.chunk_index && leftPath && rightPath && leftPath === rightPath) {
-        return true;
-      }
-    }
-    if (left.content && right.content && left.content === right.content) {
-      return true;
-    }
-    return false;
-  }
-
-  buildReferenceSnippet(content) {
-    if (content === null || content === undefined) {
-      return '片段内容为空';
-    }
-    const normalized = String(content).trim();
-    if (!normalized) {
-      return '片段内容为空';
-    }
-    const limit = 680;
-    if (normalized.length <= limit) {
-      return normalized;
-    }
-    return `${normalized.slice(0, limit).trim()} ...`;
-  }
-
   attachCopyButton(bubble, contentEl) {
     if (!bubble || !contentEl) {
       return;
@@ -2843,39 +1886,6 @@ class ChatModule {
     }
   }
 
-  async highlightReferenceChunk(targetPath, reference, chunks, metadata) {
-    const searchModule = window.RendererModules?.search;
-    if (!searchModule || typeof searchModule.highlightSearchMatchWithRetry !== 'function') {
-      return;
-    }
-
-    const chunkList = Array.isArray(chunks) && chunks.length
-      ? chunks
-      : this.collectReferenceChunks(reference, metadata);
-
-    if (!chunkList.length) {
-      return;
-    }
-
-    const primaryChunk = chunkList[0];
-    const payload = {
-      chunk_text: primaryChunk.content,
-      text: primaryChunk.content,
-      match_preview: primaryChunk.content,
-      match_field: 'chunk_text',
-      file_path: reference.file_path || reference.project_relative_path || reference.absolute_path || targetPath,
-      path: reference.file_path || reference.project_relative_path || reference.absolute_path || targetPath,
-      chunk_index: primaryChunk.chunk_index,
-      filename: reference.display_name || reference.filename
-    };
-
-    try {
-      await searchModule.highlightSearchMatchWithRetry(targetPath, payload);
-    } catch (error) {
-      console.warn('高亮参考片段失败:', error);
-    }
-  }
-
   parseSSEEvent(rawEvent) {
     if (!rawEvent) {
       return null;
@@ -2923,7 +1933,7 @@ class ChatModule {
           if (!this.streamingState) {
             return null;
           }
-          const delta = this.normalizeModelText(rawDelta) || rawDelta;
+          const delta = ChatUtils.normalizeModelText(rawDelta) || rawDelta;
           this.streamingState.buffer += delta;
           if (this.streamingState.message) {
             this.streamingState.message.content = this.streamingState.buffer;
@@ -2972,7 +1982,7 @@ class ChatModule {
       if (!rawDelta) {
         return null;
       }
-      const delta = this.normalizeModelText(rawDelta) || rawDelta;
+      const delta = ChatUtils.normalizeModelText(rawDelta) || rawDelta;
       this.streamingState.buffer += delta;
       if (this.streamingState.message) {
         this.streamingState.message.content = this.streamingState.buffer;
@@ -2995,7 +2005,7 @@ class ChatModule {
         const rawContent = typeof data.content === 'string'
           ? data.content
           : this.streamingState.buffer;
-        const finalContent = this.normalizeModelText(rawContent || '') || rawContent || '';
+        const finalContent = ChatUtils.normalizeModelText(rawContent || '') || rawContent || '';
         this.streamingState.buffer = finalContent;
         const trimmedFinal = finalContent.trim();
         if (!trimmedFinal) {
@@ -3041,7 +2051,7 @@ class ChatModule {
       const rawMessage = typeof data.message === 'string' && data.message
         ? data.message
         : '生成失败，请稍后重试。';
-      const errorMessage = this.normalizeModelText(rawMessage) || rawMessage;
+      const errorMessage = ChatUtils.normalizeModelText(rawMessage) || rawMessage;
       this.setStatus(errorMessage, 'error');
       if (this.streamingState) {
         this.streamingState.buffer = errorMessage;
@@ -3468,25 +2478,6 @@ class ChatModule {
     this.chatInputEl.style.height = 'auto';
     const next = Math.min(Math.max(base, this.chatInputEl.scrollHeight), limit);
     this.chatInputEl.style.height = `${next}px`;
-  }
-
-  formatTimestamp(value) {
-    if (!value) {
-      return '';
-    }
-    try {
-      const date = new Date(value);
-      return date.toLocaleString('zh-CN', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch (error) {
-      console.error('Error formatting timestamp:', error);
-      return '';
-    }
   }
 
   toggleHistoryCollapse() {
