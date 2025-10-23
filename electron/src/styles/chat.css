@@ -1516,24 +1516,37 @@
   max-width: 720px;
   margin: 0 auto;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0px;
   box-sizing: border-box;
-  /* 使最大宽度包含边框和内边距，保证与消息列对齐 */
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 12px;
   background: var(--bg-color);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
-  padding: 12px 50px 12px 56px;
-  /* 略增上下内边距，稳定整体高度 */
-  min-height: 56px;
-  /* 稍增最小高度，确保按钮始终可居中 */
+  padding: 10px 14px 12px;
+  min-height: 58px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.dark-mode .chat-input-wrapper {
-  border-color: rgba(148, 163, 184, 0.25);
-  background: var(--bg-color);
-  box-shadow: 0 18px 40px rgba(8, 47, 73, 0.4);
+.chat-input-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chat-input-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: -1px;
+}
+
+.chat-input-action-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 #chat-upload-input {
@@ -1541,13 +1554,9 @@
 }
 
 .chat-upload-btn {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -1555,25 +1564,29 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+  padding: 0;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 .chat-upload-btn:hover,
 .chat-upload-btn:focus {
-  background: rgba(148, 163, 184, 0.2);
-  color: var(--text-color);
   outline: none;
 }
 
 .chat-upload-btn:active {
-  transform: translateY(-50%) scale(0.95);
+  transform: scale(0.95);
 }
 
 .chat-upload-btn[disabled] {
   opacity: 0.6;
   cursor: not-allowed;
   background: transparent;
-  transform: translateY(-50%);
+  transform: none;
+}
+
+.dark-mode .chat-upload-btn {
+  color: rgba(226, 232, 240, 0.76);
 }
 
 .dark-mode .chat-upload-btn:hover,
@@ -1583,13 +1596,11 @@
 }
 
 #chat-input {
-  flex: 1;
   width: 100%;
   max-height: 320px;
   margin: 0;
-  padding: 0;
-  /* 保持无额外内边距，避免高度跳变 */
-  min-height: 22px;
+  padding: 2px 2px 0;
+  min-height: 18px;
   border: none;
   font-size: 14px;
   font-family: inherit;
@@ -1598,7 +1609,6 @@
   resize: none;
   overflow-y: hidden;
   line-height: 1.5;
-  /* 固定行高，与容器高度配合 */
 }
 
 #chat-input::placeholder {
@@ -1614,16 +1624,18 @@
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
 }
 
+.dark-mode .chat-input-wrapper {
+  border-color: rgba(148, 163, 184, 0.25);
+  background: var(--bg-color);
+  box-shadow: 0 18px 40px rgba(8, 47, 73, 0.4);
+}
+
 .dark-mode .chat-input-wrapper:focus-within {
   border-color: rgba(148, 163, 184, 0.25);
   box-shadow: 0 20px 48px rgba(8, 47, 73, 0.58);
 }
 
 #chat-send-btn {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
   width: 30px;
   height: 30px;
   border-radius: 50%;
@@ -1636,29 +1648,32 @@
   cursor: pointer;
   transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   box-shadow: 0 12px 24px rgba(3, 102, 214, 0.28);
+  padding: 0;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 #chat-send-btn:hover:not([disabled]) {
   background: var(--accent-hover);
   box-shadow: 0 16px 34px rgba(3, 102, 214, 0.3);
-  transform: translateY(calc(-50% - 1px));
+  transform: translateY(-1px);
 }
 
 #chat-send-btn:active:not([disabled]) {
-  transform: translateY(-50%) scale(0.98);
+  transform: scale(0.95);
 }
 
 #chat-send-btn:focus,
 #chat-send-btn:focus-visible {
   outline: none;
-  transform: translateY(-50%);
+  box-shadow: 0 18px 36px rgba(3, 102, 214, 0.36);
 }
 
 #chat-send-btn[disabled] {
   opacity: 0.6;
   cursor: not-allowed;
   box-shadow: none;
-  transform: translateY(-50%);
+  transform: none;
 }
 
 #chat-send-btn .icon-arrow {
@@ -1671,6 +1686,17 @@
   width: 14px;
   height: 14px;
   pointer-events: none;
+}
+
+.chat-upload-btn svg,
+#chat-send-btn svg {
+  display: block;
+}
+
+.chat-upload-btn svg {
+  width: 21px;
+  height: 21px;
+  transform: translate(-3px, 4px);
 }
 
 #chat-image-preview[hidden] {
