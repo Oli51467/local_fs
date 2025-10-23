@@ -18,8 +18,6 @@ class ConfigManager extends EventEmitter {
       openaiApiKey: '',
       modelscopeApiKey: '',
       qwenApiKey: '',
-      kimiApiKey: '',
-      claudeApiKey: '',
       siliconflwApiKey: '',
       customModels: [],
       enableModelSummary: false,
@@ -35,6 +33,13 @@ class ConfigManager extends EventEmitter {
     
     this.loadConfig();
     this.setupWatcher();
+  }
+
+  sanitizeConfigEntries(config = {}) {
+    const sanitized = { ...config };
+    delete sanitized.kimiApiKey;
+    delete sanitized.claudeApiKey;
+    return sanitized;
   }
 
   resolveSettingsDir() {
@@ -74,7 +79,7 @@ class ConfigManager extends EventEmitter {
       if (fs.existsSync(this.settingsPath)) {
         const configData = fs.readFileSync(this.settingsPath, 'utf-8');
         const parsed = JSON.parse(configData);
-        this.config = { ...this.defaultConfig, ...parsed };
+        this.config = { ...this.defaultConfig, ...this.sanitizeConfigEntries(parsed) };
         //console.log('配置已加载:', this.config);
       } else {
         // 创建默认配置
@@ -166,7 +171,10 @@ class ConfigManager extends EventEmitter {
    */
   update(newConfig) {
     const oldConfig = { ...this.config };
-    this.config = { ...this.config, ...newConfig };
+    this.config = {
+      ...this.config,
+      ...this.sanitizeConfigEntries(newConfig)
+    };
     this.saveConfig();
     this.emit('configChanged', this.config, oldConfig);
   }

@@ -42,8 +42,6 @@ class SettingsModule {
       openaiApiKey: document.getElementById('api-key-openai'),
       modelscopeApiKey: document.getElementById('api-key-modelscope'),
       qwenApiKey: document.getElementById('api-key-qwen'),
-      kimiApiKey: document.getElementById('api-key-kimi'),
-      claudeApiKey: document.getElementById('api-key-claude'),
       siliconflwApiKey: document.getElementById('api-key-siliconflw')
     };
     this.apiVisibilityControllers = [];
@@ -51,8 +49,6 @@ class SettingsModule {
       openaiApiKey: '',
       modelscopeApiKey: '',
       qwenApiKey: '',
-      kimiApiKey: '',
-      claudeApiKey: '',
       siliconflwApiKey: ''
     };
     this.apiSettingsOriginal = { ...this.apiSettings };

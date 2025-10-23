@@ -11,8 +11,6 @@ class SettingsBackendModule {
       openaiApiKey: '',
       modelscopeApiKey: '',
       qwenApiKey: '',
-      kimiApiKey: '',
-      claudeApiKey: '',
       siliconflwApiKey: '',
       customModels: [],
       enableModelSummary: false,

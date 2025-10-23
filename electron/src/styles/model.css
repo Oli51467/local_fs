@@ -121,14 +121,14 @@
   font-size: 12px;
   font-weight: 600;
   color: var(--accent-color);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.2px;
   background-color: rgba(3, 102, 214, 0.08);
   padding: 4px 10px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
+  text-transform: none;
 }
 
 .dark-mode .model-card-provider {

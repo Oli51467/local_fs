@@ -389,20 +389,26 @@ async def generate_document_summary_if_enabled(
     await _broadcast_document_progress(
         relative_path,
         stage="生成主题",
-        message="正在概括文档主题…",
-        progress=0.52,
+        message="文档主题概括任务已提交…",
+        progress=0.38,
         status="running"
     )
 
     try:
-        summary_text = _invoke_summary_model(model_config, messages)
+        loop = asyncio.get_running_loop()
+        summary_text = await loop.run_in_executor(
+            None,
+            _invoke_summary_model,
+            model_config,
+            messages,
+        )
     except LLMClientError as exc:
         logger.warning("生成文档主题失败: %s", exc)
         await _broadcast_document_progress(
             relative_path,
             stage="生成主题",
             message=f"生成文档主题失败：{exc}",
-            progress=0.54,
+            progress=0.4,
             status="warning"
         )
         return None
@@ -412,7 +418,7 @@ async def generate_document_summary_if_enabled(
             relative_path,
             stage="生成主题",
             message="生成文档主题失败，已跳过该步骤。",
-            progress=0.54,
+            progress=0.4,
             status="warning"
         )
         return None
@@ -426,8 +432,8 @@ async def generate_document_summary_if_enabled(
     await _broadcast_document_progress(
         relative_path,
         stage="生成主题",
-        message="文档主题概括完成",
-        progress=0.56,
+        message="文档主题概括完成，等待写入向量…",
+        progress=0.42,
         status="running"
     )
 
@@ -1688,6 +1694,7 @@ async def upload_document(request: FileUploadRequest):
         vector_ids: List[int] = []
         chunk_ids: List[int] = []
         summary_result: Optional[Dict[str, Any]] = None
+        summary_task: Optional[asyncio.Task] = None
         try:
             await _broadcast_document_progress(
                 relative_file_path,
@@ -1720,6 +1727,27 @@ async def upload_document(request: FileUploadRequest):
             )
 
             if not is_image_document:
+                if request.summary and request.summary.enabled:
+                    try:
+                        summary_task = asyncio.create_task(
+                            generate_document_summary_if_enabled(
+                                request.summary,
+                                text_content,
+                                filename,
+                                relative_file_path
+                            )
+                        )
+                        logger.debug("已异步启动文档主题概括任务")
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning("异步启动文档主题概括失败，改为同步执行: %s", exc)
+                        summary_task = None
+                        summary_result = await generate_document_summary_if_enabled(
+                            request.summary,
+                            text_content,
+                            filename,
+                            relative_file_path
+                        )
+
                 if not text_splitter_service:
                     raise HTTPException(status_code=500, detail="文本分割器未初始化")
 
@@ -1738,16 +1766,6 @@ async def upload_document(request: FileUploadRequest):
                     raise HTTPException(status_code=400, detail="文本分割后无有效内容")
             else:
                 logger.info("图片文件跳过文本分割流程")
-
-            if not is_image_document:
-                summary_result = await generate_document_summary_if_enabled(
-                    request.summary,
-                    text_content,
-                    filename,
-                    relative_file_path
-                )
-                if summary_result:
-                    logger.info("文档主题概括完成，摘要长度: %d 字", len(summary_result.get("text", "")))
 
             # 6. 存储文档到SQLite数据库
             if not sqlite_manager:
@@ -1922,6 +1940,21 @@ async def upload_document(request: FileUploadRequest):
                     image_candidates=len(extracted_images)
                 )
 
+            if summary_task:
+                try:
+                    if summary_task.done():
+                        summary_result = summary_task.result()
+                    else:
+                        summary_result = await summary_task
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("等待文档主题概括任务时出现异常: %s", exc)
+                    summary_result = None
+                finally:
+                    summary_task = None
+
+                if summary_result:
+                    logger.info("文档主题概括完成，摘要长度: %d 字", len(summary_result.get("text", "")))
+
             summary_vector_id = None
             if summary_result and summary_result.get("text"):
                 summary_text = (summary_result.get("text") or "").strip()
@@ -1930,7 +1963,7 @@ async def upload_document(request: FileUploadRequest):
                         await _broadcast_document_progress(
                             relative_file_path,
                             stage="生成主题",
-                            message="正在保存文档主题信息…",
+                            message="已获取文档主题结果，正在保存向量…",
                             progress=0.905,
                             document_id=document_id
                         )

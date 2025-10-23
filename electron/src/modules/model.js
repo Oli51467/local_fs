@@ -843,29 +843,72 @@ class ModelModule {
     return `${text.slice(0, limit - 1)}…`;
   }
 
+  normalizeVendorName(name) {
+    if (!name && name !== 0) {
+      return '';
+    }
+    const raw = String(name).trim();
+    if (!raw) {
+      return '';
+    }
+    if (/[\u4e00-\u9fff]/.test(raw)) {
+      return raw;
+    }
+
+    const canonicalKey = raw.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const overrides = {
+      opendatalab: 'OpenDataLab',
+      sentencetransformer: 'SentenceTransformer',
+      siliconflow: 'SiliconFlow',
+      openai: 'OpenAI',
+      ollama: 'Ollama'
+    };
+    if (overrides[canonicalKey]) {
+      return overrides[canonicalKey];
+    }
+
+    if (/[a-z]/.test(raw) && /[A-Z]/.test(raw) && !/^[A-Z]+$/.test(raw)) {
+      return raw;
+    }
+
+    const segments = raw.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+    if (!segments.length) {
+      return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+    }
+    return segments
+      .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase())
+      .join('');
+  }
+
   getVendorLabel(model) {
     if (!model) {
       return '';
     }
     const key = model.key || '';
+    let vendor = '';
     switch (key) {
       case 'bge_m3':
       case 'bge_reranker_v2_m3':
-        return 'AAAI';
+        vendor = 'BAAI';
+        break;
       case 'clip_vit_b_32':
       case 'clip_vit_b_32_multilingual':
-        return 'SentenceTransformer';
+        vendor = 'SentenceTransformer';
+        break;
       case 'pdf_extract_kit':
-        return 'opendatalab';
+        vendor = 'OpenDataLab';
+        break;
       default:
         if (Array.isArray(model.tags)) {
           const vendorTag = model.tags.find((tag) => typeof tag === 'string' && tag.trim());
           if (vendorTag) {
-            return vendorTag.trim();
+            vendor = vendorTag.trim();
+            break;
           }
         }
-        return model.providerName || '系统模型';
+        vendor = model.providerName || '系统模型';
     }
+    return this.normalizeVendorName(vendor);
   }
 
   setupAddModal() {
@@ -1437,7 +1480,7 @@ class ModelModule {
 
     const providerLabel = document.createElement('span');
     providerLabel.className = 'model-card-provider';
-    providerLabel.textContent = model.providerName;
+    providerLabel.textContent = this.normalizeVendorName(model.providerName);
 
     const statusLabel = document.createElement('span');
     statusLabel.className = 'model-card-status model-card-status--connected';
@@ -1603,7 +1646,7 @@ class ModelModule {
     const enriched = { ...model };
     const source = enriched.sourceId ? this.getSourceById(enriched.sourceId) : null;
     if (source) {
-      enriched.providerName = enriched.providerName || source.name;
+      enriched.providerName = this.normalizeVendorName(enriched.providerName || source.name);
       enriched.providerIcon = enriched.providerIcon || source.icon || null;
       if (typeof enriched.requiresApiKey !== 'boolean') {
         enriched.requiresApiKey = source.requiresApiKey !== false;
@@ -1667,9 +1710,10 @@ class ModelModule {
 
   buildModelTags(model, source) {
     const providerName = model.providerName || source?.name || '未知来源';
+    const normalizedProvider = this.normalizeVendorName(providerName);
     const parameterSize = model.parameterSize || '未知';
     const displayName = model.name || model.apiModel || model.modelId || '未命名模型';
-    return [providerName, parameterSize, displayName].filter((item) => typeof item === 'string' && item.trim().length > 0);
+    return [normalizedProvider, parameterSize, displayName].filter((item) => typeof item === 'string' && item.trim().length > 0);
   }
 
   extractParameterSize(identifier) {

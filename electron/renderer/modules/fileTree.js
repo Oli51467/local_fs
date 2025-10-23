@@ -690,7 +690,10 @@
       return;
     }
 
-    const progress = typeof payload.progress === 'number' ? payload.progress : 0;
+    const rawProgress = typeof payload.progress === 'number' ? payload.progress : 0;
+    const clampedProgress = Math.max(0, Math.min(1, rawProgress));
+    const lastProgress = typeof task.lastProgress === 'number' ? task.lastProgress : 0;
+    const progress = Math.max(clampedProgress, lastProgress);
     const message = payload.message || task.message || `正在挂载 ${task.displayName || ''}`;
     const stageText = payload.stage || task.stage || '';
 
@@ -698,6 +701,9 @@
       message,
       stage: stageText || undefined
     });
+    task.lastProgress = progress;
+    task.message = message;
+    task.stage = stageText;
 
     const status = payload.status || 'running';
     if (status !== 'running') {
@@ -1707,7 +1713,8 @@
       backendProgressState.fileTasks.set(progressKey, {
         message: overlayMessage,
         stage: '准备中',
-        displayName: extractFileName(filePath)
+        displayName: extractFileName(filePath),
+        lastProgress: 0
       });
     }
 
