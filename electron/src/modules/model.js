@@ -89,6 +89,24 @@ class ModelModule {
         ]
       },
       {
+        sourceId: 'modelscope',
+        name: 'ModelScope',
+        icon: null,
+        apiKeySetting: 'modelscopeApiKey',
+        requiresApiKey: true,
+        defaultApiUrl: 'https://api-inference.modelscope.cn/v1/chat/completions',
+        models: [
+          {
+            modelId: 'Qwen/Qwen3-32B',
+            name: 'Qwen/Qwen3-32B',
+            description: 'ModelScope 平台提供的大型 Qwen 模型，适用于长文本与复杂对话任务。',
+            tags: ['ModelScope', 'Qwen3系列', '参数量-32B'],
+            apiModel: 'Qwen/Qwen3-32B',
+            apiKeySetting: 'modelscopeApiKey'
+          }
+        ]
+      },
+      {
         sourceId: 'ollama',
         name: 'Ollama',
         icon: null,
@@ -860,6 +878,7 @@ class ModelModule {
       opendatalab: 'OpenDataLab',
       sentencetransformer: 'SentenceTransformer',
       siliconflow: 'SiliconFlow',
+      modelscope: 'ModelScope',
       openai: 'OpenAI',
       ollama: 'Ollama'
     };
@@ -1105,9 +1124,10 @@ class ModelModule {
     const requiresApiKey = source.requiresApiKey !== false;
     const apiKeySetting = source.apiKeySetting || (requiresApiKey ? 'siliconflwApiKey' : null);
     const settingsModule = this.dependencies.getSettingsModule ? this.dependencies.getSettingsModule() : null;
-    const apiKey = requiresApiKey && settingsModule && typeof settingsModule.getApiKey === 'function'
+    const apiKeyUntrimmed = requiresApiKey && settingsModule && typeof settingsModule.getApiKey === 'function'
       ? settingsModule.getApiKey(apiKeySetting)
       : '';
+    const apiKey = typeof apiKeyUntrimmed === 'string' ? apiKeyUntrimmed.trim() : '';
 
     if (requiresApiKey && !apiKey) {
       this.setModalStatus('请先在设置页面填写对应的 API Key。', 'error');
@@ -1123,6 +1143,10 @@ class ModelModule {
         await this.testOpenAIConnection(apiKey, modelName);
       } else if (isOllama) {
         await this.testOllamaConnection(modelUrl, modelName);
+      } else if (sourceId === 'siliconflow') {
+        await this.testSiliconflowConnection(apiKey, modelName);
+      } else if (sourceId === 'modelscope') {
+        await this.testModelScopeConnection(apiKey, modelName);
       } else {
         await this.testSiliconflowConnection(apiKey, modelName);
       }
@@ -1255,6 +1279,27 @@ class ModelModule {
         `调用失败，状态码 ${response.status}`;
       throw new Error(errorMessage);
     }
+  }
+
+  async testModelScopeConnection(apiKey, apiModel) {
+    const normalizedApiKey = (apiKey || '').trim();
+    if (!normalizedApiKey) {
+      throw new Error('请先在设置页面填写 ModelScope API Key。');
+    }
+
+    if (typeof window !== 'undefined' && window.fsAPI && typeof window.fsAPI.testModelScopeConnection === 'function') {
+      const result = await window.fsAPI.testModelScopeConnection({
+        apiKey: normalizedApiKey,
+        model: apiModel
+      });
+      if (!result || result.success === false) {
+        const message = result?.error || `ModelScope 调用失败${result?.status ? `（HTTP ${result.status}）` : ''}`;
+        throw new Error(message);
+      }
+      return;
+    }
+
+    throw new Error('当前环境不支持 ModelScope 测试，请升级应用。');
   }
 
   async testOpenAIConnection(apiKey, model = "gpt-4o-mini") {

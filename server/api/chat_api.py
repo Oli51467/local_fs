@@ -13,6 +13,7 @@ import requests
 from requests.exceptions import RequestException, Timeout
 import numpy as np
 import faiss
+from openai import OpenAI
 
 from config.config import ServerConfig
 from api.status_api import status_broadcaster
@@ -353,6 +354,115 @@ def _stream_ollama_chat(
             yield event
     finally:
         response.close()
+
+
+def _prepare_modelscope_request(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    body = dict(payload)
+    stream_flag = bool(body.pop("stream", False))
+    extra_body = body.pop("extra_body", None)
+    kwargs = dict(body)
+    if extra_body is not None:
+        kwargs["extra_body"] = extra_body
+    return kwargs, stream_flag
+
+
+def _call_modelscope_chat_completion(
+    api_key: str, payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    kwargs, _ = _prepare_modelscope_request(payload)
+    kwargs["stream"] = False
+    client = OpenAI(api_key=api_key, base_url=MODELSCOPE_BASE_URL)
+    try:
+        response = client.chat.completions.create(**kwargs)
+    except Exception as exc:  # pylint: disable=broad-except
+        raise LLMClientError(str(exc)) from exc
+    result = response.model_dump()
+    choices = result.get("choices") or []
+    if choices:
+        choice = choices[0]
+        message = choice.get("message") or {}
+        main_text = (message.get("content") or "").strip()
+        reasoning_raw = (
+            message.pop("reasoning_content", None)
+            or message.pop("reasoning", None)
+            or ""
+        )
+        reasoning_text = ""
+        if isinstance(reasoning_raw, list):
+            reasoning_text = "".join(str(item) for item in reasoning_raw).strip()
+        else:
+            reasoning_text = str(reasoning_raw or "").strip()
+
+        if reasoning_text:
+            message["content"] = f"<think>{reasoning_text}</think>{main_text}"
+        else:
+            message["content"] = main_text
+        choice["message"] = message
+        choices[0] = choice
+        result["choices"] = choices
+    return result
+
+
+def _stream_modelscope_chat(
+    api_key: str, payload: Dict[str, Any]
+) -> Generator[Dict[str, Any], None, None]:
+    kwargs, stream_flag = _prepare_modelscope_request(payload)
+    kwargs["stream"] = stream_flag or True
+    client = OpenAI(api_key=api_key, base_url=MODELSCOPE_BASE_URL)
+    in_thinking = False
+    try:
+        stream = client.chat.completions.create(**kwargs)
+        for chunk in stream:
+            if chunk is None:
+                continue
+            data = chunk.model_dump()
+            choices = data.get("choices") or []
+            if choices:
+                choice = choices[0]
+                delta = choice.get("delta") or {}
+                message = choice.get("message") or {}
+                reasoning = delta.pop("reasoning_content", None)
+                if not reasoning:
+                    reasoning = message.pop("reasoning_content", None)
+                if not reasoning:
+                    reasoning = message.pop("reasoning", None)
+                if isinstance(reasoning, list):
+                    reasoning = "".join(str(item) for item in reasoning)
+                reasoning = "" if reasoning is None else str(reasoning)
+                answer_piece = delta.get("content") or ""
+                final_piece = ""
+
+                if reasoning:
+                    if not in_thinking:
+                        final_piece += "<think>"
+                        in_thinking = True
+                    final_piece += reasoning
+
+                finish_reason = choice.get("finish_reason")
+                if answer_piece:
+                    if in_thinking:
+                        final_piece += "</think>"
+                        in_thinking = False
+                    final_piece += answer_piece
+                elif in_thinking and not reasoning and finish_reason:
+                    final_piece += "</think>"
+                    in_thinking = False
+
+                delta["content"] = final_piece
+                choice["delta"] = delta
+                data["choices"] = [choice]
+            yield data
+        if in_thinking:
+            yield {
+                "choices": [
+                    {
+                        "delta": {"content": "</think>"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+    except Exception as exc:  # pylint: disable=broad-except
+        raise LLMClientError(str(exc)) from exc
 
 
 class ConversationSummary(BaseModel):
@@ -1730,6 +1840,10 @@ def _build_llm_payload(
     max_tokens = getattr(ServerConfig, "CHAT_MAX_TOKENS", None)
     if max_tokens:
         payload["max_tokens"] = max_tokens
+    if selection.source_id == "modelscope":
+        payload["extra_body"] = {
+            "enable_thinking": bool(stream),
+        }
     return payload
 
 
@@ -1884,6 +1998,9 @@ def _extract_stream_delta(chunk: Dict[str, Any]) -> str:
     choice = choices[0]
     delta = choice.get("delta")
     if delta and isinstance(delta, dict):
+        reasoning = delta.get("reasoning_content")
+        if reasoning:
+            return reasoning
         return delta.get("content") or ""
     message = choice.get("message")
     if message and isinstance(message, dict):
@@ -1962,6 +2079,7 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
             step=5,
         )
 
+        api_key = (selection.api_key or "").strip()
         if selection.source_id == "ollama":
             for raw_chunk in _stream_ollama_chat(selection, llm_payload):
                 if isinstance(raw_chunk, dict):
@@ -1973,9 +2091,20 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
                     continue
                 buffer_parts.append(delta)
                 yield _sse_event("chunk", {"delta": delta})
+        elif selection.source_id == "modelscope":
+            if not api_key:
+                raise LLMClientError("缺少模型 API Key")
+            for raw_chunk in _stream_modelscope_chat(api_key, llm_payload):
+                usage_info = raw_chunk.get("usage")
+                if usage_info:
+                    assistant_metadata["usage"] = usage_info
+                delta = _extract_stream_delta(raw_chunk)
+                if not delta:
+                    continue
+                buffer_parts.append(delta)
+                yield _sse_event("chunk", {"delta": delta})
         else:
             assert llm_client is not None
-            api_key = (selection.api_key or "").strip()
             if not api_key:
                 raise LLMClientError("缺少模型 API Key")
             for raw_chunk in llm_client.stream_chat(api_key, llm_payload):
@@ -2136,11 +2265,15 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
             message="正在思考中",
             step=5,
         )
+        api_key = (selection.api_key or "").strip()
         if selection.source_id == "ollama":
             result = _call_ollama_chat_completion(selection, llm_payload)
+        elif selection.source_id == "modelscope":
+            if not api_key:
+                raise LLMClientError("缺少模型 API Key")
+            result = _call_modelscope_chat_completion(api_key, llm_payload)
         else:
             assert llm_client is not None
-            api_key = (selection.api_key or "").strip()
             if not api_key:
                 raise LLMClientError("缺少模型 API Key")
             result = llm_client.chat_completion(api_key, llm_payload)
@@ -2313,3 +2446,4 @@ async def delete_conversation_endpoint(conversation_id: int) -> Response:
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return Response(status_code=204)
+MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1/"

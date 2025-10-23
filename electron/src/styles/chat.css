@@ -461,19 +461,28 @@
   align-items: center;
   gap: 6px;
   text-align: left;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  width: 100%;
+  min-width: 0;
 }
 
 .chat-model-option-name {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-color);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-model-option-provider {
   font-size: 12px;
   color: var(--text-muted);
   text-transform: none;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .chat-model-option-check {

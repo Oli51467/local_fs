@@ -188,7 +188,9 @@
       const active = this.selected || this.models[0];
       if (active) {
         this.selected = { ...active };
-        this.buttonTextEl.textContent = active.name || '未命名模型';
+        const nameLabel = active.name || '未命名模型';
+        const providerLabel = active.providerName || active.sourceId || '';
+        this.buttonTextEl.textContent = providerLabel ? `${nameLabel}-${providerLabel}` : nameLabel;
       } else {
         this.buttonTextEl.textContent = '请选择模型';
       }

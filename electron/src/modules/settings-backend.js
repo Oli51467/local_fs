@@ -3,6 +3,8 @@ const path = require('path');
 const { ipcMain } = require('electron');
 const ConfigManager = require('./config-manager');
 
+const fetchFn = (...args) => fetch(...args);
+
 class SettingsBackendModule {
   constructor() {
     this.settingsPath = path.join(__dirname, '..', '..', 'settings.json');
@@ -44,6 +46,11 @@ class SettingsBackendModule {
     ipcMain.handle('get-settings', () => {
       return this.getSettings();
     });
+
+    // 测试 ModelScope 连通性
+    ipcMain.handle('test-modelscope-connection', async (event, payload) => {
+      return this.testModelScopeConnection(payload);
+    });
   }
 
   saveSettings(settings) {
@@ -69,6 +76,49 @@ class SettingsBackendModule {
   destroy() {
     if (this.configManager) {
       this.configManager.destroy();
+    }
+  }
+
+  async testModelScopeConnection(payload = {}) {
+    const apiKey = (payload?.apiKey || '').trim();
+    const model = (payload?.model || '').trim() || 'Qwen/Qwen3-32B';
+
+    if (!apiKey) {
+      return { success: false, error: '缺少 ModelScope API Key。' };
+    }
+
+    const host = process.env.FS_APP_API_HOST || '127.0.0.1';
+    const port = process.env.FS_APP_API_PORT || '8000';
+    const url = `http://${host}:${port}/api/models/test-modelscope`;
+
+    try {
+      const response = await fetchFn(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          api_key: apiKey,
+          model,
+          prompt: '你好，如果你能够正常工作，请回复我“你好”。'
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) {
+        const message = data?.detail || data?.error || `HTTP ${response.status}`;
+        return {
+          success: false,
+          status: response.status,
+          error: message
+        };
+      }
+      return data;
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || '请求 ModelScope 测试接口失败'
+      };
     }
   }
 }

@@ -4,12 +4,16 @@ from typing import List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from openai import OpenAI
 
 from service.model_download_service import (
     ModelDownloadService,
     ModelStatus as ServiceModelStatus,
     get_model_download_service,
 )
+
+
+MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1/"
 
 
 router = APIRouter(prefix="/api/models", tags=["models"])
@@ -75,3 +79,80 @@ def uninstall_model(key: str) -> ModelStatusResponse:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ModelStatusResponse.from_service(status)
+
+
+class ModelScopeTestRequest(BaseModel):
+    api_key: str = Field(..., description="ModelScope Access Token")
+    model: str = Field(
+        default="Qwen/Qwen3-32B",
+        description="需要测试调用的模型 ID（默认 Qwen/Qwen3-32B）",
+    )
+    prompt: str = Field(
+        default="你好，如果你能够正常工作，请回复我“你好”。",
+        description="用于连通性测试的用户消息",
+    )
+
+
+class ModelScopeTestResponse(BaseModel):
+    success: bool = Field(default=True, description="调用是否成功")
+    model: str = Field(..., description="实际调用的模型 ID")
+    content: Optional[str] = Field(default=None, description="模型返回的内容")
+
+
+@router.post("/test-modelscope", response_model=ModelScopeTestResponse)
+def test_modelscope_connection(
+    payload: ModelScopeTestRequest,
+) -> ModelScopeTestResponse:
+    api_key = (payload.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="缺少 ModelScope API Key")
+
+    model_id = (payload.model or "").strip() or "Qwen/Qwen3-32B"
+    prompt = payload.prompt.strip() or "你好，如果你能够正常工作，请回复我“你好”。"
+
+    client = OpenAI(api_key=api_key, base_url=MODELSCOPE_BASE_URL)
+    try:
+        stream = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            stream=True,
+            max_tokens=64,
+            extra_body={
+                "enable_thinking": True,
+            },
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    content_parts: List[str] = []
+    thinking_parts: List[str] = []
+    try:
+        for chunk in stream:
+            if not chunk or not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning:
+                thinking_parts.append(str(reasoning))
+            piece = getattr(delta, "content", None)
+            if piece:
+                content_parts.append(str(piece))
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    content_text = "".join(content_parts).strip()
+    thinking_text = "".join(thinking_parts).strip()
+    if thinking_text and content_text:
+        combined = f"{thinking_text}\n\n=== Final Answer ===\n{content_text}"
+    else:
+        combined = content_text or thinking_text or ""
+
+    return ModelScopeTestResponse(
+        success=True, model=model_id, content=combined or None
+    )

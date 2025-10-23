@@ -284,7 +284,9 @@ class ChatModule {
     const active = this.selectedModel || this.availableModels[0];
     if (active) {
       this.selectedModel = { ...active };
-      this.chatModelButtonTextEl.textContent = active.name || '未命名模型';
+      const nameLabel = active.name || '未命名模型';
+      const providerLabel = active.providerName || active.sourceId || '';
+      this.chatModelButtonTextEl.textContent = providerLabel ? `${nameLabel}-${providerLabel}` : nameLabel;
     } else {
       this.selectedModel = null;
       this.chatModelButtonTextEl.textContent = '请选择模型';
