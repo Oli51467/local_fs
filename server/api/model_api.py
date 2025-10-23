@@ -14,6 +14,7 @@ from service.model_download_service import (
 
 
 MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1/"
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 router = APIRouter(prefix="/api/models", tags=["models"])
@@ -122,6 +123,7 @@ def test_modelscope_connection(
             max_tokens=64,
             extra_body={
                 "enable_thinking": True,
+                "thinking_budget": 40960,
             },
         )
     except Exception as exc:  # pylint: disable=broad-except
@@ -156,3 +158,67 @@ def test_modelscope_connection(
     return ModelScopeTestResponse(
         success=True, model=model_id, content=combined or None
     )
+
+
+class DashScopeTestRequest(BaseModel):
+    api_key: str = Field(..., description="DashScope API Key")
+    model: str = Field(
+        default="qwen3-max",
+        description="需要测试调用的模型 ID（默认 qwen3-max）",
+    )
+    prompt: str = Field(
+        default="你好，如果你能够正常工作，请回复我“你好”。",
+        description="用于连通性测试的用户消息",
+    )
+
+
+class DashScopeTestResponse(BaseModel):
+    success: bool = Field(default=True, description="调用是否成功")
+    model: str = Field(..., description="实际调用的模型 ID")
+    content: Optional[str] = Field(default=None, description="模型返回的内容")
+
+
+@router.post("/test-dashscope", response_model=DashScopeTestResponse)
+def test_dashscope_connection(payload: DashScopeTestRequest) -> DashScopeTestResponse:
+    api_key = (payload.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="缺少 DashScope API Key")
+
+    model_id = (payload.model or "").strip() or "qwen3-max"
+    prompt = payload.prompt.strip() or "你好，如果你能够正常工作，请回复我“你好”。"
+
+    client = OpenAI(api_key=api_key, base_url=DASHSCOPE_BASE_URL)
+    try:
+        stream = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            stream=True,
+            max_tokens=64,
+            extra_body={
+                "enable_thinking": True,
+                "thinking_budget": 40960,
+            },
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    chunks: List[str] = []
+    try:
+        for chunk in stream:
+            if not chunk or not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            delta = getattr(choice, "delta", None)
+            if delta and getattr(delta, "content", None):
+                chunks.append(str(delta.content))
+            message = getattr(choice, "message", None)
+            if message and getattr(message, "content", None):
+                chunks.append(str(message.content))
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    content_text = "".join(chunks).strip() or None
+    return DashScopeTestResponse(success=True, model=model_id, content=content_text)

@@ -107,6 +107,24 @@ class ModelModule {
         ]
       },
       {
+        sourceId: 'dashscope',
+        name: '通义千问',
+        icon: null,
+        apiKeySetting: 'qwenApiKey',
+        requiresApiKey: true,
+        defaultApiUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+        models: [
+          {
+            modelId: 'qwen3-max',
+            name: 'Qwen3-Max',
+            description: '通义百炼平台旗舰 Qwen3-Max 模型，适用于通用问答与复杂推理。',
+            tags: ['通义', 'Qwen3', '旗舰'],
+            apiModel: 'qwen3-max',
+            apiKeySetting: 'qwenApiKey'
+          }
+        ]
+      },
+      {
         sourceId: 'ollama',
         name: 'Ollama',
         icon: null,
@@ -878,6 +896,7 @@ class ModelModule {
       opendatalab: 'OpenDataLab',
       sentencetransformer: 'SentenceTransformer',
       siliconflow: 'SiliconFlow',
+      dashscope: '通义千问',
       modelscope: 'ModelScope',
       openai: 'OpenAI',
       ollama: 'Ollama'
@@ -1122,7 +1141,18 @@ class ModelModule {
     }
 
     const requiresApiKey = source.requiresApiKey !== false;
-    const apiKeySetting = source.apiKeySetting || (requiresApiKey ? 'siliconflwApiKey' : null);
+    let apiKeySetting = source.apiKeySetting;
+    if (!apiKeySetting && requiresApiKey) {
+      if (source.sourceId === 'modelscope') {
+        apiKeySetting = 'modelscopeApiKey';
+      } else if (source.sourceId === 'dashscope') {
+        apiKeySetting = 'qwenApiKey';
+      } else if (source.sourceId === 'openai') {
+        apiKeySetting = 'openaiApiKey';
+      } else {
+        apiKeySetting = 'siliconflwApiKey';
+      }
+    }
     const settingsModule = this.dependencies.getSettingsModule ? this.dependencies.getSettingsModule() : null;
     const apiKeyUntrimmed = requiresApiKey && settingsModule && typeof settingsModule.getApiKey === 'function'
       ? settingsModule.getApiKey(apiKeySetting)
@@ -1147,6 +1177,8 @@ class ModelModule {
         await this.testSiliconflowConnection(apiKey, modelName);
       } else if (sourceId === 'modelscope') {
         await this.testModelScopeConnection(apiKey, modelName);
+      } else if (sourceId === 'dashscope') {
+        await this.testDashScopeConnection(apiKey, modelName);
       } else {
         await this.testSiliconflowConnection(apiKey, modelName);
       }
@@ -1300,6 +1332,67 @@ class ModelModule {
     }
 
     throw new Error('当前环境不支持 ModelScope 测试，请升级应用。');
+  }
+
+  async testDashScopeConnection(apiKey, apiModel) {
+    const normalizedApiKey = (apiKey || '').trim();
+    if (!normalizedApiKey) {
+      throw new Error('请先在设置页面填写通义千问 API Key。');
+    }
+
+    if (typeof window !== 'undefined' && window.fsAPI && typeof window.fsAPI.testDashScopeConnection === 'function') {
+      const result = await window.fsAPI.testDashScopeConnection({
+        apiKey: normalizedApiKey,
+        model: apiModel
+      });
+      if (!result || result.success === false) {
+        const message = result?.error || `通义千问调用失败${result?.status ? `（HTTP ${result.status}）` : ''}`;
+        throw new Error(message);
+      }
+      return;
+    }
+
+    const url = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+    const payload = {
+      model: apiModel,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a helpful assistant.'
+        },
+        {
+          role: 'user',
+          content: '你好，如果你能够正常工作，请回复我“你好”，不需要输出其他内容。'
+        }
+      ],
+      stream: false,
+      max_tokens: 32
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${normalizedApiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      console.warn('解析通义千问响应失败:', parseError);
+    }
+
+    if (!response.ok) {
+      const errorMessage =
+        (data && data.error && data.error.message) ||
+        (data && data.message) ||
+        `调用失败，状态码 ${response.status}`;
+      throw new Error(errorMessage);
+    }
   }
 
   async testOpenAIConnection(apiKey, model = "gpt-4o-mini") {
@@ -1700,7 +1793,17 @@ class ModelModule {
         enriched.apiUrl = source.defaultApiUrl;
       }
       if (enriched.requiresApiKey !== false) {
-        enriched.apiKeySetting = enriched.apiKeySetting || source.apiKeySetting || 'siliconflwApiKey';
+        if (!enriched.apiKeySetting) {
+          if (source.sourceId === 'modelscope') {
+            enriched.apiKeySetting = 'modelscopeApiKey';
+          } else if (source.sourceId === 'dashscope') {
+            enriched.apiKeySetting = 'qwenApiKey';
+          } else if (source.sourceId === 'openai') {
+            enriched.apiKeySetting = 'openaiApiKey';
+          } else {
+            enriched.apiKeySetting = source.apiKeySetting || 'siliconflwApiKey';
+          }
+        }
       } else if (!enriched.apiKeySetting) {
         enriched.apiKeySetting = null;
       }
@@ -1727,7 +1830,17 @@ class ModelModule {
       enriched.apiUrl = null;
     }
     if (enriched.requiresApiKey !== false) {
-      enriched.apiKeySetting = enriched.apiKeySetting || 'siliconflwApiKey';
+      if (!enriched.apiKeySetting) {
+        if (enriched.sourceId === 'modelscope') {
+          enriched.apiKeySetting = 'modelscopeApiKey';
+        } else if (enriched.sourceId === 'dashscope') {
+          enriched.apiKeySetting = 'qwenApiKey';
+        } else if (enriched.sourceId === 'openai') {
+          enriched.apiKeySetting = 'openaiApiKey';
+        } else {
+          enriched.apiKeySetting = 'siliconflwApiKey';
+        }
+      }
     } else {
       enriched.apiKeySetting = enriched.apiKeySetting || null;
     }

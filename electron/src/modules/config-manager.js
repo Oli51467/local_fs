@@ -20,6 +20,7 @@ class ConfigManager extends EventEmitter {
       qwenApiKey: '',
       siliconflwApiKey: '',
       customModels: [],
+      chatModelSelection: null,
       enableModelSummary: false,
       modelSummarySelection: null,
       enableSummarySearch: false

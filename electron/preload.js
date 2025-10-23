@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld('fsAPI', {
   onSettingsUpdated: (callback) => ipcRenderer.on('settings-updated', (event, config) => callback(config)),
   setTitleBarTheme: (isDarkMode) => ipcRenderer.invoke('set-title-bar-theme', isDarkMode),
   testModelScopeConnection: (payload) => ipcRenderer.invoke('test-modelscope-connection', payload),
+  testDashScopeConnection: (payload) => ipcRenderer.invoke('test-dashscope-connection', payload),
   
   // 文件导入相关
   selectFiles: () => ipcRenderer.invoke('select-files'),

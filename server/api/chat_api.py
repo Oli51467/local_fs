@@ -59,6 +59,8 @@ RERANK_FUSION_WEIGHT = 0.45
 DENSE_FUSION_WEIGHT = 0.3
 LEXICAL_FUSION_WEIGHT = 0.15
 CLIP_FUSION_WEIGHT = 0.1
+MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1/"
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 MIN_COMPONENT_SCORE = 0.4
 MIN_FINAL_SCORE = 0.45
@@ -283,7 +285,9 @@ def _call_ollama_chat_completion(
             message = error_payload.get("error") or error_payload.get("message")
         if not message:
             message = body_text.strip() or response.reason or "Ollama 调用失败"
-        raise LLMClientError(message, status_code=response.status_code, payload=error_payload)
+        raise LLMClientError(
+            message, status_code=response.status_code, payload=error_payload
+        )
 
     try:
         data = response.json()
@@ -331,7 +335,9 @@ def _stream_ollama_chat(
             message = error_payload.get("error") or error_payload.get("message")
         if not message:
             message = body_text.strip() or response.reason or "Ollama 调用失败"
-        raise LLMClientError(message, status_code=response.status_code, payload=error_payload)
+        raise LLMClientError(
+            message, status_code=response.status_code, payload=error_payload
+        )
 
     response.encoding = "utf-8"
 
@@ -409,6 +415,113 @@ def _stream_modelscope_chat(
     kwargs, stream_flag = _prepare_modelscope_request(payload)
     kwargs["stream"] = stream_flag or True
     client = OpenAI(api_key=api_key, base_url=MODELSCOPE_BASE_URL)
+    in_thinking = False
+    try:
+        stream = client.chat.completions.create(**kwargs)
+        for chunk in stream:
+            if chunk is None:
+                continue
+            data = chunk.model_dump()
+            choices = data.get("choices") or []
+            if choices:
+                choice = choices[0]
+                delta = choice.get("delta") or {}
+                message = choice.get("message") or {}
+                reasoning = delta.pop("reasoning_content", None)
+                if not reasoning:
+                    reasoning = message.pop("reasoning_content", None)
+                if not reasoning:
+                    reasoning = message.pop("reasoning", None)
+                if isinstance(reasoning, list):
+                    reasoning = "".join(str(item) for item in reasoning)
+                reasoning = "" if reasoning is None else str(reasoning)
+                answer_piece = delta.get("content") or ""
+                final_piece = ""
+
+                if reasoning:
+                    if not in_thinking:
+                        final_piece += "<think>"
+                        in_thinking = True
+                    final_piece += reasoning
+
+                finish_reason = choice.get("finish_reason")
+                if answer_piece:
+                    if in_thinking:
+                        final_piece += "</think>"
+                        in_thinking = False
+                    final_piece += answer_piece
+                elif in_thinking and not reasoning and finish_reason:
+                    final_piece += "</think>"
+                    in_thinking = False
+
+                delta["content"] = final_piece
+                choice["delta"] = delta
+                data["choices"] = [choice]
+            yield data
+        if in_thinking:
+            yield {
+                "choices": [
+                    {
+                        "delta": {"content": "</think>"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+    except Exception as exc:  # pylint: disable=broad-except
+        raise LLMClientError(str(exc)) from exc
+
+
+def _prepare_dashscope_request(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    body = dict(payload)
+    stream_flag = bool(body.pop("stream", False))
+    extra_body = body.pop("extra_body", None)
+    kwargs = dict(body)
+    if extra_body is not None:
+        kwargs["extra_body"] = extra_body
+    return kwargs, stream_flag
+
+
+def _call_dashscope_chat_completion(
+    api_key: str, payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    kwargs, _ = _prepare_dashscope_request(payload)
+    kwargs["stream"] = False
+    client = OpenAI(api_key=api_key, base_url=DASHSCOPE_BASE_URL)
+    try:
+        response = client.chat.completions.create(**kwargs)
+    except Exception as exc:  # pylint: disable=broad-except
+        raise LLMClientError(str(exc)) from exc
+    result = response.model_dump()
+    choices = result.get("choices") or []
+    if choices:
+        choice = choices[0]
+        message = choice.get("message") or {}
+        main_text = (message.get("content") or "").strip()
+        reasoning_raw = (
+            message.pop("reasoning_content", None)
+            or message.pop("reasoning", None)
+            or ""
+        )
+        reasoning_text = (
+            "".join(str(item) for item in reasoning_raw)
+            if isinstance(reasoning_raw, list)
+            else str(reasoning_raw or "")
+        ).strip()
+        if reasoning_text:
+            message["content"] = f"<think>{reasoning_text}</think>{main_text}"
+        else:
+            message["content"] = main_text
+        choice["message"] = message
+        result["choices"] = [choice]
+    return result
+
+
+def _stream_dashscope_chat(
+    api_key: str, payload: Dict[str, Any]
+) -> Generator[Dict[str, Any], None, None]:
+    kwargs, stream_flag = _prepare_dashscope_request(payload)
+    kwargs["stream"] = stream_flag or True
+    client = OpenAI(api_key=api_key, base_url=DASHSCOPE_BASE_URL)
     in_thinking = False
     try:
         stream = client.chat.completions.create(**kwargs)
@@ -637,7 +750,9 @@ def _retrieve_chunks_from_document_summaries(
                 summary_record = sqlite_manager.get_document_summary(document_id)
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.debug(
-                    "基于摘要检索时获取摘要记录失败 (document_id=%s): %s", document_id, exc
+                    "基于摘要检索时获取摘要记录失败 (document_id=%s): %s",
+                    document_id,
+                    exc,
                 )
                 summary_record = None
             summary_details_cache[document_id] = summary_record
@@ -670,9 +785,7 @@ def _retrieve_chunks_from_document_summaries(
     if not candidates:
         return None
 
-    bm25_available = (
-        bm25s_service is not None and bm25s_service.is_available()
-    )
+    bm25_available = bm25s_service is not None and bm25s_service.is_available()
     lexical_scores: List[float] = [0.0 for _ in candidates]
     if bm25_available:
         try:
@@ -751,7 +864,9 @@ def _retrieve_chunks_from_document_summaries(
             "summary_model_source": candidate["metadata"].get("summary_model_source"),
             "summary_model_id": candidate["metadata"].get("summary_model_id"),
             "summary_model_name": candidate["metadata"].get("summary_model_name"),
-            "summary_model_provider": candidate["metadata"].get("summary_model_provider"),
+            "summary_model_provider": candidate["metadata"].get(
+                "summary_model_provider"
+            ),
             "summary_text": candidate.get("summary_text") or "",
             "rank": rank,
         }
@@ -834,14 +949,10 @@ def _retrieve_chunks_from_document_summaries(
                     embedding_score=candidate["vector_score_raw"],
                     embedding_score_normalized=candidate["vector_score_norm"],
                     bm25_score=(
-                        candidate.get("lexical_score_norm")
-                        if bm25_available
-                        else None
+                        candidate.get("lexical_score_norm") if bm25_available else None
                     ),
                     bm25_raw_score=(
-                        candidate.get("lexical_score_raw")
-                        if bm25_available
-                        else None
+                        candidate.get("lexical_score_raw") if bm25_available else None
                     ),
                     rerank_score=None,
                     rerank_score_normalized=None,
@@ -1843,6 +1954,12 @@ def _build_llm_payload(
     if selection.source_id == "modelscope":
         payload["extra_body"] = {
             "enable_thinking": bool(stream),
+            "thinking_budget": 40960,
+        }
+    elif selection.source_id == "dashscope":
+        payload["extra_body"] = {
+            "enable_thinking": True,
+            "thinking_budget": 40960,
         }
     return payload
 
@@ -2103,6 +2220,18 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
                     continue
                 buffer_parts.append(delta)
                 yield _sse_event("chunk", {"delta": delta})
+        elif selection.source_id == "dashscope":
+            if not api_key:
+                raise LLMClientError("缺少模型 API Key")
+            for raw_chunk in _stream_dashscope_chat(api_key, llm_payload):
+                usage_info = raw_chunk.get("usage")
+                if usage_info:
+                    assistant_metadata["usage"] = usage_info
+                delta = _extract_stream_delta(raw_chunk)
+                if not delta:
+                    continue
+                buffer_parts.append(delta)
+                yield _sse_event("chunk", {"delta": delta})
         else:
             assert llm_client is not None
             if not api_key:
@@ -2272,6 +2401,10 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
             if not api_key:
                 raise LLMClientError("缺少模型 API Key")
             result = _call_modelscope_chat_completion(api_key, llm_payload)
+        elif selection.source_id == "dashscope":
+            if not api_key:
+                raise LLMClientError("缺少模型 API Key")
+            result = _call_dashscope_chat_completion(api_key, llm_payload)
         else:
             assert llm_client is not None
             if not api_key:
@@ -2446,4 +2579,3 @@ async def delete_conversation_endpoint(conversation_id: int) -> Response:
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return Response(status_code=204)
-MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1/"

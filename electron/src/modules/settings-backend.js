@@ -15,6 +15,7 @@ class SettingsBackendModule {
       qwenApiKey: '',
       siliconflwApiKey: '',
       customModels: [],
+      chatModelSelection: null,
       enableModelSummary: false,
       modelSummarySelection: null,
       enableSummarySearch: false
@@ -50,6 +51,11 @@ class SettingsBackendModule {
     // 测试 ModelScope 连通性
     ipcMain.handle('test-modelscope-connection', async (event, payload) => {
       return this.testModelScopeConnection(payload);
+    });
+
+    // 测试通义千问（DashScope）连通性
+    ipcMain.handle('test-dashscope-connection', async (event, payload) => {
+      return this.testDashScopeConnection(payload);
     });
   }
 
@@ -118,6 +124,49 @@ class SettingsBackendModule {
       return {
         success: false,
         error: error?.message || '请求 ModelScope 测试接口失败'
+      };
+    }
+  }
+
+  async testDashScopeConnection(payload = {}) {
+    const apiKey = (payload?.apiKey || '').trim();
+    const model = (payload?.model || '').trim() || 'qwen3-max';
+
+    if (!apiKey) {
+      return { success: false, error: '缺少通义千问 API Key。' };
+    }
+
+    const host = process.env.FS_APP_API_HOST || '127.0.0.1';
+    const port = process.env.FS_APP_API_PORT || '8000';
+    const url = `http://${host}:${port}/api/models/test-dashscope`;
+
+    try {
+      const response = await fetchFn(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          api_key: apiKey,
+          model,
+          prompt: '你好，如果你能够正常工作，请回复我“你好”。'
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) {
+        const message = data?.detail || data?.error || `HTTP ${response.status}`;
+        return {
+          success: false,
+          status: response.status,
+          error: message
+        };
+      }
+      return data;
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || '请求通义千问测试接口失败'
       };
     }
   }

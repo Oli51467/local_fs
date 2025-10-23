@@ -61,6 +61,8 @@ class SettingsModule {
     this.customModels = [];
     this.enableModelSummary = false;
     this.modelSummarySelection = null;
+    this.chatModelSelection = null;
+    this.chatModelSelectionKey = '';
     this.availableSummaryModels = [];
     this.enableSummarySearch = false;
     this.modelSummaryRegistryDisposer = null;
@@ -105,6 +107,8 @@ class SettingsModule {
         this.customModels = this.normalizeCustomModels(newConfig?.customModels);
         this.enableModelSummary = Boolean(newConfig?.enableModelSummary);
         this.modelSummarySelection = this.sanitizeModelSelection(newConfig?.modelSummarySelection);
+        this.chatModelSelectionKey = this.normalizeChatModelKey(newConfig?.chatModelSelection);
+        this.chatModelSelection = this.deserializeChatModelSelection(this.chatModelSelectionKey);
         this.enableSummarySearch = Boolean(newConfig?.enableSummarySearch);
         this.refreshSummaryModelOptions();
         this.syncSummaryControls();
@@ -172,6 +176,8 @@ class SettingsModule {
       this.customModels = this.normalizeCustomModels(settings?.customModels);
       this.enableModelSummary = Boolean(settings?.enableModelSummary);
       this.modelSummarySelection = this.sanitizeModelSelection(settings?.modelSummarySelection);
+      this.chatModelSelectionKey = this.normalizeChatModelKey(settings?.chatModelSelection);
+      this.chatModelSelection = this.deserializeChatModelSelection(this.chatModelSelectionKey);
       this.enableSummarySearch = Boolean(settings?.enableSummarySearch);
       // 确保标题栏主题在应用启动时正确应用
       await window.fsAPI.setTitleBarTheme(this.isDarkMode);
@@ -190,6 +196,7 @@ class SettingsModule {
       enableModelSummary: this.enableModelSummary,
       enableSummarySearch: this.enableSummarySearch,
       modelSummarySelection: this.sanitizeModelSelection(this.modelSummarySelection),
+      chatModelSelection: this.chatModelSelectionKey || null,
       ...overrides
     };
     const cleanedPayload = {};
@@ -1138,6 +1145,78 @@ class SettingsModule {
     const sourceId = model.sourceId || '';
     const identifier = model.modelId || model.apiModel || model.name || '';
     return `${sourceId}::${identifier}`;
+  }
+
+  getChatModelSelection() {
+    if (this.chatModelSelection) {
+      return { ...this.chatModelSelection };
+    }
+    const fallback = this.deserializeChatModelSelection(this.chatModelSelectionKey);
+    this.chatModelSelection = fallback ? { ...fallback } : null;
+    return fallback ? { ...fallback } : null;
+  }
+
+  getChatModelKey(model) {
+    const sanitized = this.sanitizeModelSelection(model);
+    if (!sanitized) {
+      return '';
+    }
+    return this.getSummaryModelKey(sanitized);
+  }
+
+  async updateChatModelSelection(model, options = {}) {
+    const sanitized = this.sanitizeModelSelection(model);
+    const currentKey = this.chatModelSelectionKey;
+    const nextKey = this.getChatModelKey(sanitized);
+    const changed = currentKey !== nextKey;
+    this.chatModelSelection = sanitized ? { ...sanitized } : null;
+    this.chatModelSelectionKey = nextKey || '';
+    if (!changed && !options.forcePersist) {
+      return;
+    }
+    try {
+      await this.saveSettings({ chatModelSelection: this.chatModelSelectionKey || null });
+    } catch (error) {
+      console.warn('保存聊天模型选择失败:', error);
+    }
+  }
+
+  normalizeChatModelKey(value) {
+    if (!value && value !== 0) {
+      return '';
+    }
+    if (typeof value === 'string') {
+      return value.trim();
+    }
+    if (typeof value === 'object') {
+      const sanitized = this.sanitizeModelSelection(value);
+      return sanitized ? this.getSummaryModelKey(sanitized) : '';
+    }
+    return '';
+  }
+
+  deserializeChatModelSelection(key) {
+    const normalizedKey = typeof key === 'string' ? key.trim() : '';
+    if (!normalizedKey) {
+      return null;
+    }
+    const separatorIndex = normalizedKey.indexOf('::');
+    if (separatorIndex === -1) {
+      return this.sanitizeModelSelection({
+        sourceId: '',
+        modelId: normalizedKey,
+        apiModel: normalizedKey,
+        name: normalizedKey
+      });
+    }
+    const sourceId = normalizedKey.slice(0, separatorIndex);
+    const identifier = normalizedKey.slice(separatorIndex + 2);
+    return this.sanitizeModelSelection({
+      sourceId,
+      modelId: identifier,
+      apiModel: identifier,
+      name: identifier
+    });
   }
 
   syncSummaryControls() {

@@ -362,9 +362,11 @@ class ChatModule {
 
   handleModelRegistryChanged(event) {
     const models = event?.detail?.models;
-    this.refreshAvailableModels({ models }).catch((error) => {
-      console.warn('刷新聊天模型列表失败:', error);
-    });
+    this.refreshAvailableModels({ models })
+      .then(() => this.applyPersistedChatModelSelection())
+      .catch((error) => {
+        console.warn('刷新聊天模型列表失败:', error);
+      });
   }
 
   handleSettingsUpdated(config) {
@@ -372,9 +374,11 @@ class ChatModule {
       return;
     }
     const models = Array.isArray(config.customModels) ? config.customModels : [];
-    this.refreshAvailableModels({ models }).catch((error) => {
-      console.warn('设置更新后刷新聊天模型列表失败:', error);
-    });
+    this.refreshAvailableModels({ models })
+      .then(() => this.applyPersistedChatModelSelection(config.chatModelSelection))
+      .catch((error) => {
+        console.warn('设置更新后刷新聊天模型列表失败:', error);
+      });
   }
 
   handleBackendStatus(event) {
@@ -463,14 +467,71 @@ class ChatModule {
       const current = selector.getSelectedModel();
       this.selectedModel = current ? { ...current } : null;
       this.modelDropdownVisible = Boolean(selector.visible);
-      return;
-    }
-    if (this.availableModels.length) {
+    } else if (this.availableModels.length) {
       this.selectedModel = { ...this.availableModels[0] };
+      this.refreshModelButtonFallback();
     } else {
       this.selectedModel = null;
+      this.refreshModelButtonFallback();
     }
-    this.refreshModelButtonFallback();
+    this.applyPersistedChatModelSelection();
+  }
+
+  persistChatModelSelection(selection) {
+    const normalized = selection ? this.normalizeModelRecord(selection) : null;
+    const settingsModule = window.settingsModule;
+    if (!settingsModule || typeof settingsModule.updateChatModelSelection !== 'function') {
+      return;
+    }
+    try {
+      const result = settingsModule.updateChatModelSelection(normalized || null);
+      if (result && typeof result.then === 'function') {
+        result.catch((error) => {
+          console.warn('保存聊天模型选择失败:', error);
+        });
+      }
+    } catch (error) {
+      console.warn('保存聊天模型选择失败:', error);
+    }
+  }
+
+  applyPersistedChatModelSelection(selectionOverride = null) {
+    let persisted = selectionOverride;
+    if (!persisted) {
+      const settingsModule = window.settingsModule;
+      if (settingsModule && typeof settingsModule.getChatModelSelection === 'function') {
+        try {
+          persisted = settingsModule.getChatModelSelection();
+        } catch (error) {
+          console.warn('读取已保存的聊天模型选择失败:', error);
+        }
+      }
+    }
+
+    const parsed = this.parsePersistedChatModelSelection(persisted);
+    const normalized = parsed ? this.normalizeModelRecord(parsed) : null;
+    if (!normalized) {
+      return;
+    }
+    const targetKey = this.getModelKey(normalized);
+    if (!targetKey) {
+      return;
+    }
+    const currentKey = this.getModelKey(this.selectedModel);
+    if (currentKey === targetKey) {
+      return;
+    }
+    const matched = this.availableModels.find((model) => this.getModelKey(model) === targetKey);
+    if (!matched) {
+      return;
+    }
+    const selector = this.ensureModelSelector();
+    if (selector) {
+      selector.setSelectedModel(matched);
+    } else {
+      this.selectedModel = { ...matched };
+      this.refreshModelButtonFallback();
+    }
   }
 
   getModelKey(model) {
@@ -478,6 +539,39 @@ class ChatModule {
       return '';
     }
     return `${model.sourceId || ''}::${model.modelId || ''}`;
+  }
+
+  parsePersistedChatModelSelection(value) {
+    if (!value && value !== 0) {
+      return null;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const separatorIndex = trimmed.indexOf('::');
+      if (separatorIndex === -1) {
+        return {
+          sourceId: '',
+          modelId: trimmed,
+          apiModel: trimmed,
+          name: trimmed
+        };
+      }
+      const sourceId = trimmed.slice(0, separatorIndex);
+      const identifier = trimmed.slice(separatorIndex + 2);
+      return {
+        sourceId,
+        modelId: identifier,
+        apiModel: identifier,
+        name: identifier
+      };
+    }
+    if (typeof value === 'object') {
+      return { ...value };
+    }
+    return null;
   }
 
   normalizeModelRecord(model) {
