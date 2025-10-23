@@ -20,6 +20,8 @@ LoFS 聚焦“本地优先”的知识管理场景，将文件管理与语义检
 - 🔍 **多模态处理**：自动解析 `.md`、`.txt`、`.docx`、`.pdf`、`.pptx`、`.json` 等文本与图像内容。
 - 📁 **文件树交互**：支持一键挂载/卸载、PDF 专属解析、进度实时可视化。
 - 🧠 **主题驱动检索**：在传统 Faiss/BM25s/reranker 之上引入“文档主题摘要 + 语义/词法加权”的两阶段检索，问题可先与摘要匹配再回退全文。
+- 🤖 **多平台模型接入**：内置 SiliconFlow，并新增对 ModelScope、通义千问（DashScope）的兼容，支持在线连通性检测、流式问答与 `<think>` 思考返回。
+- 💬 **智能聊天体验**：聊天页记住上次选用的模型，重启后即刻恢复；模型输出的思考内容会以灰色卡片独立展示，方便分析与引用。
 - 🔒 **本地优先**：所有文件、向量与索引均保存在本地 SQLite 与 Faiss 中，核心数据不出域。
 - 🛠️ **开箱即用**：Electron 桌面端 + FastAPI 后端，兼容多系统打包。
 
@@ -31,6 +33,7 @@ LoFS 聚焦“本地优先”的知识管理场景，将文件管理与语义检
 - **桌面端（Electron）**：负责文件树、解析状态、检索结果的交互体验。
 - **后端（FastAPI）**：承载挂载、解析、索引构建等核心任务，提供 REST API。
 - **检索引擎**：通过 Faiss、BM25s 与 FlagEmbedding（BGE 系列）构成的混合检索流水线，支持文本与图像向量，并内置主题摘要检索通路。
+- **模型管理**：前端提供模型库视图，可添加自定义模型并测试连通性；支持 SiliconFlow、ModelScope 与通义千问（DashScope）三大平台。
 - **数据存储**：SQLite 保存结构化元数据，Faiss 保存向量索引，本地文件系统管理模型与缓存。
 
 ```text
@@ -51,6 +54,7 @@ LoFS 聚焦“本地优先”的知识管理场景，将文件管理与语义检
 3. 🧮 **索引构建**：将文本向量写入 Faiss，将关键词倒排写入 BM25s，元数据落盘至 SQLite。
 4. 🧾 **生成主题摘要**（可选）：启用“文档总结”后，调用指定模型为整篇文档生成主题概述，并写入独立向量与 SQLite。
 5. 🔎 **分层检索**：输入查询后先与主题摘要做语义/词法混合匹配（分数 ≥ 0.7 即入选），命中文档的完整内容 + 摘要会一并注入提示词；若无命中则自动回退至传统混合检索。
+6. 💬 **LLM 问答**：选择任一已配置的模型即可发起流式对话；若模型支持思考输出（ModelScope、DashScope），LoFS 会将 `<think>` 内的内容转成灰色卡片单独展示。
 
 模型目录按需懒加载，首次使用对应能力时自动下载；也可以提前拉取以免首轮等待：
 
@@ -63,6 +67,14 @@ LoFS 聚焦“本地优先”的知识管理场景，将文件管理与语义检
 ```bash
 python -c "from service.model_manager import get_model_manager; manager = get_model_manager(); [manager.get_model_path(key) for key in ('bge_m3', 'bge_reranker_v2_m3', 'clip_vit_b_32', 'clip_vit_b_32_multilingual', 'pdf_extract_kit')]"
 ```
+
+### 3.2 多平台模型接入
+- 在 **设置 → API Key** 中填写对应凭证：
+  - SiliconFlow：`siliconflwApiKey`
+  - ModelScope：`modelscopeApiKey`
+  - 通义千问（DashScope）：`qwenApiKey`
+- 进入 **模型库 → 添加模型**，选择平台即可测试连通性；失败时会返回接口错误信息辅助排查。
+- 聊天页面的模型下拉会记住上次选择，重启后自动恢复；支持流式输出，若模型返回 `<think>` 思考段落会以灰色卡片单独展示（默认适用于 ModelScope、DashScope）。
 
 ## 4. 部署使用
 ### 4.1 环境要求

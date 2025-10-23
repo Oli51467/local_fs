@@ -20,6 +20,8 @@ LoFS fuses local file organization with semantic retrieval to deliver an “alwa
 - 🔍 **Multimodal ingestion**: parses `.md`, `.txt`, `.docx`, `.pdf`, `.pptx`, `.json`, and extracts both text and images.
 - 📁 **Explorer-style UX**: mount/remount flows, PDF-only parsing, and live progress indicators keep operations transparent.
 - 🧠 **Theme-driven retrieval**: augments the Faiss/BM25s/reranker stack with document-level summaries plus semantic/lexical blending so questions land on the right topic before falling back to full-text recall.
+- 🤖 **Multi-provider LLM support**: built-in adapters for SiliconFlow, ModelScope, and Alibaba DashScope (Qwen) let you plug in your favorite service, validate connectivity, and use streaming responses with `<think>` reasoning blocks.
+- 💬 **Chat experience upgrades**: the chat view remembers your last-selected model across restarts, and thinking traces render as dedicated gray cards for easier auditing.
 - 🔒 **Local-first by design**: SQLite and Faiss stay on disk, ensuring data never leaves your machine.
 - 🛠️ **Shipping-ready app**: Electron desktop shell plus FastAPI backend, complete with cross-platform packaging scripts.
 
@@ -31,6 +33,7 @@ LoFS fuses local file organization with semantic retrieval to deliver an “alwa
 - **Electron desktop**: renders the file tree, orchestration panels, and search UI.
 - **FastAPI backend**: exposes REST endpoints for mounting, parsing, indexing, and retrieval orchestration.
 - **Retrieval pipeline**: Faiss + BM25s + FlagEmbedding (BGE family) power fast semantic/keyword blending, now enhanced with summary vectors for topic-first search, plus CLIP embeddings for images.
+- **Model management**: the desktop UI exposes a model library so you can add custom endpoints, run health checks, and manage keys for SiliconFlow, ModelScope, and DashScope in one place.
 - **Storage layer**: SQLite for metadata, Faiss for vector indices, and the local filesystem for model caches.
 
 ```text
@@ -51,6 +54,7 @@ LoFS fuses local file organization with semantic retrieval to deliver an “alwa
 3. 🧮 **Index build**: persist embeddings to Faiss, keyword metadata to BM25s, and structured info to SQLite.
 4. 🧾 **Topic summaries (optional)**: when the “Document Theme Summary” setting is on, a chosen LLM produces per-document abstracts that are stored in SQLite and embedded separately.
 5. 🔎 **Layered retrieval**: each query first matches against the summary vectors with a semantic (0.6) + lexical (0.4) score fusion; summaries scoring ≥ 0.7 bring their full document chunks and the summary into the LLM prompt. If nothing passes the threshold, the pipeline transparently falls back to classic hybrid retrieval.
+6. 💬 **Conversational hand-off**: when a model is selected in the chat panel, LoFS streams replies (including `<think>` reasoning for ModelScope/DashScope) and caches the selection so it’s restored on the next launch.
 
 Model assets download lazily the first time a capability is invoked. Prefetch them to warm the cache:
 
@@ -63,6 +67,11 @@ python -c "from service.model_manager import get_model_manager; manager = get_mo
 - ⚖️ **Semantic × lexical fusion**: blend summary embedding scores with BM25 summary matches (default 0.6/0.4) to balance generalization and precision, mitigating pure-embedding pitfalls.
 - 🔁 **Graceful fallback**: if no summary clears the threshold, LoFS automatically reverts to the standard hybrid pipeline; matched responses surface a “Reference Theme” card for transparency.
 - 🧩 **Prompt enrichment**: selected documents contribute both the full chunk set and their summaries to the LLM context, helping the assistant stay on-topic and cite accurately.
+
+### 3.2 Multi-provider LLM integration
+- Configure API keys under **Settings → API Key** (`siliconflwApiKey`, `modelscopeApiKey`, `qwenApiKey`).
+- Use the **Model Library** to add endpoints and run connectivity tests; failures return verbose error payloads for troubleshooting.
+- During chat, the dropdown retains your last pick even after restarts. Models that emit `<think>` blocks (ModelScope/DashScope) render their reasoning in a separate, gray “Thinking” panel ahead of the final answer.
 
 ## 4. Deployment & Usage
 ### 4.1 Requirements

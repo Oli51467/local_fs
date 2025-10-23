@@ -52,7 +52,11 @@ class ChatModule {
     this.chatInputArea = document.getElementById('chat-input-area');
     this.chatInputEl = document.getElementById('chat-input');
     this.chatSendBtn = document.getElementById('chat-send-btn');
+    this.chatUploadBtn = document.getElementById('chat-upload-btn');
+    this.chatUploadInput = document.getElementById('chat-upload-input');
     this.chatStatusTextEl = document.getElementById('chat-status-text');
+    this.chatImagePreviewEl = document.getElementById('chat-image-preview');
+    this.chatImagePreviewListEl = document.getElementById('chat-image-preview-list');
     this.chatTitleEl = document.getElementById('chat-conversation-title');
     this.chatTimestampEl = document.getElementById('chat-conversation-updated');
     this.chatModelButtonEl = document.getElementById('chat-model-button');
@@ -83,6 +87,8 @@ class ChatModule {
     this.availableModels = [];
     this.selectedModel = null;
     this.modelDropdownVisible = false;
+    this.pendingImageAttachments = [];
+    this.imageAttachmentsDisabled = false;
     this.modelRegistryHandler = (event) => this.handleModelRegistryChanged(event);
     this.handleBackendStatusEvent = (event) => this.handleBackendStatus(event);
     this.streamingState = null;
@@ -116,6 +122,18 @@ class ChatModule {
   bindEvents() {
     if (this.chatSendBtn) {
       this.chatSendBtn.addEventListener('click', () => this.handleSendClick());
+    }
+
+    if (this.chatUploadBtn) {
+      this.chatUploadBtn.addEventListener('click', () => this.handleUploadButtonClick());
+    }
+
+    if (this.chatUploadInput) {
+      this.chatUploadInput.addEventListener('change', (event) => this.handleUploadInputChange(event));
+    }
+
+    if (this.chatImagePreviewListEl) {
+      this.chatImagePreviewListEl.addEventListener('click', (event) => this.handleImagePreviewListClick(event));
     }
 
     if (this.chatInputEl) {
@@ -293,6 +311,248 @@ class ChatModule {
     }
     this.chatModelButtonEl.setAttribute('aria-expanded', 'false');
     this.modelDropdownVisible = false;
+  }
+
+  handleUploadButtonClick() {
+    if (!this.chatUploadInput) {
+      return;
+    }
+    this.chatUploadInput.value = '';
+    this.chatUploadInput.click();
+  }
+
+  handleUploadInputChange(event) {
+    const input = event?.target;
+    if (!input) {
+      return;
+    }
+    const files = Array.from(input.files || []);
+    input.value = '';
+    if (!files.length) {
+      return;
+    }
+    let hasValid = false;
+    let hasInvalid = false;
+    files.forEach((file) => {
+      if (this.isSupportedImageFile(file)) {
+        hasValid = true;
+        this.addImageAttachment(file);
+      } else {
+        hasInvalid = true;
+      }
+    });
+    if (hasInvalid) {
+      this.setStatus('仅支持上传图片文件', 'warning');
+    }
+    if (hasValid && this.chatInputEl) {
+      this.chatInputEl.focus();
+    }
+  }
+
+  isSupportedImageFile(file) {
+    if (!file) {
+      return false;
+    }
+    if (file.type && file.type.startsWith('image/')) {
+      return true;
+    }
+    const name = typeof file.name === 'string' ? file.name : '';
+    return /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(name);
+  }
+
+  addImageAttachment(file) {
+    if (!file) {
+      return;
+    }
+    const token = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const objectUrl = URL.createObjectURL(file);
+    const attachment = {
+      token,
+      file,
+      objectUrl,
+      name: (typeof file.name === 'string' && file.name.trim().length)
+        ? file.name.trim()
+        : '未命名图片',
+      mimeType: file.type || '',
+      size: typeof file.size === 'number' ? file.size : 0,
+      dataUrl: null,
+      loading: true
+    };
+    if (!Array.isArray(this.pendingImageAttachments)) {
+      this.pendingImageAttachments = [];
+    }
+    this.pendingImageAttachments = [...this.pendingImageAttachments, attachment];
+    if (this.chatUploadInput) {
+      this.chatUploadInput.value = '';
+    }
+    this.renderImageAttachments();
+    this.readFileAsDataUrl(file).then((dataUrl) => {
+      const target = Array.isArray(this.pendingImageAttachments)
+        ? this.pendingImageAttachments.find((item) => item.token === token)
+        : null;
+      if (!target) {
+        return;
+      }
+      target.dataUrl = dataUrl;
+      target.loading = false;
+      this.renderImageAttachments();
+    }).catch((error) => {
+      console.error('读取图片失败:', error);
+      const stillExists = Array.isArray(this.pendingImageAttachments)
+        && this.pendingImageAttachments.some((item) => item.token === token);
+      if (!stillExists) {
+        return;
+      }
+      this.setStatus('图片加载失败，请重试', 'error');
+      this.removeImageAttachment(token, { keepStatus: true });
+    });
+  }
+
+  renderImageAttachments() {
+    if (!this.chatImagePreviewListEl) {
+      return;
+    }
+    const attachments = Array.isArray(this.pendingImageAttachments)
+      ? this.pendingImageAttachments
+      : [];
+    this.chatImagePreviewListEl.innerHTML = '';
+    if (!attachments.length) {
+      if (this.chatImagePreviewEl) {
+        this.chatImagePreviewEl.hidden = true;
+      }
+      this.applyImageAttachmentDisabledState();
+      return;
+    }
+    if (this.chatImagePreviewEl) {
+      this.chatImagePreviewEl.hidden = false;
+    }
+    const removeIcon = (
+      '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+      + '<path d="M6 6l12 12M6 18L18 6" stroke="currentColor" stroke-width="2" '
+      + 'stroke-linecap="round" stroke-linejoin="round" fill="none"></path>'
+      + '</svg>'
+    );
+    attachments.forEach((attachment) => {
+      const item = document.createElement('div');
+      item.className = 'chat-image-preview-item';
+      item.dataset.attachmentToken = attachment.token;
+      if (attachment.loading) {
+        item.classList.add('is-loading');
+      }
+      const img = document.createElement('img');
+      img.className = 'chat-image-preview-thumb';
+      img.src = attachment.objectUrl;
+      img.alt = '已选择的图片预览';
+      item.appendChild(img);
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'chat-image-remove-btn';
+      removeBtn.type = 'button';
+      removeBtn.setAttribute('aria-label', '移除图片');
+      removeBtn.dataset.attachmentToken = attachment.token;
+      removeBtn.innerHTML = removeIcon;
+      item.appendChild(removeBtn);
+      this.chatImagePreviewListEl.appendChild(item);
+    });
+    this.applyImageAttachmentDisabledState();
+  }
+
+  handleImagePreviewListClick(event) {
+    if (this.imageAttachmentsDisabled) {
+      event.preventDefault();
+      return;
+    }
+    const target = event?.target;
+    if (!target) {
+      return;
+    }
+    const removeBtn = target.closest('.chat-image-remove-btn');
+    if (!removeBtn) {
+      return;
+    }
+    const token = removeBtn.dataset.attachmentToken;
+    if (!token) {
+      return;
+    }
+    this.removeImageAttachment(token);
+  }
+
+  removeImageAttachment(token, options = {}) {
+    if (!token || !Array.isArray(this.pendingImageAttachments)) {
+      return;
+    }
+    const index = this.pendingImageAttachments.findIndex((item) => item.token === token);
+    if (index === -1) {
+      return;
+    }
+    const [removed] = this.pendingImageAttachments.splice(index, 1);
+    if (removed?.objectUrl) {
+      URL.revokeObjectURL(removed.objectUrl);
+    }
+    this.renderImageAttachments();
+    if (!options.keepStatus) {
+      this.setStatus('', 'info');
+    }
+  }
+
+  clearAllImageAttachments(options = {}) {
+    const { keepStatus = false } = options || {};
+    if (Array.isArray(this.pendingImageAttachments)) {
+      this.pendingImageAttachments.forEach((attachment) => {
+        if (attachment?.objectUrl) {
+          URL.revokeObjectURL(attachment.objectUrl);
+        }
+      });
+    }
+    this.pendingImageAttachments = [];
+    this.imageAttachmentsDisabled = false;
+    this.renderImageAttachments();
+    if (!keepStatus) {
+      this.setStatus('', 'info');
+    }
+  }
+
+  setImageAttachmentControlsDisabled(disabled) {
+    this.imageAttachmentsDisabled = Boolean(disabled);
+    this.applyImageAttachmentDisabledState();
+  }
+
+  applyImageAttachmentDisabledState() {
+    if (!this.chatImagePreviewListEl) {
+      return;
+    }
+    if (this.imageAttachmentsDisabled) {
+      this.chatImagePreviewListEl.classList.add('is-disabled');
+    } else {
+      this.chatImagePreviewListEl.classList.remove('is-disabled');
+    }
+    this.chatImagePreviewListEl.querySelectorAll('.chat-image-remove-btn').forEach((button) => {
+      button.disabled = this.imageAttachmentsDisabled;
+    });
+  }
+
+  readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result;
+        if (typeof result === 'string') {
+          resolve(result);
+        } else {
+          reject(new Error('无法获取图片内容'));
+        }
+      };
+      reader.onerror = () => {
+        reject(reader.error || new Error('图片读取失败'));
+      };
+      reader.onabort = () => {
+        reject(new Error('图片读取被中断'));
+      };
+      try {
+        reader.readAsDataURL(file);
+      } catch (error) {
+        reject(error);
+      }
+    });
   }
 
   handleSendClick() {
@@ -2315,6 +2575,14 @@ class ChatModule {
       return;
     }
 
+    const hasPendingImages = Array.isArray(this.pendingImageAttachments)
+      ? this.pendingImageAttachments.some((item) => item.loading)
+      : false;
+    if (hasPendingImages) {
+      this.setStatus('图片仍在处理中，请稍候…', 'warning');
+      return;
+    }
+
     const question = this.chatInputEl.value.trim();
     if (!question) {
       this.setStatus('请输入问题', 'warning');
@@ -2369,6 +2637,10 @@ class ChatModule {
     if (this.chatInputEl) {
       this.chatInputEl.disabled = true;
     }
+    if (this.chatUploadBtn) {
+      this.chatUploadBtn.disabled = true;
+    }
+    this.setImageAttachmentControlsDisabled(true);
 
     const userMessage = {
       id: `local-user-${Date.now()}`,
@@ -2377,6 +2649,20 @@ class ChatModule {
       created_time: new Date().toISOString(),
       metadata: null
     };
+    const preparedAttachments = Array.isArray(this.pendingImageAttachments)
+      ? this.pendingImageAttachments.filter((item) => item && item.dataUrl && !item.loading)
+      : [];
+    if (preparedAttachments.length > 0) {
+      userMessage.metadata = {
+        ...(userMessage.metadata || {}),
+        attachments: preparedAttachments.map((item) => ({
+          type: 'image',
+          name: item.name,
+          mime_type: item.mimeType || undefined,
+          size: item.size || undefined
+        }))
+      };
+    }
     this.messages.push(userMessage);
 
     const streamingMessage = {
@@ -2434,6 +2720,15 @@ class ChatModule {
         requires_api_key: requiresApiKey
       }
     };
+    if (preparedAttachments.length > 0) {
+      payload.attachments = preparedAttachments.map((item) => ({
+        type: 'image',
+        name: item.name,
+        mime_type: item.mimeType || undefined,
+        size: item.size || undefined,
+        data_url: item.dataUrl
+      }));
+    }
 
     this.chatInputEl.value = '';
     this.autoResizeTextarea();
@@ -2544,10 +2839,17 @@ class ChatModule {
       this.activeRequestController = null;
       this.abortRequested = false;
       this.pendingRequest = null;
+      if (!hadError && !aborted) {
+        this.clearAllImageAttachments();
+      }
       if (this.chatInputEl) {
         this.chatInputEl.disabled = false;
         this.chatInputEl.focus();
       }
+      if (this.chatUploadBtn) {
+        this.chatUploadBtn.disabled = false;
+      }
+      this.setImageAttachmentControlsDisabled(false);
       this.updateSendButtonState();
       if (!hadError && !aborted && this.chatStatusTextEl) {
         this.chatStatusTextEl.textContent = '';
