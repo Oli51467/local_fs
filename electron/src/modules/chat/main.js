@@ -18,6 +18,15 @@ if (!ChatReferenceManager) {
   throw new Error('ChatReferenceManager 模块未能正确加载');
 }
 
+const DASH_SCOPE_VISION_MODELS = new Set([
+  'qwen3-vl-plus',
+  'qwen3-vl-flash',
+  'qwen-vl-plus',
+  'qwen-vl-max',
+  'qvq-max',
+  'qvq-72b-preview'
+]);
+
 class ChatModule {
   constructor() {
     this.cacheDomElements();
@@ -89,6 +98,7 @@ class ChatModule {
     this.modelDropdownVisible = false;
     this.pendingImageAttachments = [];
     this.imageAttachmentsDisabled = false;
+    this.suppressPersistSelection = false;
     this.modelRegistryHandler = (event) => this.handleModelRegistryChanged(event);
     this.handleBackendStatusEvent = (event) => this.handleBackendStatus(event);
     this.streamingState = null;
@@ -277,6 +287,18 @@ class ChatModule {
 
   handleModelSelectionChange(model) {
     this.selectedModel = model ? { ...model } : null;
+    if (this.suppressPersistSelection) {
+      return;
+    }
+    this.persistChatModelSelection(this.selectedModel);
+  }
+
+  isVisionModel(model) {
+    if (!model || typeof model !== 'object') {
+      return false;
+    }
+    const identifier = (model.apiModel || model.modelId || model.name || '').toLowerCase();
+    return DASH_SCOPE_VISION_MODELS.has(identifier);
   }
 
   refreshModelButtonFallback() {
@@ -725,7 +747,12 @@ class ChatModule {
     this.availableModels = Array.isArray(models) ? models.map((model) => ({ ...model })) : [];
     const selector = this.ensureModelSelector();
     if (selector) {
-      selector.updateModels(this.availableModels);
+      this.suppressPersistSelection = true;
+      try {
+        selector.updateModels(this.availableModels);
+      } finally {
+        this.suppressPersistSelection = false;
+      }
       const current = selector.getSelectedModel();
       this.selectedModel = current ? { ...current } : null;
       this.modelDropdownVisible = Boolean(selector.visible);
@@ -789,10 +816,17 @@ class ChatModule {
     }
     const selector = this.ensureModelSelector();
     if (selector) {
-      selector.setSelectedModel(matched);
+      this.suppressPersistSelection = true;
+      try {
+        selector.setSelectedModel(matched);
+      } finally {
+        this.suppressPersistSelection = false;
+      }
     } else {
+      this.suppressPersistSelection = true;
       this.selectedModel = { ...matched };
       this.refreshModelButtonFallback();
+      this.suppressPersistSelection = false;
     }
   }
 
@@ -1344,7 +1378,7 @@ class ChatModule {
       } else {
         this.renderMessages();
       }
-      this.setStatus('对话已删除。', 'success');
+      this.setStatus('', 'info');
     } catch (error) {
       console.error('删除对话失败:', error);
       this.setStatus('删除对话失败，请稍后重试。', 'error');
@@ -2754,6 +2788,21 @@ class ChatModule {
     const preparedAttachments = Array.isArray(this.pendingImageAttachments)
       ? this.pendingImageAttachments.filter((item) => item && item.dataUrl && !item.loading)
       : [];
+    const modelSupportsVision = this.isVisionModel(this.selectedModel);
+    if (preparedAttachments.length > 0 && !modelSupportsVision) {
+      this.pendingRequest = null;
+      this.updateSendButtonState();
+      this.setStatus('当前模型不支持图片理解，请选择视觉模型或移除图片。', 'warning');
+      if (this.chatInputEl) {
+        this.chatInputEl.disabled = false;
+        this.chatInputEl.focus();
+      }
+      if (this.chatUploadBtn) {
+        this.chatUploadBtn.disabled = false;
+      }
+      this.setImageAttachmentControlsDisabled(false);
+      return;
+    }
     if (preparedAttachments.length > 0) {
       userMessage.metadata = {
         ...(userMessage.metadata || {}),
@@ -2765,6 +2814,7 @@ class ChatModule {
           data_url: item.dataUrl
         }))
       };
+      this.clearAllImageAttachments({ keepStatus: true, preserveDisabled: true });
     }
     this.messages.push(userMessage);
 

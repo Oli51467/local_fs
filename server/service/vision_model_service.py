@@ -31,19 +31,30 @@ class VisionModelAdapter:
         raise NotImplementedError
 
 
-class DashScopeQwen3VLPAdapter(VisionModelAdapter):
-    """Adapter for the qwen3-vl-plus vision model on DashScope."""
+class DashScopeVisionAdapter(VisionModelAdapter):
+    """Adapter for DashScope vision-capable chat models."""
 
     SAMPLE_IMAGE_URL = (
         "https://img.alicdn.com/imgextra/i1/"
         "O1CN01gDEY8M1W114Hi3XcN_!!6000000002727-0-tps-1024-406.jpg"
     )
 
+    DEFAULT_PROMPT = "这道题怎么解答？"
+
     def __init__(self) -> None:
-        super().__init__(["qwen3-vl-plus"])
+        super().__init__(
+            [
+                "qwen3-vl-plus",
+                "qwen3-vl-flash",
+                "qwen-vl-plus",
+                "qwen-vl-max",
+                "qvq-max",
+                "qvq-72b-preview",
+            ]
+        )
 
     def build_test_messages(self, prompt: str) -> List[Dict[str, Any]]:
-        sanitized_prompt = prompt or "这道题怎么解答？"
+        sanitized_prompt = prompt or self.DEFAULT_PROMPT
         return [
             {
                 "role": "user",
@@ -101,7 +112,7 @@ class DashScopeQwen3VLPAdapter(VisionModelAdapter):
         return processed
 
 
-_VISION_HANDLERS: List[VisionModelAdapter] = [DashScopeQwen3VLPAdapter()]
+_VISION_HANDLERS: List[VisionModelAdapter] = [DashScopeVisionAdapter()]
 
 
 def get_vision_handler(model_id: str) -> Optional[VisionModelAdapter]:
@@ -109,4 +120,3 @@ def get_vision_handler(model_id: str) -> Optional[VisionModelAdapter]:
         if handler.supports(model_id):
             return handler
     return None
-

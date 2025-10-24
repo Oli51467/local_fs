@@ -1340,7 +1340,16 @@ class ModelModule {
       throw new Error('请先在设置页面填写通义千问 API Key。');
     }
     const modelId = (apiModel || '').trim() || 'qwen3-max';
-    const isVisionModel = modelId.toLowerCase() === 'qwen3-vl-plus';
+    const normalizedModelId = modelId.toLowerCase();
+    const visionModelSet = new Set([
+      'qwen3-vl-plus',
+      'qwen3-vl-flash',
+      'qwen-vl-plus',
+      'qwen-vl-max',
+      'qvq-max',
+      'qvq-72b-preview'
+    ]);
+    const isVisionModel = visionModelSet.has(normalizedModelId);
 
     if (typeof window !== 'undefined' && window.fsAPI && typeof window.fsAPI.testDashScopeConnection === 'function') {
       const result = await window.fsAPI.testDashScopeConnection({

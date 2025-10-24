@@ -8,7 +8,7 @@
 
 /* 滚动条样式 */
 #settings-page::-webkit-scrollbar {
-  width: 8px;
+  width: 2px;
 }
 
 #settings-page::-webkit-scrollbar-track {

@@ -29,6 +29,10 @@ LoFS fuses local file organization with semantic retrieval to deliver an “alwa
 |:--:|:--:|:--:|
 | ![extract](img/pdf_extract.png) | ![PDF](img/pdf_viewer.png) | ![PPT](img/ppt_viewer.png) |
 
+| Standard Retrieval | Topic Retrieval | Image Understanding |
+|:--:|:--:|:--:|
+| ![Standard Retrieval](img/simple_chat.gif) | ![Topic Retrieval](img/topic_chat.gif) | ![Image Understanding](img/image_chat.gif) |
+
 ## 2. Technical Architecture
 - **Electron desktop**: renders the file tree, orchestration panels, and search UI.
 - **FastAPI backend**: exposes REST endpoints for mounting, parsing, indexing, and retrieval orchestration.
@@ -114,6 +118,21 @@ python package.py        # cross-platform one-click packaging
 - On startup LoFS creates model directories under `meta` (`embedding/bge-m3`, `embedding/clip`, `embedding/clip-Vit-32B-multilingual`, `reranker/bge-reranker-v3-m3`, `pdf-extract-kit`).
 - The first invocation of embeddings, reranking, theme summarization, CLIP, or PDF parsing auto-downloads weights via `huggingface_hub`.
 - Deleting `meta` is safe—the app will recreate the structure during the next boot.
+
+## 5. Chat & Vision Walkthrough
+- **Model selection**: add `qwen3-vl-plus` or any other vision-capable model in the model library and store the DashScope API key in Settings; the chat view restores the previously selected model on launch.
+- **Image uploads**: drag-and-drop or choose images from disk—the moment you send a message the thumbnails disappear from the composer while the conversation keeps responsive previews (click to open the full image).
+- **Context persistence**: every message and attachment lands in the local SQLite cache, so reopening a conversation restores previous pictures, the model pick, and retrieval mode.
+- **Workflow inspiration**: the demo GIFs above showcase standard search vs. topic search vs. vision Q&A; combine topic retrieval with the reference cards to jump directly to supporting documents.
+
+## 6. FAQ & Tips
+| Scenario | Recommendation |
+| --- | --- |
+| Images remain in the composer after sending | Hit **Stop** to reset the streaming state and resend; also ensure the renderer isn’t blocking `blob:` URLs in the dev tools network panel. |
+| DashScope connectivity test fails | Double-check the `qwenApiKey`, confirm `FS_APP_API_HOST/PORT` matches between backend and Electron, and export `HTTPS_PROXY` if a proxy is required. |
+| Topic retrieval returns nothing | Verify that “Document Theme Summary” is enabled and the target folder has completed summary generation; inspect logs for `summary_search_applied` to see whether fallback was triggered. |
+| `<think>` blocks not rendered | The UI only shows the gray reasoning panel when the SSE stream provides a `reasoning_content` field. Third-party endpoints must follow the OpenAI Chat Completions schema. |
+| Packaged build contains heavy model cache | Run `rm -rf meta/*` before packaging to strip cached weights. For offline-friendly bundles, adjust `package.py` to keep only the models you need. |
 
 ---
 LoFS = Local File System + Load once Fast Search — bringing “mount once, search fast” to your local knowledge base.
