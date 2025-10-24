@@ -495,7 +495,7 @@ class ChatModule {
   }
 
   clearAllImageAttachments(options = {}) {
-    const { keepStatus = false } = options || {};
+    const { keepStatus = false, preserveDisabled = false } = options || {};
     if (Array.isArray(this.pendingImageAttachments)) {
       this.pendingImageAttachments.forEach((attachment) => {
         if (attachment?.objectUrl) {
@@ -504,7 +504,9 @@ class ChatModule {
       });
     }
     this.pendingImageAttachments = [];
-    this.imageAttachmentsDisabled = false;
+    if (!preserveDisabled) {
+      this.imageAttachmentsDisabled = false;
+    }
     this.renderImageAttachments();
     if (!keepStatus) {
       this.setStatus('', 'info');
@@ -1522,6 +1524,7 @@ class ChatModule {
       } else {
         const content = rawContent;
         this.setBubbleContent(contentEl, content, message.role);
+        this.renderMessageAttachments(contentEl, message);
       }
 
       if (isWaitingMessage) {
@@ -1691,6 +1694,7 @@ class ChatModule {
     }
     this.removeWaitingIndicator(state.wrapper);
     this.setBubbleContent(state.content, content, role);
+    this.renderMessageAttachments(state.content, state.message);
     this.attachCopyButton(state.bubble, state.content);
     this.applyWaitingState(state.wrapper, state.avatar, state.bubble, false, role);
 
@@ -1713,6 +1717,39 @@ class ChatModule {
       const normalized = { ...message };
       if (typeof normalized.content === 'string') {
         normalized.content = ChatUtils.normalizeModelText(normalized.content);
+      }
+      if (normalized.metadata && typeof normalized.metadata === 'object') {
+        const attachments = Array.isArray(normalized.metadata.attachments)
+          ? normalized.metadata.attachments.filter((item) => item && typeof item === 'object')
+          : [];
+        if (attachments.length) {
+          normalized.metadata = { ...normalized.metadata };
+          normalized.metadata.attachments = attachments.map((attachment) => {
+            const sanitized = { ...attachment };
+            const dataUrl = typeof sanitized.data_url === 'string' && sanitized.data_url
+              ? sanitized.data_url
+              : (typeof sanitized.dataUrl === 'string' ? sanitized.dataUrl : '');
+            const previewUrl = typeof sanitized.preview_url === 'string' && sanitized.preview_url
+              ? sanitized.preview_url
+              : (typeof sanitized.previewUrl === 'string' ? sanitized.previewUrl : '');
+            const mimeType = sanitized.mime_type || sanitized.mimeType || '';
+            const size = typeof sanitized.size === 'number'
+              ? sanitized.size
+              : (typeof sanitized.file_size === 'number' ? sanitized.file_size : undefined);
+            const name = sanitized.name || sanitized.filename || sanitized.file_name || null;
+            return {
+              type: (sanitized.type || 'image'),
+              name,
+              mime_type: mimeType || undefined,
+              size: size !== undefined ? size : undefined,
+              data_url: dataUrl || previewUrl || '',
+              dataUrl: dataUrl || previewUrl || '',
+              preview_url: previewUrl || undefined,
+              previewUrl: previewUrl || undefined,
+              mimeType: mimeType || undefined
+            };
+          }).filter((item) => item.data_url);
+        }
       }
       return normalized;
     });
@@ -2038,6 +2075,71 @@ class ChatModule {
     }
 
     target.textContent = text;
+  }
+
+  renderMessageAttachments(target, message) {
+    if (!target) {
+      return;
+    }
+    const existing = target.querySelector('.chat-message-attachments');
+    if (existing && existing.parentElement === target) {
+      existing.remove();
+    }
+    const metadata = message && typeof message === 'object' ? message.metadata : null;
+    const attachments = Array.isArray(metadata?.attachments)
+      ? metadata.attachments.filter((item) => item && typeof item === 'object')
+      : [];
+    if (!attachments.length) {
+      return;
+    }
+
+    const container = document.createElement('div');
+    container.className = 'chat-message-attachments';
+
+    attachments.forEach((attachment) => {
+      const type = (attachment.type || attachment.attachment_type || 'image').toLowerCase();
+      if (type !== 'image') {
+        return;
+      }
+      const dataUrl = typeof attachment.dataUrl === 'string' && attachment.dataUrl
+        ? attachment.dataUrl
+        : (typeof attachment.data_url === 'string' && attachment.data_url ? attachment.data_url : '');
+      const previewUrl = typeof attachment.previewUrl === 'string' && attachment.previewUrl
+        ? attachment.previewUrl
+        : (typeof attachment.preview_url === 'string' && attachment.preview_url ? attachment.preview_url : '');
+      const source = dataUrl || previewUrl;
+      if (!source) {
+        return;
+      }
+
+      const figure = document.createElement('figure');
+      figure.className = 'chat-image-attachment';
+
+      const link = document.createElement('a');
+      link.className = 'chat-image-attachment-link';
+      link.href = source;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      if (attachment.name) {
+        link.download = attachment.name;
+        link.setAttribute('aria-label', attachment.name);
+      }
+
+      const img = document.createElement('img');
+      img.className = 'chat-image-attachment-thumb';
+      img.src = source;
+      img.alt = attachment.name || '图片附件';
+      link.appendChild(img);
+      figure.appendChild(link);
+
+      container.appendChild(figure);
+    });
+
+    if (!container.childElementCount) {
+      return;
+    }
+
+    target.appendChild(container);
   }
 
   extractThinkingSegments(text) {
@@ -2659,7 +2761,8 @@ class ChatModule {
           type: 'image',
           name: item.name,
           mime_type: item.mimeType || undefined,
-          size: item.size || undefined
+          size: item.size || undefined,
+          data_url: item.dataUrl
         }))
       };
     }
@@ -2728,6 +2831,9 @@ class ChatModule {
         size: item.size || undefined,
         data_url: item.dataUrl
       }));
+    }
+    if (preparedAttachments.length > 0) {
+      this.clearAllImageAttachments({ keepStatus: true, preserveDisabled: true });
     }
 
     this.chatInputEl.value = '';

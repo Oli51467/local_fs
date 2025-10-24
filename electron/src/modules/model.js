@@ -1339,11 +1339,13 @@ class ModelModule {
     if (!normalizedApiKey) {
       throw new Error('请先在设置页面填写通义千问 API Key。');
     }
+    const modelId = (apiModel || '').trim() || 'qwen3-max';
+    const isVisionModel = modelId.toLowerCase() === 'qwen3-vl-plus';
 
     if (typeof window !== 'undefined' && window.fsAPI && typeof window.fsAPI.testDashScopeConnection === 'function') {
       const result = await window.fsAPI.testDashScopeConnection({
         apiKey: normalizedApiKey,
-        model: apiModel
+        model: modelId
       });
       if (!result || result.success === false) {
         const message = result?.error || `通义千问调用失败${result?.status ? `（HTTP ${result.status}）` : ''}`;
@@ -1354,8 +1356,35 @@ class ModelModule {
 
     const url = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
     const payload = {
-      model: apiModel,
-      messages: [
+      model: modelId,
+      stream: false,
+      max_tokens: isVisionModel ? 128 : 32
+    };
+
+    if (isVisionModel) {
+      payload.messages = [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image_url',
+              image_url: {
+                url: 'https://img.alicdn.com/imgextra/i1/O1CN01gDEY8M1W114Hi3XcN_!!6000000002727-0-tps-1024-406.jpg'
+              }
+            },
+            {
+              type: 'text',
+              text: '这道题怎么解答？'
+            }
+          ]
+        }
+      ];
+      payload.extra_body = {
+        enable_thinking: true,
+        thinking_budget: 81920
+      };
+    } else {
+      payload.messages = [
         {
           role: 'system',
           content: 'You are a helpful assistant.'
@@ -1364,10 +1393,8 @@ class ModelModule {
           role: 'user',
           content: '你好，如果你能够正常工作，请回复我“你好”，不需要输出其他内容。'
         }
-      ],
-      stream: false,
-      max_tokens: 32
-    };
+      ];
+    }
 
     const response = await fetch(url, {
       method: 'POST',

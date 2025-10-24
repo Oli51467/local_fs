@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -11,6 +11,7 @@ from service.model_download_service import (
     ModelStatus as ServiceModelStatus,
     get_model_download_service,
 )
+from service.vision_model_service import get_vision_handler
 
 
 MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1/"
@@ -160,6 +161,26 @@ def test_modelscope_connection(
     )
 
 
+def _coerce_openai_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            text_value = item.get("text") if isinstance(item, dict) else getattr(item, "text", None)
+            if item_type == "text" and text_value:
+                parts.append(str(text_value))
+        return "".join(parts)
+    text_attr = getattr(content, "text", None)
+    if text_attr and getattr(content, "type", "text") == "text":
+        return str(text_attr)
+    return str(content or "")
+
+
 class DashScopeTestRequest(BaseModel):
     api_key: str = Field(..., description="DashScope API Key")
     model: str = Field(
@@ -188,37 +209,71 @@ def test_dashscope_connection(payload: DashScopeTestRequest) -> DashScopeTestRes
     prompt = payload.prompt.strip() or "你好，如果你能够正常工作，请回复我“你好”。"
 
     client = OpenAI(api_key=api_key, base_url=DASHSCOPE_BASE_URL)
+    handler = get_vision_handler(model_id)
+    if handler:
+        messages = handler.build_test_messages(prompt)
+        thinking_budget = 81920
+    else:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt},
+        ]
+        thinking_budget = 40960
     try:
         stream = client.chat.completions.create(
             model=model_id,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
             stream=True,
             max_tokens=64,
             extra_body={
                 "enable_thinking": True,
-                "thinking_budget": 40960,
+                "thinking_budget": thinking_budget,
             },
         )
     except Exception as exc:  # pylint: disable=broad-except
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    chunks: List[str] = []
+    reasoning_parts: List[str] = []
+    answer_parts: List[str] = []
+
+    def _append_piece(piece: Any) -> None:
+        if piece is None:
+            return
+        reasoning_value = getattr(piece, "reasoning_content", None)
+        if reasoning_value is None:
+            reasoning_value = getattr(piece, "reasoning", None)
+        if reasoning_value:
+            if isinstance(reasoning_value, (list, tuple)):
+                reasoning_parts.append(
+                    "".join(str(item) for item in reasoning_value if item is not None)
+                )
+            else:
+                reasoning_parts.append(str(reasoning_value))
+        content_value = getattr(piece, "content", None)
+        if content_value:
+            text_value = _coerce_openai_content(content_value)
+            if text_value:
+                answer_parts.append(text_value)
+
     try:
         for chunk in stream:
             if not chunk or not chunk.choices:
                 continue
             choice = chunk.choices[0]
             delta = getattr(choice, "delta", None)
-            if delta and getattr(delta, "content", None):
-                chunks.append(str(delta.content))
             message = getattr(choice, "message", None)
-            if message and getattr(message, "content", None):
-                chunks.append(str(message.content))
+            if delta is not None:
+                _append_piece(delta)
+            elif message is not None:
+                _append_piece(message)
     except Exception:  # pylint: disable=broad-except
         pass
 
-    content_text = "".join(chunks).strip() or None
-    return DashScopeTestResponse(success=True, model=model_id, content=content_text)
+    reasoning_text = "".join(reasoning_parts).strip()
+    content_text = "".join(answer_parts).strip()
+    if reasoning_text and content_text:
+        combined = f"{reasoning_text}\n\n=== Final Answer ===\n{content_text}"
+    else:
+        combined = content_text or reasoning_text or ""
+
+    return DashScopeTestResponse(success=True, model=model_id, content=combined or None)

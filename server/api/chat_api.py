@@ -4,7 +4,7 @@ import logging
 import re
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Set, Tuple
+from typing import Any, Dict, Generator, List, Optional, Sequence, Set, Tuple, Literal
 
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -25,6 +25,7 @@ from service.clip_embedding_service import (
 from service.embedding_service import EmbeddingService
 from service.faiss_service import FaissManager
 from service.llm_client import LLMClientError, SiliconFlowClient
+from service.vision_model_service import VisionAttachment, get_vision_handler
 from service.reranker_service import RerankerService
 from service.sqlite_service import SQLiteManager
 
@@ -209,6 +210,31 @@ class ModelSelection(BaseModel):
     )
 
 
+class ImageAttachment(BaseModel):
+    type: Literal["image"] = Field(default="image", description="附件类型")
+    name: Optional[str] = Field(default=None, description="文件名")
+    mime_type: Optional[str] = Field(default=None, description="MIME 类型")
+    size: Optional[int] = Field(default=None, ge=0, description="文件大小（字节）")
+    data_url: str = Field(
+        ..., min_length=1, description="图片数据的 data URL 或远程地址"
+    )
+
+    def to_vision_attachment(self) -> VisionAttachment:
+        return VisionAttachment(
+            data_url=self.data_url.strip(),
+            mime_type=(self.mime_type or None),
+            name=(self.name or None),
+        )
+
+    def sanitized_metadata(self, include_data_url: bool = False) -> Dict[str, Any]:
+        payload = self.model_dump()
+        if not include_data_url:
+            payload.pop("data_url", None)
+        else:
+            payload["data_url"] = self.data_url.strip()
+        return payload
+
+
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, description="用户提问内容")
     conversation_id: Optional[int] = Field(default=None, description="已有会话 ID")
@@ -221,6 +247,9 @@ class ChatRequest(BaseModel):
     )
     use_summary_search: bool = Field(
         default=False, description="是否优先基于文档主题摘要进行检索"
+    )
+    attachments: Optional[List[ImageAttachment]] = Field(
+        default=None, description="用户上传的图片附件"
     )
 
 
@@ -237,6 +266,28 @@ class ChatResponse(BaseModel):
 
 
 OLLAMA_REQUEST_TIMEOUT = 60
+
+
+def _convert_image_attachments(
+    attachments: Optional[List[ImageAttachment]],
+) -> List[VisionAttachment]:
+    if not attachments:
+        return []
+    converted: List[VisionAttachment] = []
+    for attachment in attachments:
+        try:
+            converted.append(attachment.to_vision_attachment())
+        except Exception:  # pragma: no cover - defensive
+            continue
+    return converted
+
+
+def _sanitize_attachments_metadata(
+    attachments: Optional[List[ImageAttachment]],
+) -> List[Dict[str, Any]]:
+    if not attachments:
+        return []
+    return [item.sanitized_metadata(include_data_url=True) for item in attachments]
 
 
 def _ensure_ollama_url(selection: ModelSelection) -> str:
@@ -387,7 +438,7 @@ def _call_modelscope_chat_completion(
     if choices:
         choice = choices[0]
         message = choice.get("message") or {}
-        main_text = (message.get("content") or "").strip()
+        main_text = _coerce_openai_content(message.get("content")).strip()
         reasoning_raw = (
             message.pop("reasoning_content", None)
             or message.pop("reasoning", None)
@@ -435,7 +486,7 @@ def _stream_modelscope_chat(
                 if isinstance(reasoning, list):
                     reasoning = "".join(str(item) for item in reasoning)
                 reasoning = "" if reasoning is None else str(reasoning)
-                answer_piece = delta.get("content") or ""
+                answer_piece = _coerce_openai_content(delta.get("content"))
                 final_piece = ""
 
                 if reasoning:
@@ -1939,7 +1990,10 @@ def _build_llm_messages(
 
 
 def _build_llm_payload(
-    selection: ModelSelection, messages: List[Dict[str, str]], stream: bool
+    selection: ModelSelection,
+    messages: List[Dict[str, Any]],
+    stream: bool,
+    attachments: Optional[List[ImageAttachment]] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "model": selection.api_model,
@@ -1961,6 +2015,12 @@ def _build_llm_payload(
             "enable_thinking": True,
             "thinking_budget": 40960,
         }
+    handler = get_vision_handler(selection.api_model)
+    if handler is not None:
+        vision_attachments = _convert_image_attachments(attachments)
+        payload["messages"] = handler.apply_attachments(
+            payload["messages"], vision_attachments
+        )
     return payload
 
 
@@ -1969,6 +2029,7 @@ def _prepare_chat_context(
     conversation_id: Optional[int],
     top_k: int,
     selection: ModelSelection,
+    attachments: Optional[List[ImageAttachment]] = None,
     use_summary_search: bool = False,
     client_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1979,6 +2040,14 @@ def _prepare_chat_context(
     if not normalized_question:
         raise HTTPException(status_code=400, detail="问题不能为空")
 
+    if attachments:
+        vision_handler = get_vision_handler(selection.api_model)
+        if vision_handler is None:
+            raise HTTPException(
+                status_code=400, detail="当前模型不支持图片理解，请移除图片后重试"
+            )
+    sanitized_attachments = _sanitize_attachments_metadata(attachments)
+
     if conversation_id is not None:
         conversation = sqlite_manager.get_conversation_by_id(conversation_id)
         if not conversation:
@@ -1987,8 +2056,12 @@ def _prepare_chat_context(
         title = _generate_conversation_title(normalized_question)
         conversation_id = sqlite_manager.create_conversation(title)
 
+    user_metadata: Dict[str, Any] = {"top_k": top_k}
+    if sanitized_attachments:
+        user_metadata["attachments"] = sanitized_attachments
+
     user_message_id = sqlite_manager.insert_chat_message(
-        conversation_id, "user", normalized_question, metadata={"top_k": top_k}
+        conversation_id, "user", normalized_question, metadata=user_metadata
     )
 
     _schedule_chat_progress(
@@ -2096,6 +2169,7 @@ def _prepare_chat_context(
         "chunks": chunks,
         "references": references,
         "llm_messages": llm_messages,
+        "attachments": attachments or [],
         "selection": selection,
         "client_request_id": client_request_id,
         "retrieval_context": retrieval_context,
@@ -2108,6 +2182,26 @@ def _sse_event(event: str, data: Dict[str, Any]) -> str:
     return f"data: {payload}\n\n"
 
 
+def _coerce_openai_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            text_value = item.get("text") if isinstance(item, dict) else getattr(item, "text", None)
+            if item_type == "text" and text_value:
+                parts.append(str(text_value))
+        return "".join(parts)
+    text_attr = getattr(content, "text", None)
+    if text_attr and getattr(content, "type", "text") == "text":
+        return str(text_attr)
+    return str(content or "")
+
+
 def _extract_stream_delta(chunk: Dict[str, Any]) -> str:
     choices = chunk.get("choices") or []
     if not choices:
@@ -2118,10 +2212,10 @@ def _extract_stream_delta(chunk: Dict[str, Any]) -> str:
         reasoning = delta.get("reasoning_content")
         if reasoning:
             return reasoning
-        return delta.get("content") or ""
+        return _coerce_openai_content(delta.get("content"))
     message = choice.get("message")
     if message and isinstance(message, dict):
-        return message.get("content") or ""
+        return _coerce_openai_content(message.get("content"))
     return ""
 
 
@@ -2131,7 +2225,7 @@ def _extract_completion_content(result: Dict[str, Any]) -> str:
         return ""
     message = choices[0].get("message") or {}
     content = message.get("content") or ""
-    return content
+    return _coerce_openai_content(content)
 
 
 def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, None]:
@@ -2141,6 +2235,7 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
             payload.conversation_id,
             payload.top_k,
             payload.model,
+            attachments=payload.attachments,
             use_summary_search=payload.use_summary_search,
             client_request_id=payload.client_request_id,
         )
@@ -2172,7 +2267,12 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
         },
     )
 
-    llm_payload = _build_llm_payload(selection, context["llm_messages"], stream=True)
+    llm_payload = _build_llm_payload(
+        selection,
+        context["llm_messages"],
+        stream=True,
+        attachments=context.get("attachments"),
+    )
     buffer_parts: List[str] = []
 
     _schedule_chat_progress(
@@ -2358,6 +2458,7 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
             payload.conversation_id,
             payload.top_k,
             payload.model,
+            attachments=payload.attachments,
             use_summary_search=payload.use_summary_search,
             client_request_id=payload.client_request_id,
         )
@@ -2368,7 +2469,12 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=500, detail="服务器内部错误") from exc
 
     selection = payload.model
-    llm_payload = _build_llm_payload(selection, context["llm_messages"], stream=False)
+    llm_payload = _build_llm_payload(
+        selection,
+        context["llm_messages"],
+        stream=False,
+        attachments=context.get("attachments"),
+    )
     conversation_id = context["conversation_id"]
     assistant_message_id = context["assistant_message_id"]
     user_message_id = context["user_message_id"]
