@@ -29,9 +29,9 @@ LoFS fuses local file organization with semantic retrieval to deliver an “alwa
 |:--:|:--:|:--:|
 | ![extract](img/pdf_extract.png) | ![PDF](img/pdf_viewer.png) | ![PPT](img/ppt_viewer.png) |
 
-| Standard Retrieval | Topic Retrieval | Image Understanding |
+| Image Understanding |
 |:--:|:--:|:--:|
-| ![Standard Retrieval](img/simple_chat.gif) | ![Topic Retrieval](img/topic_chat.gif) | ![Image Understanding](img/image_chat.gif) |
+| ![Image Understanding](img/image_chat.gif) |
 
 ## 2. Technical Architecture
 - **Electron desktop**: renders the file tree, orchestration panels, and search UI.

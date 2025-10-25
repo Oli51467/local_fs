@@ -29,9 +29,9 @@ LoFS 聚焦“本地优先”的知识管理场景，将文件管理与语义检
 |:--:|:--:|:--:|
 | ![extract](img/pdf_extract.png) | ![PDF](img/pdf_viewer.png) | ![PPT](img/ppt_viewer.png) |
 
-| 主题检索 | 图像理解 |
+| 图像理解 |
 |:--:|:--:|:--:|
-| ![主题检索](img/topic_chat.gif) | ![图像理解](img/image_chat.gif) |
+| ![图像理解](img/image_chat.gif) |
 
 ## 2. 技术架构
 - **桌面端（Electron）**：负责文件树、解析状态、检索结果的交互体验。
