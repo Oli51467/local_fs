@@ -56,6 +56,7 @@ class ChatModule {
     this.historyListEl = document.getElementById('chat-history-list');
     this.historyTitleEl = document.getElementById('chat-history-title');
     this.chatPageEl = document.getElementById('chat-page');
+    this.chatMainEl = document.getElementById('chat-main');
     this.chatMessagesContainer = document.getElementById('chat-messages-container');
     this.chatMessagesEl = document.getElementById('chat-messages');
     this.chatInputArea = document.getElementById('chat-input-area');
@@ -71,6 +72,10 @@ class ChatModule {
     this.chatModelButtonEl = document.getElementById('chat-model-button');
     this.chatModelButtonTextEl = document.getElementById('chat-model-button-text');
     this.chatModelDropdownEl = document.getElementById('chat-model-dropdown');
+    this.chatFileToggleBtn = document.getElementById('chat-file-toggle-btn');
+    this.chatFilePanelEl = document.getElementById('chat-file-panel');
+    this.chatFileTreeEl = document.getElementById('chat-file-tree');
+    this.chatFilePanelCloseBtn = document.getElementById('chat-file-panel-close');
     this.sendBtnDefaultContent = this.chatSendBtn ? this.chatSendBtn.innerHTML : '';
     this.sendBtnDefaultAriaLabel = this.chatSendBtn
       ? (this.chatSendBtn.getAttribute('aria-label') || '发送消息')
@@ -90,6 +95,8 @@ class ChatModule {
     this.initialized = false;
     this.historyVisible = true;
     this.isHistoryCollapsed = false;
+    this.historyManualCollapse = false;
+    this.historyAutoCollapseActive = false;
     this.pendingRequest = null;
     this.chatInputBaseHeight = null;
     this.chatInputMaxHeight = null;
@@ -111,6 +118,11 @@ class ChatModule {
     this.abortRequested = false;
     this.searchDialog = null;
     this.modelSelector = null;
+    this.chatFilePanel = null;
+    this.selectedFilePaths = [];
+    this.unsubscribeChatFileSelection = null;
+    this.boundHandleResize = null;
+    this.filePanelForcesCollapse = false;
   }
 
   initializeManagers() {
@@ -119,6 +131,84 @@ class ChatModule {
       appendSystemError: (message) => this.appendSystemErrorToChat(message),
       getStatusElement: () => this.chatStatusTextEl
     });
+    const ChatFilePanel = window.ChatFilePanel;
+    if (ChatFilePanel && this.chatFileTreeEl) {
+      try {
+        this.chatFilePanel = new ChatFilePanel({
+          container: this.chatFileTreeEl,
+          panelEl: this.chatFilePanelEl,
+          toggleBtn: this.chatFileToggleBtn,
+          closeBtn: this.chatFilePanelCloseBtn,
+          onVisibilityChange: (visible) => this.handleChatFilePanelVisibility(visible)
+        });
+        window.chatFilePanel = this.chatFilePanel;
+        this.unsubscribeChatFileSelection = this.chatFilePanel.onSelectionChange(
+          (paths) => this.handleChatFileSelection(paths)
+        );
+      } catch (error) {
+        console.error('初始化聊天文件面板失败:', error);
+      }
+    } else {
+      console.warn('ChatFilePanel 模块未加载或缺少容器');
+    }
+  }
+
+  handleChatFileSelection(paths) {
+    if (!Array.isArray(paths)) {
+      this.selectedFilePaths = [];
+      if (this.chatFileToggleBtn) {
+        this.chatFileToggleBtn.classList.remove('has-selection');
+      }
+      return;
+    }
+    this.selectedFilePaths = paths
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter(Boolean);
+    if (this.chatFileToggleBtn) {
+      this.chatFileToggleBtn.classList.toggle('has-selection', this.selectedFilePaths.length > 0);
+    }
+  }
+
+  getSelectedChatFiles() {
+    return Array.isArray(this.selectedFilePaths) ? [...this.selectedFilePaths] : [];
+  }
+
+  handleChatFilePanelVisibility(visible) {
+    if (visible) {
+      this.filePanelForcesCollapse = true;
+      this.setHistoryCollapseState(true, { auto: true, reason: 'chat-file-panel' });
+    } else {
+      this.filePanelForcesCollapse = false;
+      this.handleResponsiveLayout();
+    }
+  }
+
+  setupResponsiveHandlers() {
+    if (this.boundHandleResize) {
+      this.handleResponsiveLayout();
+      return;
+    }
+    this.boundHandleResize = () => this.handleResponsiveLayout();
+    window.addEventListener('resize', this.boundHandleResize, { passive: true });
+    this.handleResponsiveLayout();
+  }
+
+  handleResponsiveLayout() {
+    const width = window.innerWidth || document.documentElement.clientWidth || 0;
+    if (this.filePanelForcesCollapse) {
+      this.setHistoryCollapseState(true, { auto: true, reason: 'chat-file-panel' });
+    } else {
+      const shouldAutoCollapse = width > 0 && width <= 1100;
+      this.setHistoryCollapseState(shouldAutoCollapse ? true : this.historyManualCollapse, { auto: shouldAutoCollapse });
+    }
+    const compactThreshold = 960;
+    if (this.chatMainEl) {
+      if (width && width <= compactThreshold) {
+        this.chatMainEl.classList.add('chat-main-compact');
+      } else {
+        this.chatMainEl.classList.remove('chat-main-compact');
+      }
+    }
   }
 
   attachSettingsListener() {
@@ -1074,6 +1164,7 @@ class ChatModule {
 
     this.autoResizeTextarea();
     this.showChatPage();
+    this.setupResponsiveHandlers();
   }
 
   leaveChatMode() {
@@ -1086,6 +1177,21 @@ class ChatModule {
       delete this.chatStatusTextEl.dataset.statusType;
     }
     this.closeModelDropdown();
+    if (this.chatFilePanel && typeof this.chatFilePanel.setPanelVisibility === 'function') {
+      this.chatFilePanel.setPanelVisibility(false);
+      if (typeof this.chatFilePanel.clearSelection === 'function') {
+        this.chatFilePanel.clearSelection();
+      }
+    }
+    this.handleChatFileSelection([]);
+    this.filePanelForcesCollapse = false;
+    if (this.boundHandleResize) {
+      window.removeEventListener('resize', this.boundHandleResize);
+      this.boundHandleResize = null;
+    }
+    if (this.chatMainEl) {
+      this.chatMainEl.classList.remove('chat-main-compact');
+    }
   }
 
   showChatPage() {
@@ -3035,13 +3141,17 @@ class ChatModule {
   }
 
   toggleHistoryCollapse() {
-    this.isHistoryCollapsed = !this.isHistoryCollapsed;
+    this.historyManualCollapse = !this.historyManualCollapse;
+    this.setHistoryCollapseState(this.historyManualCollapse, { auto: false });
+    this.handleResponsiveLayout();
+  }
+
+  setHistoryCollapseState(collapsed, { auto = false } = {}) {
     const historyContainer = document.querySelector('#chat-history-container');
     const chatPageEl = document.querySelector('#chat-page');
     const collapseBtn = document.querySelector('#chat-history-collapse-btn');
     const expandBtn = document.querySelector('#collapsed-expand-btn');
-    
-    if (this.isHistoryCollapsed) {
+    if (collapsed) {
       historyContainer?.classList.add('collapsed');
       chatPageEl?.classList.add('expanded');
       if (collapseBtn) {
@@ -3060,6 +3170,11 @@ class ChatModule {
       if (expandBtn) {
         expandBtn.style.display = 'none';
       }
+    }
+    this.isHistoryCollapsed = collapsed;
+    this.historyAutoCollapseActive = auto;
+    if (!auto) {
+      this.historyManualCollapse = collapsed;
     }
   }
 
