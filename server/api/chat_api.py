@@ -1,9 +1,11 @@
 import asyncio
+import base64
 import json
 import logging
 import re
 import textwrap
 from pathlib import Path
+import mimetypes
 from typing import Any, Dict, Generator, List, Optional, Sequence, Set, Tuple, Literal
 
 from fastapi import APIRouter, HTTPException, Response
@@ -15,7 +17,7 @@ import numpy as np
 import faiss
 from openai import OpenAI
 
-from config.config import ServerConfig
+from config.config import ServerConfig, DatabaseConfig
 from api.status_api import status_broadcaster
 from service.bm25s_service import BM25SService
 from service.clip_embedding_service import (
@@ -60,6 +62,7 @@ RERANK_FUSION_WEIGHT = 0.45
 DENSE_FUSION_WEIGHT = 0.3
 LEXICAL_FUSION_WEIGHT = 0.15
 CLIP_FUSION_WEIGHT = 0.1
+MAX_SELECTED_IMAGE_BYTES = 8 * 1024 * 1024
 MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1/"
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
@@ -235,6 +238,16 @@ class ImageAttachment(BaseModel):
         return payload
 
 
+class FileSelection(BaseModel):
+    path: Optional[str] = Field(default=None, description="客户端提供的绝对路径")
+    relative_path: Optional[str] = Field(default=None, description="相对于 data 目录的路径")
+    name: Optional[str] = Field(default=None, description="文件名")
+    file_type: Literal["folder", "file", "image"] = Field(default="file")
+    is_image: bool = Field(default=False)
+    size: Optional[int] = Field(default=None, ge=0, description="文件大小（字节）")
+    mime_type: Optional[str] = Field(default=None, description="文件 MIME 类型")
+
+
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, description="用户提问内容")
     conversation_id: Optional[int] = Field(default=None, description="已有会话 ID")
@@ -250,6 +263,12 @@ class ChatRequest(BaseModel):
     )
     attachments: Optional[List[ImageAttachment]] = Field(
         default=None, description="用户上传的图片附件"
+    )
+    full_text_search: bool = Field(
+        default=False, description="是否在聊天检索中执行全文检索"
+    )
+    selected_files: Optional[List[FileSelection]] = Field(
+        default=None, description="聊天模式下选择的文件信息"
     )
 
 
@@ -288,6 +307,283 @@ def _sanitize_attachments_metadata(
     if not attachments:
         return []
     return [item.sanitized_metadata(include_data_url=True) for item in attachments]
+
+
+def _sanitize_file_selections(
+    selections: Optional[List[FileSelection]],
+) -> List[Dict[str, Any]]:
+    if not selections:
+        return []
+    sanitized: List[Dict[str, Any]] = []
+    for selection in selections:
+        try:
+            data = selection.model_dump()
+        except AttributeError:
+            data = dict(selection)
+        sanitized.append(
+            {
+                "relative_path": data.get("relative_path"),
+                "name": data.get("name"),
+                "file_type": data.get("file_type")
+                or ("image" if data.get("is_image") else "file"),
+                "is_image": bool(data.get("is_image", False)),
+            }
+        )
+    return sanitized
+
+
+def _coerce_candidate_paths(value: Optional[str], project_root: Path, data_root: Path) -> List[Path]:
+    if not value:
+        return []
+    try:
+        raw = str(value).strip()
+    except Exception:  # pragma: no cover - defensive
+        return []
+    if not raw:
+        return []
+    normalized = raw.replace("\\", "/")
+    candidates: List[Path] = []
+
+    try:
+        path_obj = Path(normalized)
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+    if path_obj.is_absolute():
+        candidates.append(path_obj)
+    else:
+        candidates.append((project_root / path_obj).resolve())
+        candidates.append((data_root / path_obj).resolve())
+        if normalized == "data":
+            candidates.append(data_root)
+        elif normalized.lower().startswith("data/"):
+            remainder = normalized.split("/", 1)[1]
+            if remainder:
+                candidates.append((data_root / Path(remainder)).resolve())
+
+    return candidates
+
+
+def _resolve_single_selection(
+    raw: Dict[str, Any], project_root: Path, data_root: Path
+) -> Optional[Dict[str, Any]]:
+    file_type = raw.get("file_type") or raw.get("fileType")
+    is_image = bool(raw.get("is_image") or (file_type == "image"))
+    name = raw.get("name") or raw.get("filename")
+    mime_hint = raw.get("mime_type") or raw.get("mimeType")
+    size_hint = raw.get("size")
+
+    candidates: List[Path] = []
+    candidates.extend(_coerce_candidate_paths(raw.get("path"), project_root, data_root))
+    candidates.extend(
+        _coerce_candidate_paths(raw.get("relative_path"), project_root, data_root)
+    )
+    candidates.extend(
+        _coerce_candidate_paths(raw.get("relativePath"), project_root, data_root)
+    )
+
+    resolved_candidates: List[Path] = []
+    seen: Set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = Path(candidate).resolve()
+        except Exception:  # pragma: no cover - defensive
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved_candidates.append(resolved)
+
+    for resolved in resolved_candidates:
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        try:
+            relative_to_data = resolved.relative_to(data_root)
+        except ValueError:
+            continue
+
+        db_path = str(Path("data") / relative_to_data).replace("\\", "/")
+        mime_type = mime_hint or mimetypes.guess_type(resolved.name)[0] or "image/png"
+        size_value = size_hint
+        if size_value is None:
+            try:
+                size_value = resolved.stat().st_size
+            except OSError:
+                size_value = None
+
+        return {
+            "absolute_path": resolved,
+            "db_file_path": db_path,
+            "name": (name or resolved.name),
+            "file_type": "image" if is_image else (file_type or "file"),
+            "is_image": is_image,
+            "mime_type": mime_type,
+            "size": size_value,
+        }
+
+    return None
+
+
+def _encode_image_as_data_url(
+    image_path: Path, mime_hint: Optional[str] = None
+) -> Tuple[str, str, int]:
+    try:
+        payload = image_path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"无法读取图片文件: {image_path.name}") from exc
+
+    size = len(payload)
+    if size > MAX_SELECTED_IMAGE_BYTES:
+        limit_mb = MAX_SELECTED_IMAGE_BYTES / (1024 * 1024)
+        raise ValueError(
+            f"图片 {image_path.name} 体积过大，请压缩至不超过 {limit_mb:.1f}MB 后重试"
+        )
+
+    mime_type = mime_hint or mimetypes.guess_type(image_path.name)[0] or "image/png"
+    encoded = base64.b64encode(payload).decode("ascii")
+    data_url = f"data:{mime_type};base64,{encoded}"
+    return data_url, mime_type, size
+
+
+def _prepare_selected_files(
+    selections: Optional[List[FileSelection]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[ImageAttachment]]:
+    sanitized = _sanitize_file_selections(selections)
+    if not selections:
+        return sanitized, [], []
+
+    project_root = ServerConfig.PROJECT_ROOT.resolve()
+    data_root = DatabaseConfig.DATABASE_DIR.resolve()
+
+    raw_entries: List[Dict[str, Any]] = []
+    for selection in selections:
+        try:
+            raw_entries.append(selection.model_dump())
+        except AttributeError:
+            raw_entries.append(dict(selection))
+
+    filtered_metadata: List[Dict[str, Any]] = []
+    resolved_records: List[Dict[str, Any]] = []
+    image_attachments: List[ImageAttachment] = []
+
+    for index, raw in enumerate(raw_entries):
+        resolved = _resolve_single_selection(raw, project_root, data_root)
+        if not resolved:
+            continue
+
+        sanitized_entry = sanitized[index] if index < len(sanitized) else {}
+        filtered = {
+            "relative_path": sanitized_entry.get("relative_path")
+            or resolved["db_file_path"],
+            "name": sanitized_entry.get("name") or resolved["name"],
+            "file_type": resolved["file_type"],
+            "is_image": resolved["is_image"],
+        }
+        filtered_metadata.append(filtered)
+        resolved_records.append(resolved)
+
+        if resolved["is_image"]:
+            try:
+                data_url, mime_type, size = _encode_image_as_data_url(
+                    resolved["absolute_path"], resolved.get("mime_type")
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            image_attachments.append(
+                ImageAttachment(
+                    name=resolved["name"],
+                    mime_type=mime_type,
+                    size=size,
+                    data_url=data_url,
+                )
+            )
+
+    return filtered_metadata, resolved_records, image_attachments
+
+
+def _collect_full_text_chunks_from_records(
+    records: Sequence[Dict[str, Any]]
+) -> Tuple[List[RetrievedChunk], List[Dict[str, Any]]]:
+    if sqlite_manager is None or not records:
+        return [], []
+
+    collected_chunks: List[RetrievedChunk] = []
+    document_entries: List[Dict[str, Any]] = []
+    seen_chunk_keys: Set[Tuple[int, int]] = set()
+
+    for record in records:
+        if record.get("is_image"):
+            continue
+        db_path = record.get("db_file_path")
+        if not db_path:
+            continue
+
+        try:
+            document = sqlite_manager.get_document_by_path(db_path)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("选中文件查询失败: %s", exc)
+            continue
+
+        if not document:
+            logger.debug("选中文件未挂载，已跳过: %s", db_path)
+            continue
+
+        doc_id = int(document["id"])
+        document_entries.append(
+            {
+                "document_id": doc_id,
+                "file_path": document.get("file_path"),
+                "filename": document.get("filename"),
+                "selection_name": record.get("name"),
+            }
+        )
+
+        try:
+            chunk_rows = sqlite_manager.get_document_chunks(doc_id)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("加载选中文档块失败 (document_id=%s): %s", doc_id, exc)
+            continue
+
+        for row in chunk_rows:
+            try:
+                chunk_index = int(row.get("chunk_index") or 0)
+            except (TypeError, ValueError):
+                chunk_index = 0
+            key = (doc_id, chunk_index)
+            if key in seen_chunk_keys:
+                continue
+            seen_chunk_keys.add(key)
+
+            collected_chunks.append(
+                RetrievedChunk(
+                    document_id=doc_id,
+                    filename=row.get("filename") or document.get("filename") or record.get("name") or "",
+                    file_path=row.get("file_path") or document.get("file_path") or db_path or "",
+                    chunk_index=chunk_index,
+                    content=row.get("content") or "",
+                    score=1.0,
+                    embedding_score=None,
+                    embedding_score_normalized=None,
+                    bm25_score=None,
+                    bm25_raw_score=None,
+                    rerank_score=None,
+                    rerank_score_normalized=None,
+                    vector_id=row.get("vector_id"),
+                    sources=["full_text"],
+                    score_breakdown={"full_text": 1.0},
+                    score_weights={"full_text": 1.0},
+                    dense_rank=None,
+                    lexical_rank=None,
+                    rerank_rank=None,
+                    clip_score=None,
+                    clip_score_normalized=None,
+                    clip_rank=None,
+                )
+            )
+
+    return collected_chunks, document_entries
 
 
 def _ensure_ollama_url(selection: ModelSelection) -> str:
@@ -2030,6 +2326,8 @@ def _prepare_chat_context(
     top_k: int,
     selection: ModelSelection,
     attachments: Optional[List[ImageAttachment]] = None,
+    selected_files: Optional[List[FileSelection]] = None,
+    full_text_search: bool = False,
     use_summary_search: bool = False,
     client_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -2040,13 +2338,27 @@ def _prepare_chat_context(
     if not normalized_question:
         raise HTTPException(status_code=400, detail="问题不能为空")
 
-    if attachments:
-        vision_handler = get_vision_handler(selection.api_model)
-        if vision_handler is None:
-            raise HTTPException(
-                status_code=400, detail="当前模型不支持图片理解，请移除图片后重试"
-            )
-    sanitized_attachments = _sanitize_attachments_metadata(attachments)
+    user_attachments: List[ImageAttachment] = list(attachments or [])
+    (
+        sanitized_selected_files,
+        resolved_selected_records,
+        selection_image_attachments,
+    ) = _prepare_selected_files(selected_files)
+    attachment_list = [*user_attachments, *selection_image_attachments]
+
+    vision_handler = get_vision_handler(selection.api_model)
+    has_image_payloads = bool(attachment_list)
+    if has_image_payloads and vision_handler is None:
+        raise HTTPException(
+            status_code=400, detail="当前模型不支持图片理解，请移除图片后重试"
+        )
+    if vision_handler is not None and not has_image_payloads:
+        raise HTTPException(
+            status_code=400,
+            detail="已选择视觉模型，但未提供任何图片。请上传或选择图片后重试。",
+        )
+
+    sanitized_attachments = _sanitize_attachments_metadata(attachment_list)
 
     if conversation_id is not None:
         conversation = sqlite_manager.get_conversation_by_id(conversation_id)
@@ -2059,6 +2371,10 @@ def _prepare_chat_context(
     user_metadata: Dict[str, Any] = {"top_k": top_k}
     if sanitized_attachments:
         user_metadata["attachments"] = sanitized_attachments
+    if sanitized_selected_files:
+        user_metadata["selected_files"] = sanitized_selected_files
+    if full_text_search:
+        user_metadata["full_text_search"] = True
 
     user_message_id = sqlite_manager.insert_chat_message(
         conversation_id, "user", normalized_question, metadata=user_metadata
@@ -2090,9 +2406,13 @@ def _prepare_chat_context(
         "mode": "baseline",
         "summary_search_requested": bool(use_summary_search),
         "summary_search_applied": False,
+        "full_text_requested": bool(full_text_search),
+        "selected_files_count": len(sanitized_selected_files),
     }
     chunks: List[RetrievedChunk] = []
     summary_context: Optional[Dict[str, Any]] = None
+    full_text_chunks: List[RetrievedChunk] = []
+    full_text_documents: List[Dict[str, Any]] = []
 
     if use_summary_search:
         summary_payload = _retrieve_chunks_from_document_summaries(normalized_question)
@@ -2115,8 +2435,43 @@ def _prepare_chat_context(
     else:
         chunks = _retrieve_chunks(normalized_question, top_k)
 
-    if retrieval_context.get("mode") != "summary":
-        retrieval_context["mode"] = "baseline"
+    if full_text_search and resolved_selected_records:
+        full_text_chunks, full_text_documents = _collect_full_text_chunks_from_records(
+            resolved_selected_records
+        )
+        if full_text_chunks:
+            existing_keys = {
+                (
+                    chunk.document_id,
+                    chunk.chunk_index,
+                    _normalize_path(chunk.file_path),
+                )
+                for chunk in chunks
+            }
+            for chunk in full_text_chunks:
+                key = (
+                    chunk.document_id,
+                    chunk.chunk_index,
+                    _normalize_path(chunk.file_path),
+                )
+                if key in existing_keys:
+                    continue
+                chunks.append(chunk)
+                existing_keys.add(key)
+
+        if full_text_chunks or full_text_documents:
+            retrieval_context["full_text_mode"] = True
+            if full_text_documents:
+                retrieval_context["full_text_documents"] = full_text_documents
+            retrieval_context["mode"] = "full_text"
+        else:
+            retrieval_context["full_text_mode"] = False
+            if retrieval_context.get("mode") != "summary":
+                retrieval_context["mode"] = "baseline"
+    else:
+        retrieval_context["full_text_mode"] = False
+        if retrieval_context.get("mode") != "summary":
+            retrieval_context["mode"] = "baseline"
 
     references = _build_references_from_chunks(chunks)
 
@@ -2133,7 +2488,11 @@ def _prepare_chat_context(
         "retrieval_mode": retrieval_context.get("mode"),
         "retrieval_context": retrieval_context,
         "use_summary_search": bool(use_summary_search),
+        "full_text_search": bool(full_text_search),
+        "selected_files": sanitized_selected_files,
     }
+    if full_text_documents:
+        assistant_metadata["full_text_documents"] = full_text_documents
     if client_request_id:
         assistant_metadata["client_request_id"] = client_request_id
 
@@ -2169,10 +2528,11 @@ def _prepare_chat_context(
         "chunks": chunks,
         "references": references,
         "llm_messages": llm_messages,
-        "attachments": attachments or [],
+        "attachments": attachment_list,
         "selection": selection,
         "client_request_id": client_request_id,
         "retrieval_context": retrieval_context,
+        "selected_files": sanitized_selected_files,
     }
 
 
@@ -2236,6 +2596,8 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
             payload.top_k,
             payload.model,
             attachments=payload.attachments,
+            selected_files=payload.selected_files,
+            full_text_search=payload.full_text_search,
             use_summary_search=payload.use_summary_search,
             client_request_id=payload.client_request_id,
         )
@@ -2459,6 +2821,8 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
             payload.top_k,
             payload.model,
             attachments=payload.attachments,
+            selected_files=payload.selected_files,
+            full_text_search=payload.full_text_search,
             use_summary_search=payload.use_summary_search,
             client_request_id=payload.client_request_id,
         )

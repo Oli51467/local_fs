@@ -4,9 +4,13 @@ class ChatFilePanel {
     this.panelEl = options.panelEl || document.getElementById('chat-file-panel');
     this.toggleBtn = options.toggleBtn || document.getElementById('chat-file-toggle-btn');
     this.closeBtn = options.closeBtn || document.getElementById('chat-file-panel-close');
+    this.refreshBtn = options.refreshBtn || document.getElementById('chat-file-refresh-btn');
     this.toggleIconEl = document.getElementById('chat-file-toggle-icon');
     this.closeIconEl = document.getElementById('chat-file-panel-close-icon');
+    this.refreshIconEl = document.getElementById('chat-file-refresh-icon');
     this.onVisibilityChange = typeof options.onVisibilityChange === 'function' ? options.onVisibilityChange : null;
+    this.onFullTextToggle = typeof options.onFullTextToggle === 'function' ? options.onFullTextToggle : null;
+    this.fullTextToggleEl = options.fullTextToggleEl || document.getElementById('chat-fulltext-toggle');
     this.runtime = {
       fileTreeData: null,
       expanded: new Set(),
@@ -18,11 +22,16 @@ class ChatFilePanel {
     this.icons = window.icons || {};
     this.uploadStatusModule = window.RendererModules?.uploadStatus || null;
     this.nodeLookup = new Map();
+    this.fileTypeLookup = new Map();
     this.statusRequests = new Map();
+    this.selectionProfile = {
+      imageOnly: false
+    };
     this.uploadStatusEndpoint = this.uploadStatusModule?.UPLOAD_STATUS_ENDPOINT
       || 'http://localhost:8000/api/document/upload-status';
     this.loadInFlight = null;
     this.pendingSelectionBroadcast = null;
+    this.fullTextEnabled = Boolean(this.fullTextToggleEl?.checked);
     this.initialize();
   }
 
@@ -33,9 +42,13 @@ class ChatFilePanel {
     if (this.closeIconEl) {
       this.closeIconEl.innerHTML = window.icons?.chevronRight || '';
     }
+    if (this.refreshIconEl) {
+      this.refreshIconEl.innerHTML = this.icons.refresh || '';
+    }
 
     this.bindPanelToggle();
     this.bindKeyboardShortcuts();
+    this.bindFullTextToggle();
 
     if (this.container) {
       this.container.addEventListener('contextmenu', (event) => {
@@ -47,6 +60,25 @@ class ChatFilePanel {
         event.preventDefault();
       });
     }
+  }
+
+  bindFullTextToggle() {
+    if (!this.fullTextToggleEl) {
+      return;
+    }
+    this.fullTextToggleEl.checked = this.fullTextEnabled;
+    this.fullTextToggleEl.setAttribute('aria-checked', this.fullTextEnabled ? 'true' : 'false');
+    this.fullTextToggleEl.addEventListener('change', () => {
+      this.fullTextEnabled = Boolean(this.fullTextToggleEl.checked);
+      this.fullTextToggleEl.setAttribute('aria-checked', this.fullTextEnabled ? 'true' : 'false');
+      if (typeof this.onFullTextToggle === 'function') {
+        this.onFullTextToggle(this.fullTextEnabled);
+      }
+      const evt = new CustomEvent('chatFullTextModeChanged', {
+        detail: { enabled: this.fullTextEnabled }
+      });
+      document.dispatchEvent(evt);
+    });
   }
 
   bindPanelToggle() {
@@ -61,6 +93,11 @@ class ChatFilePanel {
     }
     if (this.closeBtn) {
       this.closeBtn.addEventListener('click', () => this.setPanelVisibility(false));
+    }
+    if (this.refreshBtn) {
+      this.refreshBtn.addEventListener('click', () => {
+        this.refreshFileTree();
+      });
     }
   }
 
@@ -77,6 +114,46 @@ class ChatFilePanel {
         this.setPanelVisibility(false);
       }
     });
+  }
+
+  setRefreshState(isRefreshing) {
+    if (!this.refreshBtn) {
+      return;
+    }
+    const busy = Boolean(isRefreshing);
+    this.refreshBtn.disabled = busy;
+    if (busy) {
+      this.refreshBtn.classList.add('is-loading');
+      this.refreshBtn.setAttribute('aria-busy', 'true');
+    } else {
+      this.refreshBtn.classList.remove('is-loading');
+      this.refreshBtn.removeAttribute('aria-busy');
+    }
+  }
+
+  async refreshFileTree() {
+    if (!window.fsAPI || typeof window.fsAPI.getFileTree !== 'function') {
+      return;
+    }
+    if (this.loadInFlight) {
+      try {
+        await this.loadInFlight;
+      } catch (error) {
+        console.debug('等待文件树加载完成失败:', error);
+      }
+    }
+    this.setRefreshState(true);
+    try {
+      this.loadInFlight = null;
+      await this.loadFileTree();
+    } catch (error) {
+      console.error('刷新聊天文件树失败:', error);
+      if (this.container) {
+        this.container.innerHTML = `<div class="chat-file-tree-empty">刷新失败，请稍后重试</div>`;
+      }
+    } finally {
+      this.setRefreshState(false);
+    }
   }
 
   setPanelVisibility(visible) {
@@ -136,6 +213,7 @@ class ChatFilePanel {
     const tree = this.runtime.fileTreeData;
     this.container.innerHTML = '';
     this.nodeLookup.clear();
+    this.fileTypeLookup.clear();
     if (!tree || !Array.isArray(tree.children) || tree.children.length === 0) {
       this.container.innerHTML = '<div class="chat-file-tree-empty">暂无文件</div>';
       return;
@@ -146,6 +224,7 @@ class ChatFilePanel {
     });
     this.container.appendChild(fragment);
     this.ensureFolderStatus('data');
+    this.updateSelectionConstraints();
   }
 
   renderBranch(node, depth, parentContainer) {
@@ -191,7 +270,10 @@ class ChatFilePanel {
     }
     item.dataset.path = node.path;
     item.dataset.relativePath = relativePath;
-    item.dataset.type = isFolder ? 'folder' : 'file';
+    const fileType = isFolder ? 'folder' : (this.isImageNode(node) ? 'image' : 'file');
+    item.dataset.type = fileType;
+    item.dataset.fileType = fileType;
+    this.fileTypeLookup.set(node.path, fileType);
     const depthLevel = Number(depth) || 0;
     item.dataset.depth = String(depthLevel);
     item.style.setProperty('--chat-depth-level', depthLevel);
@@ -311,6 +393,15 @@ class ChatFilePanel {
     if (node && Array.isArray(node.children)) {
       return;
     }
+    const fileType = this.getFileTypeByPath(path);
+    const isImage = fileType === 'image';
+    if (this.selectionProfile.imageOnly && !isImage && !this.runtime.selected.has(path)) {
+      this.showSelectionWarning('已选择图片文件，无法混合其他文件类型。');
+      return;
+    }
+    if (isImage && this.hasNonImageSelected()) {
+      this.clearNonImageSelections();
+    }
     if (this.runtime.selected.has(path)) {
       this.runtime.selected.delete(path);
     } else {
@@ -321,6 +412,7 @@ class ChatFilePanel {
       target.dataset.selected = this.runtime.selected.has(path) ? 'true' : 'false';
       target.setAttribute('aria-selected', target.dataset.selected === 'true' ? 'true' : 'false');
     }
+    this.updateSelectionConstraints();
     this.scheduleSelectionBroadcast();
   }
 
@@ -333,15 +425,21 @@ class ChatFilePanel {
       el.dataset.selected = 'false';
       el.setAttribute('aria-selected', 'false');
     });
+    const imageOnly = this.selectionProfile.imageOnly;
     this.container.querySelectorAll('.file-item.is-selectable[data-path]').forEach((el) => {
       if (!el.offsetParent) {
         return;
       }
       const path = el.dataset.path;
+      const type = el.dataset.fileType;
+      if (imageOnly && type !== 'image') {
+        return;
+      }
       this.runtime.selected.add(path);
       el.dataset.selected = 'true';
       el.setAttribute('aria-selected', 'true');
     });
+    this.updateSelectionConstraints();
     this.scheduleSelectionBroadcast(true);
   }
 
@@ -360,16 +458,122 @@ class ChatFilePanel {
   }
 
   broadcastSelection() {
-    const payload = Array.from(this.runtime.selected);
+    const entries = this.getSelectedEntries();
+    const paths = entries.map((entry) => entry.path);
     this.runtime.listeners.selection.forEach((listener) => {
       try {
-        listener(payload);
+        listener(paths, entries);
       } catch (error) {
         console.warn('文件选择事件处理失败:', error);
       }
     });
-    const event = new CustomEvent('chatFileSelectionChanged', { detail: { paths: payload } });
+    const event = new CustomEvent('chatFileSelectionChanged', { detail: { paths, entries } });
     document.dispatchEvent(event);
+  }
+
+  getSelectedEntries() {
+    const entries = [];
+    this.runtime.selected.forEach((path) => {
+      const node = this.nodeLookup.get(path);
+      if (!node) {
+        return;
+      }
+      const type = this.getFileTypeByPath(path);
+      const relativePath = this.getRelativePathByPath(path);
+      entries.push({
+        path,
+        relativePath,
+        name: node.name || '',
+        fileType: type || 'file',
+        isImage: type === 'image'
+      });
+    });
+    return entries;
+  }
+
+  getRelativePathByPath(path) {
+    const element = this.container?.querySelector(`.file-item[data-path="${this.escapeSelector(path)}"]`);
+    return element?.dataset.relativePath || null;
+  }
+
+  getFileTypeByPath(path) {
+    if (this.fileTypeLookup.has(path)) {
+      return this.fileTypeLookup.get(path);
+    }
+    const element = this.container?.querySelector(`.file-item[data-path="${this.escapeSelector(path)}"]`);
+    return element?.dataset.fileType || null;
+  }
+
+  hasImageSelected() {
+    for (const path of this.runtime.selected) {
+      if (this.getFileTypeByPath(path) === 'image') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  hasNonImageSelected() {
+    for (const path of this.runtime.selected) {
+      if (this.getFileTypeByPath(path) !== 'image') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  clearNonImageSelections() {
+    const removed = [];
+    this.runtime.selected.forEach((path) => {
+      if (this.getFileTypeByPath(path) !== 'image') {
+        this.runtime.selected.delete(path);
+        removed.push(path);
+        const el = this.container?.querySelector(`.file-item[data-path="${this.escapeSelector(path)}"]`);
+        if (el) {
+          el.dataset.selected = 'false';
+          el.setAttribute('aria-selected', 'false');
+        }
+      }
+    });
+    if (removed.length) {
+      this.showSelectionWarning('已清除非图片文件的选择，以便选择图片。');
+      this.updateSelectionConstraints();
+      this.scheduleSelectionBroadcast(true);
+    }
+  }
+
+  updateSelectionConstraints() {
+    const imageOnly = this.hasImageSelected();
+    this.selectionProfile.imageOnly = imageOnly;
+    if (!this.container) {
+      return;
+    }
+    this.container.querySelectorAll('.file-item-file').forEach((item) => {
+      const type = item.dataset.fileType;
+      if (imageOnly && type !== 'image') {
+        item.classList.add('is-disabled');
+        item.setAttribute('aria-disabled', 'true');
+      } else {
+        item.classList.remove('is-disabled');
+        item.removeAttribute('aria-disabled');
+      }
+    });
+  }
+
+  isImageNode(node) {
+    if (!node || node.children) {
+      return false;
+    }
+    const name = node.name || '';
+    return /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(name);
+  }
+
+  showSelectionWarning(message) {
+    if (typeof window.showAlert === 'function') {
+      window.showAlert(message, 'warning');
+    } else {
+      console.warn(message);
+    }
   }
 
   onSelectionChange(callback) {
@@ -546,6 +750,8 @@ class ChatFilePanel {
         el.setAttribute('aria-selected', 'false');
       });
     }
+    this.selectionProfile.imageOnly = false;
+    this.updateSelectionConstraints();
     this.scheduleSelectionBroadcast(true);
   }
 }

@@ -76,6 +76,8 @@ class ChatModule {
     this.chatFilePanelEl = document.getElementById('chat-file-panel');
     this.chatFileTreeEl = document.getElementById('chat-file-tree');
     this.chatFilePanelCloseBtn = document.getElementById('chat-file-panel-close');
+    this.chatFileRefreshBtn = document.getElementById('chat-file-refresh-btn');
+    this.chatFulltextToggleEl = document.getElementById('chat-fulltext-toggle');
     this.sendBtnDefaultContent = this.chatSendBtn ? this.chatSendBtn.innerHTML : '';
     this.sendBtnDefaultAriaLabel = this.chatSendBtn
       ? (this.chatSendBtn.getAttribute('aria-label') || '发送消息')
@@ -123,6 +125,7 @@ class ChatModule {
     this.unsubscribeChatFileSelection = null;
     this.boundHandleResize = null;
     this.filePanelForcesCollapse = false;
+    this.fulltextEnabled = false;
   }
 
   initializeManagers() {
@@ -139,12 +142,16 @@ class ChatModule {
           panelEl: this.chatFilePanelEl,
           toggleBtn: this.chatFileToggleBtn,
           closeBtn: this.chatFilePanelCloseBtn,
-          onVisibilityChange: (visible) => this.handleChatFilePanelVisibility(visible)
+          refreshBtn: this.chatFileRefreshBtn,
+          fullTextToggleEl: this.chatFulltextToggleEl,
+          onVisibilityChange: (visible) => this.handleChatFilePanelVisibility(visible),
+          onFullTextToggle: (enabled) => this.handleFullTextToggle(enabled)
         });
         window.chatFilePanel = this.chatFilePanel;
         this.unsubscribeChatFileSelection = this.chatFilePanel.onSelectionChange(
-          (paths) => this.handleChatFileSelection(paths)
+          (paths, entries) => this.handleChatFileSelection(paths, entries)
         );
+        this.handleFullTextToggle(Boolean(this.chatFulltextToggleEl?.checked));
       } catch (error) {
         console.error('初始化聊天文件面板失败:', error);
       }
@@ -153,9 +160,10 @@ class ChatModule {
     }
   }
 
-  handleChatFileSelection(paths) {
+  handleChatFileSelection(paths, entries = []) {
     if (!Array.isArray(paths)) {
       this.selectedFilePaths = [];
+      this.selectedFileEntries = [];
       if (this.chatFileToggleBtn) {
         this.chatFileToggleBtn.classList.remove('has-selection');
       }
@@ -164,13 +172,31 @@ class ChatModule {
     this.selectedFilePaths = paths
       .map((item) => (typeof item === 'string' ? item.trim() : ''))
       .filter(Boolean);
+    this.selectedFileEntries = Array.isArray(entries) ? entries.map((entry) => ({ ...entry })) : [];
     if (this.chatFileToggleBtn) {
-      this.chatFileToggleBtn.classList.toggle('has-selection', this.selectedFilePaths.length > 0);
+      this.chatFileToggleBtn.classList.toggle('has-selection', this.selectedFileEntries.length > 0);
     }
   }
 
   getSelectedChatFiles() {
-    return Array.isArray(this.selectedFilePaths) ? [...this.selectedFilePaths] : [];
+    if (!Array.isArray(this.selectedFileEntries)) {
+      return [];
+    }
+    return this.selectedFileEntries.map((entry) => ({
+      path: entry.path || null,
+      relative_path: entry.relativePath || null,
+      name: entry.name || '',
+      file_type: entry.fileType || (entry.isImage ? 'image' : 'file'),
+      is_image: Boolean(entry.isImage)
+    }));
+  }
+
+  handleFullTextToggle(enabled) {
+    this.fulltextEnabled = Boolean(enabled);
+  }
+
+  isFullTextEnabled() {
+    return Boolean(this.fulltextEnabled);
   }
 
   handleChatFilePanelVisibility(visible) {
@@ -667,6 +693,142 @@ class ChatModule {
         reject(error);
       }
     });
+  }
+
+  normalizeBinaryBuffer(data) {
+    if (!data) {
+      return null;
+    }
+    if (data instanceof Uint8Array) {
+      return data;
+    }
+    if (data instanceof ArrayBuffer) {
+      return new Uint8Array(data);
+    }
+    if (ArrayBuffer.isView(data)) {
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+    if (typeof data === 'object' && data.type === 'Buffer' && Array.isArray(data.data)) {
+      return Uint8Array.from(data.data);
+    }
+    if (Array.isArray(data)) {
+      return Uint8Array.from(data);
+    }
+    return null;
+  }
+
+  binaryToBase64(bytes) {
+    if (!(bytes instanceof Uint8Array) || !bytes.length) {
+      return '';
+    }
+    const chunkSize = 0x8000;
+    let binary = '';
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      const chunk = bytes.subarray(index, index + chunkSize);
+      binary += String.fromCharCode.apply(null, chunk);
+    }
+    return window.btoa(binary);
+  }
+
+  getBinarySize(bytes) {
+    if (bytes instanceof Uint8Array) {
+      return bytes.byteLength;
+    }
+    if (bytes instanceof ArrayBuffer) {
+      return bytes.byteLength;
+    }
+    return undefined;
+  }
+
+  extractFileName(pathValue) {
+    if (!pathValue || typeof pathValue !== 'string') {
+      return '';
+    }
+    const normalized = pathValue.replace(/\\+/g, '/');
+    const segments = normalized.split('/');
+    return segments[segments.length - 1] || '';
+  }
+
+  guessImageMimeType(name) {
+    if (!name || typeof name !== 'string') {
+      return '';
+    }
+    const lower = name.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.bmp')) return 'image/bmp';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.svg')) return 'image/svg+xml';
+    return '';
+  }
+
+  async buildSelectedImageAttachments(entries) {
+    if (!Array.isArray(entries) || !entries.length) {
+      return [];
+    }
+    if (!window.fsAPI || typeof window.fsAPI.readFileBuffer !== 'function') {
+      throw new Error('当前环境不支持读取本地文件，请在桌面端使用。');
+    }
+    const attachments = [];
+    for (const entry of entries) {
+      if (!entry || !entry.isImage) {
+        continue;
+      }
+      const rawPath = typeof entry.path === 'string' ? entry.path.trim() : '';
+      if (!rawPath) {
+        continue;
+      }
+      try {
+        const readBufferPromise = window.fsAPI.readFileBuffer(rawPath);
+        const mimePromise = (window.fsAPI && typeof window.fsAPI.getFileMimeType === 'function')
+          ? window.fsAPI.getFileMimeType(rawPath)
+          : Promise.resolve(null);
+        const infoPromise = (window.fsAPI && typeof window.fsAPI.getFileInfo === 'function')
+          ? window.fsAPI.getFileInfo(rawPath)
+          : Promise.resolve(null);
+
+        const [bufferData, mimeGuess, infoResult] = await Promise.all([
+          readBufferPromise,
+          mimePromise,
+          infoPromise
+        ]);
+
+        const binary = this.normalizeBinaryBuffer(bufferData);
+        if (!binary || !binary.length) {
+          throw new Error('图片读取失败');
+        }
+        const mimeType = entry.mimeType
+          || entry.mime_type
+          || (typeof mimeGuess === 'string' && mimeGuess)
+          || this.guessImageMimeType(entry.name || rawPath)
+          || 'image/png';
+        const base64 = this.binaryToBase64(binary);
+        if (!base64) {
+          throw new Error('图片编码失败');
+        }
+        const dataUrl = `data:${mimeType};base64,${base64}`;
+        const infoSize = infoResult && infoResult.success && infoResult.info
+          ? infoResult.info.size
+          : undefined;
+        const size = typeof infoSize === 'number' ? infoSize : this.getBinarySize(binary);
+        attachments.push({
+          type: 'image',
+          name: entry.name || this.extractFileName(rawPath),
+          mime_type: mimeType,
+          size: typeof size === 'number' ? size : undefined,
+          data_url: dataUrl,
+          dataUrl,
+          source: 'chat-file-selection',
+          relative_path: entry.relative_path || entry.relativePath || null
+        });
+      } catch (error) {
+        console.warn('选中图片处理失败:', error);
+        const displayName = entry?.name || this.extractFileName(rawPath) || '未知图片';
+        throw new Error(`无法读取图片“${displayName}”，请检查文件状态后重试。`);
+      }
+    }
+    return attachments;
   }
 
   handleSendClick() {
@@ -2895,7 +3057,12 @@ class ChatModule {
       ? this.pendingImageAttachments.filter((item) => item && item.dataUrl && !item.loading)
       : [];
     const modelSupportsVision = this.isVisionModel(this.selectedModel);
-    if (preparedAttachments.length > 0 && !modelSupportsVision) {
+    const selectedEntries = Array.isArray(this.selectedFileEntries)
+      ? this.selectedFileEntries
+      : [];
+    const imageSelections = selectedEntries.filter((entry) => entry && entry.isImage);
+    const hasSelectedImages = imageSelections.length > 0;
+    if (!modelSupportsVision && (preparedAttachments.length > 0 || hasSelectedImages)) {
       this.pendingRequest = null;
       this.updateSendButtonState();
       this.setStatus('当前模型不支持图片理解，请选择视觉模型或移除图片。', 'warning');
@@ -2909,17 +3076,83 @@ class ChatModule {
       this.setImageAttachmentControlsDisabled(false);
       return;
     }
-    if (preparedAttachments.length > 0) {
+    if (modelSupportsVision && preparedAttachments.length === 0 && !hasSelectedImages) {
+      this.pendingRequest = null;
+      this.updateSendButtonState();
+      this.setStatus('当前视觉模型需要至少上传或选择一张图片。', 'warning');
+      if (this.chatInputEl) {
+        this.chatInputEl.disabled = false;
+        this.chatInputEl.focus();
+      }
+      if (this.chatUploadBtn) {
+        this.chatUploadBtn.disabled = false;
+      }
+      this.setImageAttachmentControlsDisabled(false);
+      return;
+    }
+    let selectionAttachmentData = [];
+    if (hasSelectedImages) {
+      try {
+        selectionAttachmentData = await this.buildSelectedImageAttachments(imageSelections);
+      } catch (error) {
+        console.error('选中图片转换失败:', error);
+        this.pendingRequest = null;
+        this.updateSendButtonState();
+        this.setStatus(error?.message || '无法读取选中的图片，请确认后重试。', 'error');
+        if (this.chatInputEl) {
+          this.chatInputEl.disabled = false;
+          this.chatInputEl.focus();
+        }
+        if (this.chatUploadBtn) {
+          this.chatUploadBtn.disabled = false;
+        }
+        this.setImageAttachmentControlsDisabled(false);
+        return;
+      }
+    }
+    const manualAttachmentPayload = preparedAttachments.length > 0
+      ? preparedAttachments.map((item) => ({
+        type: 'image',
+        name: item.name,
+        mime_type: item.mimeType || undefined,
+        size: item.size || undefined,
+        data_url: item.dataUrl,
+        dataUrl: item.dataUrl,
+        source: 'chat-upload'
+      }))
+      : [];
+    const messageAttachments = selectionAttachmentData.length > 0
+      ? [...selectionAttachmentData]
+      : [];
+    if (manualAttachmentPayload.length > 0) {
+      messageAttachments.push(...manualAttachmentPayload);
+    }
+
+    const selectedFilePayload = this.getSelectedChatFiles();
+    const fullTextToggleEnabled = this.isFullTextEnabled();
+    let shouldUseFullText = fullTextToggleEnabled && selectedFilePayload.length > 0;
+    if (shouldUseFullText) {
+      const hasNonImageTargets = selectedFilePayload.some((entry) => entry && !entry.is_image);
+      shouldUseFullText = hasNonImageTargets;
+    }
+
+    const metadataPayload = {};
+    if (messageAttachments.length > 0) {
+      metadataPayload.attachments = messageAttachments;
+    }
+    if (selectedFilePayload.length > 0) {
+      metadataPayload.selected_files = selectedFilePayload;
+    }
+    if (shouldUseFullText) {
+      metadataPayload.full_text_search = true;
+    }
+    if (Object.keys(metadataPayload).length > 0) {
       userMessage.metadata = {
         ...(userMessage.metadata || {}),
-        attachments: preparedAttachments.map((item) => ({
-          type: 'image',
-          name: item.name,
-          mime_type: item.mimeType || undefined,
-          size: item.size || undefined,
-          data_url: item.dataUrl
-        }))
+        ...metadataPayload
       };
+    }
+    if (preparedAttachments.length > 0) {
       this.clearAllImageAttachments({ keepStatus: true, preserveDisabled: true });
     }
     this.messages.push(userMessage);
@@ -2968,6 +3201,8 @@ class ChatModule {
       stream: true,
       client_request_id: streamingMessage.id,
       use_summary_search: this.shouldUseSummarySearch(),
+      full_text_search: shouldUseFullText,
+      selected_files: selectedFilePayload,
       model: {
         source_id: this.selectedModel.sourceId,
         model_id: this.selectedModel.modelId,
@@ -2979,17 +3214,14 @@ class ChatModule {
         requires_api_key: requiresApiKey
       }
     };
-    if (preparedAttachments.length > 0) {
-      payload.attachments = preparedAttachments.map((item) => ({
-        type: 'image',
+    if (manualAttachmentPayload.length > 0) {
+      payload.attachments = manualAttachmentPayload.map((item) => ({
+        type: item.type,
         name: item.name,
-        mime_type: item.mimeType || undefined,
-        size: item.size || undefined,
-        data_url: item.dataUrl
+        mime_type: item.mime_type,
+        size: item.size,
+        data_url: item.data_url
       }));
-    }
-    if (preparedAttachments.length > 0) {
-      this.clearAllImageAttachments({ keepStatus: true, preserveDisabled: true });
     }
 
     this.chatInputEl.value = '';

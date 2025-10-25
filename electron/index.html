@@ -319,10 +319,22 @@
         </div>
         <aside id="chat-file-panel" class="chat-file-panel" aria-hidden="true">
           <div class="chat-file-panel-header">
-            <span class="chat-file-panel-title">文件</span>
-            <button id="chat-file-panel-close" class="chat-file-panel-close" type="button" aria-label="收起文件栏">
-              <span id="chat-file-panel-close-icon"></span>
-            </button>
+            <div class="chat-file-panel-title-group">
+              <span class="chat-file-panel-title">文件</span>
+              <label class="chat-fulltext-toggle" for="chat-fulltext-toggle">
+                <input id="chat-fulltext-toggle" type="checkbox" role="switch" aria-checked="false" />
+                <span class="chat-fulltext-slider"></span>
+                <span class="chat-fulltext-label">全文检索</span>
+              </label>
+            </div>
+            <div class="chat-file-panel-actions">
+              <button id="chat-file-refresh-btn" class="chat-file-panel-refresh" type="button" aria-label="刷新文件列表">
+                <span id="chat-file-refresh-icon"></span>
+              </button>
+              <button id="chat-file-panel-close" class="chat-file-panel-close" type="button" aria-label="收起文件栏">
+                <span id="chat-file-panel-close-icon"></span>
+              </button>
+            </div>
           </div>
           <div id="chat-file-tree-container" class="chat-file-tree-container">
             <div id="chat-file-tree" class="chat-file-tree" role="tree" aria-multiselectable="true"></div>
