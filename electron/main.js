@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, nativeTheme, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, nativeImage, systemPreferences } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -11,6 +11,19 @@ if (app.isPackaged) {
 
 // 禁用硬件加速以避免GPU相关的Mach端口问题
 app.disableHardwareAcceleration();
+
+function normalizeMacTextInputPreferences() {
+  if (process.platform !== 'darwin') {
+    return;
+  }
+  try {
+    systemPreferences.setUserDefault('ApplePressAndHoldEnabled', 'boolean', false);
+  } catch (error) {
+    console.warn('Failed to normalize ApplePressAndHoldEnabled preference:', error);
+  }
+}
+
+normalizeMacTextInputPreferences();
 
 // 修复 macOS 上的 Mach 端口权限错误
 if (process.platform === 'darwin') {

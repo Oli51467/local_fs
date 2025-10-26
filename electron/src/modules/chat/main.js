@@ -77,7 +77,6 @@ class ChatModule {
     this.chatFileTreeEl = document.getElementById('chat-file-tree');
     this.chatFilePanelCloseBtn = document.getElementById('chat-file-panel-close');
     this.chatFileRefreshBtn = document.getElementById('chat-file-refresh-btn');
-    this.chatFulltextToggleEl = document.getElementById('chat-fulltext-toggle');
     this.sendBtnDefaultContent = this.chatSendBtn ? this.chatSendBtn.innerHTML : '';
     this.sendBtnDefaultAriaLabel = this.chatSendBtn
       ? (this.chatSendBtn.getAttribute('aria-label') || '发送消息')
@@ -125,7 +124,6 @@ class ChatModule {
     this.unsubscribeChatFileSelection = null;
     this.boundHandleResize = null;
     this.filePanelForcesCollapse = false;
-    this.fulltextEnabled = false;
   }
 
   initializeManagers() {
@@ -143,15 +141,12 @@ class ChatModule {
           toggleBtn: this.chatFileToggleBtn,
           closeBtn: this.chatFilePanelCloseBtn,
           refreshBtn: this.chatFileRefreshBtn,
-          fullTextToggleEl: this.chatFulltextToggleEl,
-          onVisibilityChange: (visible) => this.handleChatFilePanelVisibility(visible),
-          onFullTextToggle: (enabled) => this.handleFullTextToggle(enabled)
+          onVisibilityChange: (visible) => this.handleChatFilePanelVisibility(visible)
         });
         window.chatFilePanel = this.chatFilePanel;
         this.unsubscribeChatFileSelection = this.chatFilePanel.onSelectionChange(
           (paths, entries) => this.handleChatFileSelection(paths, entries)
         );
-        this.handleFullTextToggle(Boolean(this.chatFulltextToggleEl?.checked));
       } catch (error) {
         console.error('初始化聊天文件面板失败:', error);
       }
@@ -189,14 +184,6 @@ class ChatModule {
       file_type: entry.fileType || (entry.isImage ? 'image' : 'file'),
       is_image: Boolean(entry.isImage)
     }));
-  }
-
-  handleFullTextToggle(enabled) {
-    this.fulltextEnabled = Boolean(enabled);
-  }
-
-  isFullTextEnabled() {
-    return Boolean(this.fulltextEnabled);
   }
 
   handleChatFilePanelVisibility(visible) {
@@ -3129,12 +3116,7 @@ class ChatModule {
     }
 
     const selectedFilePayload = this.getSelectedChatFiles();
-    const fullTextToggleEnabled = this.isFullTextEnabled();
-    let shouldUseFullText = fullTextToggleEnabled && selectedFilePayload.length > 0;
-    if (shouldUseFullText) {
-      const hasNonImageTargets = selectedFilePayload.some((entry) => entry && !entry.is_image);
-      shouldUseFullText = hasNonImageTargets;
-    }
+    const shouldUseFullText = selectedFilePayload.length > 0;
 
     const metadataPayload = {};
     if (messageAttachments.length > 0) {

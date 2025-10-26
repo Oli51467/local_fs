@@ -9,8 +9,6 @@ class ChatFilePanel {
     this.closeIconEl = document.getElementById('chat-file-panel-close-icon');
     this.refreshIconEl = document.getElementById('chat-file-refresh-icon');
     this.onVisibilityChange = typeof options.onVisibilityChange === 'function' ? options.onVisibilityChange : null;
-    this.onFullTextToggle = typeof options.onFullTextToggle === 'function' ? options.onFullTextToggle : null;
-    this.fullTextToggleEl = options.fullTextToggleEl || document.getElementById('chat-fulltext-toggle');
     this.runtime = {
       fileTreeData: null,
       expanded: new Set(),
@@ -31,7 +29,6 @@ class ChatFilePanel {
       || 'http://localhost:8000/api/document/upload-status';
     this.loadInFlight = null;
     this.pendingSelectionBroadcast = null;
-    this.fullTextEnabled = Boolean(this.fullTextToggleEl?.checked);
     this.initialize();
   }
 
@@ -48,7 +45,6 @@ class ChatFilePanel {
 
     this.bindPanelToggle();
     this.bindKeyboardShortcuts();
-    this.bindFullTextToggle();
 
     if (this.container) {
       this.container.addEventListener('contextmenu', (event) => {
@@ -60,25 +56,6 @@ class ChatFilePanel {
         event.preventDefault();
       });
     }
-  }
-
-  bindFullTextToggle() {
-    if (!this.fullTextToggleEl) {
-      return;
-    }
-    this.fullTextToggleEl.checked = this.fullTextEnabled;
-    this.fullTextToggleEl.setAttribute('aria-checked', this.fullTextEnabled ? 'true' : 'false');
-    this.fullTextToggleEl.addEventListener('change', () => {
-      this.fullTextEnabled = Boolean(this.fullTextToggleEl.checked);
-      this.fullTextToggleEl.setAttribute('aria-checked', this.fullTextEnabled ? 'true' : 'false');
-      if (typeof this.onFullTextToggle === 'function') {
-        this.onFullTextToggle(this.fullTextEnabled);
-      }
-      const evt = new CustomEvent('chatFullTextModeChanged', {
-        detail: { enabled: this.fullTextEnabled }
-      });
-      document.dispatchEvent(evt);
-    });
   }
 
   bindPanelToggle() {
@@ -266,11 +243,11 @@ class ChatFilePanel {
     if (isFolder) {
       item.classList.add('folder-item');
     } else {
-      item.classList.add('file-item-file', 'is-selectable');
+      item.classList.add('file-item-file');
     }
     item.dataset.path = node.path;
     item.dataset.relativePath = relativePath;
-    const fileType = isFolder ? 'folder' : (this.isImageNode(node) ? 'image' : 'file');
+    const fileType = this.resolveNodeFileType(node, isFolder);
     item.dataset.type = fileType;
     item.dataset.fileType = fileType;
     this.fileTypeLookup.set(node.path, fileType);
@@ -287,11 +264,22 @@ class ChatFilePanel {
       }
     }
     item.setAttribute('aria-selected', this.runtime.selected.has(node.path) ? 'true' : 'false');
-    if (this.runtime.selected.has(node.path)) {
+    if (this.runtime.selected.has(node.path) && fileType !== 'unsupported') {
       item.dataset.selected = 'true';
     }
+    if (!isFolder) {
+      item.dataset.fileName = node.name;
+      if (fileType === 'unsupported') {
+        item.classList.add('is-disabled');
+        item.setAttribute('aria-disabled', 'true');
+      } else {
+        item.classList.add('is-selectable');
+      }
+    }
+    if (fileType === 'unsupported') {
+      this.runtime.selected.delete(node.path);
+    }
     this.nodeLookup.set(node.path, node);
-
     const content = document.createElement('div');
     content.className = 'file-item-content';
     item.appendChild(content);
@@ -299,10 +287,6 @@ class ChatFilePanel {
     const nameWrapper = document.createElement('span');
     nameWrapper.className = 'file-name';
     content.appendChild(nameWrapper);
-
-    if (!isFolder) {
-      item.dataset.fileName = node.name;
-    }
 
     const bullet = document.createElement('span');
     bullet.className = 'file-bullet';
@@ -323,6 +307,10 @@ class ChatFilePanel {
       event.stopPropagation();
       if (isFolder) {
         this.toggleFolder(node.path);
+        return;
+      }
+      if (fileType === 'unsupported') {
+        this.showSelectionWarning('暂不支持选择 Excel 文件，请选择其它类型的文档。');
         return;
       }
       this.toggleSelection(node.path);
@@ -479,6 +467,9 @@ class ChatFilePanel {
         return;
       }
       const type = this.getFileTypeByPath(path);
+       if (type === 'unsupported') {
+         return;
+       }
       const relativePath = this.getRelativePathByPath(path);
       entries.push({
         path,
@@ -550,10 +541,12 @@ class ChatFilePanel {
     }
     this.container.querySelectorAll('.file-item-file').forEach((item) => {
       const type = item.dataset.fileType;
-      if (imageOnly && type !== 'image') {
+      const baseDisabled = type === 'unsupported';
+      const disabledForImageSelection = imageOnly && type !== 'image';
+      if (baseDisabled || disabledForImageSelection) {
         item.classList.add('is-disabled');
         item.setAttribute('aria-disabled', 'true');
-      } else {
+      } else if (!baseDisabled) {
         item.classList.remove('is-disabled');
         item.removeAttribute('aria-disabled');
       }
@@ -566,6 +559,27 @@ class ChatFilePanel {
     }
     const name = node.name || '';
     return /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(name);
+  }
+
+  isUnsupportedNode(node) {
+    if (!node || node.children) {
+      return false;
+    }
+    const name = node.name || '';
+    return /\.(xlsx|xls)$/i.test(name);
+  }
+
+  resolveNodeFileType(node, isFolder) {
+    if (isFolder) {
+      return 'folder';
+    }
+    if (this.isImageNode(node)) {
+      return 'image';
+    }
+    if (this.isUnsupportedNode(node)) {
+      return 'unsupported';
+    }
+    return 'file';
   }
 
   showSelectionWarning(message) {

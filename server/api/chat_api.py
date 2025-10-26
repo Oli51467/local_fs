@@ -6,6 +6,7 @@ import re
 import textwrap
 from pathlib import Path
 import mimetypes
+import shutil
 from typing import Any, Dict, Generator, List, Optional, Sequence, Set, Tuple, Literal
 
 from fastapi import APIRouter, HTTPException, Response
@@ -19,6 +20,7 @@ from openai import OpenAI
 
 from config.config import ServerConfig, DatabaseConfig
 from api.status_api import status_broadcaster
+from api.document_api import extract_text_and_images
 from service.bm25s_service import BM25SService
 from service.clip_embedding_service import (
     CLIPEmbeddingService,
@@ -30,6 +32,7 @@ from service.llm_client import LLMClientError, SiliconFlowClient
 from service.vision_model_service import VisionAttachment, get_vision_handler
 from service.reranker_service import RerankerService
 from service.sqlite_service import SQLiteManager
+from service.text_splitter_service import get_text_splitter_service
 
 
 logger = logging.getLogger(__name__)
@@ -83,6 +86,7 @@ SUMMARY_SEARCH_MATCH_LIMIT = 3
 SUMMARY_VECTOR_TYPE = "summary"
 SUMMARY_SEARCH_VECTOR_WEIGHT = 0.6
 SUMMARY_SEARCH_LEXICAL_WEIGHT = 0.4
+REFERENCE_DISPLAY_LIMIT = 6
 
 
 def _schedule_status_broadcast(
@@ -194,6 +198,8 @@ class ReferenceDocument(BaseModel):
     reference_id: str = Field(default="")
     snippet: Optional[str] = None
     selected: Optional[bool] = None
+    chunk_citation_ids: List[str] = Field(default_factory=list)
+    selected_chunk_ids: List[str] = Field(default_factory=list)
 
 
 class ModelSelection(BaseModel):
@@ -481,7 +487,13 @@ def _prepare_selected_files(
             "is_image": resolved["is_image"],
         }
         filtered_metadata.append(filtered)
-        resolved_records.append(resolved)
+        resolved_records.append(
+            {
+                **resolved,
+                "mounted": None,
+                "document_id": None,
+            }
+        )
 
         if resolved["is_image"]:
             try:
@@ -584,6 +596,392 @@ def _collect_full_text_chunks_from_records(
             )
 
     return collected_chunks, document_entries
+
+
+def _split_text_for_selection(text: str) -> List[str]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    try:
+        splitter_service = get_text_splitter_service()
+    except Exception:  # pragma: no cover - splitter may be initialised elsewhere
+        splitter_service = None
+
+    if splitter_service is not None:
+        try:
+            chunks = splitter_service.split_text(cleaned)
+            return [chunk.strip() for chunk in chunks if chunk and chunk.strip()]
+        except Exception:  # pragma: no cover - fallback when splitter fails
+            logger.warning("临时文本分割失败，回退到整段文本处理")
+
+    max_len = 800
+    lines = []
+    buffer = []
+    current = 0
+    for paragraph in cleaned.splitlines():
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        if current + len(paragraph) > max_len and buffer:
+            lines.append("\n".join(buffer).strip())
+            buffer = []
+            current = 0
+        buffer.append(paragraph)
+        current += len(paragraph)
+    if buffer:
+        lines.append("\n".join(buffer).strip())
+    return lines if lines else [cleaned]
+
+
+def _extract_text_for_record(record: Dict[str, Any]) -> str:
+    absolute_path = Path(record.get("absolute_path"))
+    suffix = absolute_path.suffix.lower().lstrip(".") or "txt"
+    text_content = ""
+    cleanup_candidates: Sequence[str] = []
+    try:
+        text_content, _, cleanup_candidates = extract_text_and_images(
+            absolute_path, suffix
+        )
+    except Exception as exc:  # pragma: no cover - extraction errors handled gracefully
+        logger.warning("读取临时文件失败: %s", exc)
+        raise HTTPException(
+            status_code=400,
+            detail=f"暂时无法读取文件 {record.get('name') or absolute_path.name}，请确认该文件可以被访问。",
+        ) from exc
+    finally:
+        for cleanup_path in cleanup_candidates or []:
+            try:
+                shutil.rmtree(cleanup_path, ignore_errors=True)
+            except Exception:  # pragma: no cover - best effort cleanup
+                pass
+    return (text_content or "").strip()
+
+
+def _build_unmounted_chunk_records(record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    text_content = _extract_text_for_record(record)
+    if not text_content:
+        return []
+    chunks = _split_text_for_selection(text_content)
+    results: List[Dict[str, Any]] = []
+    for idx, chunk_text in enumerate(chunks):
+        normalized = chunk_text.strip()
+        if not normalized:
+            continue
+        results.append(
+            {
+                "document_id": None,
+                "file_path": record.get("db_file_path")
+                or str(record.get("absolute_path")),
+                "absolute_path": str(record.get("absolute_path")),
+                "filename": record.get("name")
+                or Path(record.get("absolute_path")).name,
+                "chunk_index": idx,
+                "content": normalized,
+                "vector_id": None,
+            }
+        )
+    return results
+
+
+def _normalize_dense_score(raw: float) -> float:
+    if raw is None:
+        return 0.0
+    try:
+        value = (float(raw) + 1.0) / 2.0
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, value))
+
+
+def _normalize_bm25_score(raw: float) -> float:
+    if raw is None:
+        return 0.0
+    try:
+        raw_val = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if raw_val <= 0.0:
+        return 0.0
+    return float(raw_val / (raw_val + 1.0))
+
+
+def _coerce_chunk_document_id(value: Any) -> int:
+    try:
+        if value is None:
+            return -1
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _build_chunk_from_record(
+    record: Dict[str, Any], *, score: float, source: str
+) -> Optional[RetrievedChunk]:
+    content = (record.get("content") or "").strip()
+    if not content:
+        return None
+    chunk_index_raw = record.get("chunk_index")
+    try:
+        chunk_index = int(chunk_index_raw)
+    except (TypeError, ValueError):
+        chunk_index = 0
+    filename = record.get("filename") or record.get("name") or ""
+    file_path = _normalize_path(
+        record.get("file_path") or record.get("absolute_path") or ""
+    )
+    doc_id = _coerce_chunk_document_id(record.get("document_id"))
+    chunk = RetrievedChunk(
+        document_id=doc_id,
+        filename=filename,
+        file_path=file_path,
+        chunk_index=chunk_index,
+        content=content,
+        score=float(score),
+        embedding_score=None,
+        embedding_score_normalized=None,
+        bm25_score=None,
+        bm25_raw_score=None,
+        rerank_score=None,
+        rerank_score_normalized=None,
+        vector_id=record.get("vector_id"),
+        sources=[source],
+        score_breakdown=({source: float(score)} if score else None),
+        score_weights=({source: 1.0} if score else None),
+        dense_rank=None,
+        lexical_rank=None,
+        rerank_rank=None,
+        clip_score=None,
+        clip_score_normalized=None,
+        clip_rank=None,
+    )
+    return chunk
+
+
+def _build_selection_highlights(
+    records: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    highlights: List[Dict[str, Any]] = []
+    for record in records:
+        if record.get("is_image"):
+            continue
+        entry: Dict[str, Any] = {}
+        doc_id = record.get("document_id")
+        try:
+            doc_id_int = int(doc_id)
+        except (TypeError, ValueError):
+            doc_id_int = None
+        if doc_id_int is not None and doc_id_int >= 0:
+            entry["document_id"] = doc_id_int
+        file_path = record.get("db_file_path") or record.get("file_path")
+        if file_path:
+            entry["file_path"] = _normalize_path(file_path)
+        absolute_path = record.get("absolute_path")
+        if absolute_path:
+            entry["absolute_path"] = _normalize_path(str(absolute_path))
+        name = record.get("name")
+        if name:
+            entry["name"] = name
+        if entry:
+            highlights.append(entry)
+    return highlights
+
+
+
+
+def _filter_chunks_by_references(
+    chunks: List[RetrievedChunk],
+    references: List[ReferenceDocument],
+) -> List[RetrievedChunk]:
+    if not chunks or not references:
+        return []
+
+    allowed_pairs: Set[Tuple[int, str, Optional[int]]] = set()
+    for reference in references:
+        doc_id = reference.document_id if reference.document_id is not None else -1
+        normalized_path = _normalize_path(reference.file_path) or _normalize_path(
+            reference.project_relative_path
+        ) or _normalize_path(reference.absolute_path)
+        chunk_indices = reference.chunk_indices or []
+        if chunk_indices:
+            for chunk_index in chunk_indices:
+                allowed_pairs.add((doc_id, normalized_path, int(chunk_index)))
+        else:
+            allowed_pairs.add((doc_id, normalized_path, None))
+
+    filtered: List[RetrievedChunk] = []
+    for chunk in chunks:
+        chunk_doc_id = chunk.document_id if chunk.document_id is not None else -1
+        chunk_path = _normalize_path(chunk.file_path)
+        chunk_index = chunk.chunk_index if isinstance(chunk.chunk_index, int) else None
+        candidate_key = (chunk_doc_id, chunk_path, chunk_index)
+        fallback_key = (chunk_doc_id, chunk_path, None)
+        if candidate_key in allowed_pairs or fallback_key in allowed_pairs:
+            filtered.append(chunk)
+    return filtered or chunks
+def _filter_summary_for_selected_docs(
+    summary_payload: Optional[Tuple[List[RetrievedChunk], Dict[str, Any]]],
+    allowed_doc_ids: Set[int],
+) -> Optional[Tuple[List[RetrievedChunk], Dict[str, Any]]]:
+    if not summary_payload:
+        return None
+    chunks, context = summary_payload
+    if not chunks:
+        return None
+
+    filtered_chunks = [chunk for chunk in chunks if chunk.document_id in allowed_doc_ids]
+    if not filtered_chunks:
+        return None
+
+    filtered_context = dict(context)
+    matches = filtered_context.get("summary_matches") or []
+    filtered_context["summary_matches"] = [
+        match for match in matches if int(match.get("document_id", -1)) in allowed_doc_ids
+    ]
+    filtered_context["summary_match_count"] = len(filtered_context["summary_matches"])
+    return filtered_chunks, filtered_context
+
+
+def _prepare_selected_file_retrieval(
+    question: str,
+    selected_records: List[Dict[str, Any]],
+    use_summary_search: bool,
+) -> Tuple[List[RetrievedChunk], Optional[Dict[str, Any]], Dict[str, Any]]:
+    if sqlite_manager is None:
+        raise HTTPException(status_code=500, detail="数据库未准备就绪")
+
+    mounted_entries: List[Dict[str, Any]] = []
+    unmounted_entries: List[Dict[str, Any]] = []
+    selected_doc_ids: Set[int] = set()
+
+    for record in selected_records:
+        if record.get("is_image"):
+            continue
+        db_path = record.get("db_file_path")
+        doc_info: Optional[Dict[str, Any]] = None
+        if db_path:
+            try:
+                doc_info = sqlite_manager.get_document_by_path(db_path)
+            except Exception:  # pragma: no cover - defensive
+                doc_info = None
+        if doc_info:
+            try:
+                document_id = int(doc_info.get("id"))
+            except (TypeError, ValueError):
+                document_id = None
+            if document_id is None:
+                unmounted_entries.append(record)
+                continue
+            record["mounted"] = True
+            record["document_id"] = document_id
+            selected_doc_ids.add(document_id)
+            mounted_entries.append({"record": record, "document": doc_info})
+        else:
+            record["mounted"] = False
+            unmounted_entries.append(record)
+
+    mounted_chunks_payload: List[Dict[str, Any]] = []
+    for entry in mounted_entries:
+        record = entry["record"]
+        document_id = int(record.get("document_id"))
+        try:
+            existing_chunks = sqlite_manager.get_document_chunks(document_id)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("读取已挂载文档块失败(document_id=%s): %s", document_id, exc)
+            continue
+        for chunk in existing_chunks:
+            content = (chunk.get("content") or "").strip()
+            if not content:
+                continue
+            mounted_chunks_payload.append(
+                {
+                    "document_id": document_id,
+                    "file_path": record.get("db_file_path") or chunk.get("file_path"),
+                    "absolute_path": record.get("absolute_path"),
+                    "filename": record.get("name") or chunk.get("filename"),
+                    "chunk_index": chunk.get("chunk_index", 0),
+                    "content": content,
+                    "vector_id": chunk.get("vector_id"),
+                }
+            )
+
+    unmounted_chunk_payload: List[Dict[str, Any]] = []
+    for record in unmounted_entries:
+        try:
+            unmounted_chunk_payload.extend(_build_unmounted_chunk_records(record))
+        except HTTPException:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("临时文件分块失败: %s", exc)
+            raise HTTPException(
+                status_code=400,
+                detail=f"无法处理文件 {record.get('name') or record.get('absolute_path')}，请确认文件内容有效。",
+            ) from exc
+
+    selection_context: Dict[str, Any] = {
+        "selection_mode": True,
+        "selected_total": len(selected_records),
+        "selected_mounted_count": len(mounted_entries),
+        "selected_unmounted_count": len(unmounted_entries),
+        "selection_strategy": "full_text",
+        "mode": "selection_full_text",
+        "summary_selection_applied": False,
+        "summary_filtered_out": False,
+        "summary_selection_skipped": True,
+    }
+
+    summary_context: Optional[Dict[str, Any]] = None
+
+    base_records: List[Dict[str, Any]] = []
+    base_records.extend(entry["record"] for entry in mounted_entries)
+    base_records.extend(unmounted_entries)
+
+    raw_records = mounted_chunks_payload + unmounted_chunk_payload
+    doc_positions: Dict[Tuple[int, str], int] = {}
+    for record in raw_records:
+        doc_id = _coerce_chunk_document_id(record.get("document_id"))
+        normalized_path = _normalize_path(
+            record.get("file_path") or record.get("absolute_path")
+        )
+        key = (doc_id, normalized_path)
+        if normalized_path and key not in doc_positions:
+            doc_positions[key] = len(doc_positions)
+
+    full_chunks: List[RetrievedChunk] = []
+    for record in raw_records:
+        chunk = _build_chunk_from_record(
+            record,
+            score=1.0,
+            source="selection_full",
+        )
+        if chunk is not None:
+            full_chunks.append(chunk)
+
+    def _full_rank(chunk: RetrievedChunk) -> Tuple[int, int]:
+        doc_key = (
+            _coerce_chunk_document_id(chunk.document_id),
+            _normalize_path(chunk.file_path),
+        )
+        doc_index = doc_positions.get(doc_key, len(doc_positions))
+        chunk_index = (
+            int(chunk.chunk_index) if isinstance(chunk.chunk_index, int) else 0
+        )
+        return (doc_index, chunk_index)
+
+    merged_chunks = sorted(full_chunks, key=_full_rank)
+
+    selection_context["scored_chunk_count"] = len(merged_chunks)
+    selection_context["raw_chunk_count"] = len(merged_chunks)
+    selection_context["merged_chunk_count"] = len(merged_chunks)
+    selection_context["highlights"] = _build_selection_highlights(base_records)
+
+    if not merged_chunks:
+        merged_chunks = supplemental_chunks
+
+    for chunk in merged_chunks:
+        if "selection_full" not in chunk.sources:
+            chunk.sources.append("selection_full")
+
+    return merged_chunks, summary_context, selection_context
 
 
 def _ensure_ollama_url(selection: ModelSelection) -> str:
@@ -2012,7 +2410,6 @@ def _build_references_from_chunks(
                     chunk_indices=[chunk_index] if chunk_index is not None else [],
                 ),
                 "snippets": [],
-                "scores": [],
             },
         )
 
@@ -2028,15 +2425,15 @@ def _build_references_from_chunks(
         if not reference.project_relative_path and project_relative:
             reference.project_relative_path = project_relative
         if snippet:
-            entry["snippets"].append(snippet)
-        entry["scores"].append(chunk.score)
+            entry["snippets"].append((chunk.score or 0.0, snippet))
 
     references: List[ReferenceDocument] = []
     for entry in reference_map.values():
         reference = entry["document"]
         snippets = entry.get("snippets") or []
-        if snippets and not reference.snippet:
-            reference.snippet = snippets[0]
+        if snippets:
+            best_snippet = max(snippets, key=lambda item: item[0])
+            reference.snippet = best_snippet[1]
         # Deduplicate and sort chunk indices
         if reference.chunk_indices:
             reference.chunk_indices = sorted(
@@ -2049,6 +2446,17 @@ def _build_references_from_chunks(
         reference.reference_id = f"文档-{idx}"
         reference.selected = False
     return references
+
+
+def _select_reference_preview(
+    references: List[ReferenceDocument], limit: int
+) -> List[ReferenceDocument]:
+    if not references:
+        return []
+    if limit <= 0 or len(references) <= limit:
+        return references
+    # keep top-N by score, preserving order
+    return references[:limit]
 
 
 def _normalize_path(value: Optional[str]) -> str:
@@ -2350,7 +2758,7 @@ def _prepare_chat_context(
     has_image_payloads = bool(attachment_list)
     if has_image_payloads and vision_handler is None:
         raise HTTPException(
-            status_code=400, detail="当前模型不支持图片理解，请移除图片后重试"
+            status_code=400, detail="文本模型无法理解图片，请移除图片或切换至视觉模型。"
         )
     if vision_handler is not None and not has_image_payloads:
         raise HTTPException(
@@ -2414,26 +2822,57 @@ def _prepare_chat_context(
     full_text_chunks: List[RetrievedChunk] = []
     full_text_documents: List[Dict[str, Any]] = []
 
-    if use_summary_search:
-        summary_payload = _retrieve_chunks_from_document_summaries(normalized_question)
-        if summary_payload:
-            chunks, summary_context = summary_payload
-            retrieval_context = {
-                **summary_context,
-                "summary_search_requested": True,
-                "summary_search_applied": summary_context.get(
-                    "summary_search_applied", True
-                ),
-            }
-            logger.debug(
-                "基于文档摘要检索命中 %d 篇文档",
-                len(summary_context.get("summary_matches", [])),
+    selection_mode = bool(sanitized_selected_files) and vision_handler is None
+
+    if selection_mode:
+        selection_chunks, selection_summary_context, selection_context = (
+            _prepare_selected_file_retrieval(
+                normalized_question,
+                resolved_selected_records,
+                use_summary_search,
             )
+        )
+        if not selection_chunks:
+            raise HTTPException(
+                status_code=400,
+                detail="未能在所选文件中找到可用内容，请检查文件是否包含文本。",
+            )
+        retrieval_context.update(selection_context)
+        if selection_summary_context is not None:
+            for key, value in selection_summary_context.items():
+                if key == "mode":
+                    retrieval_context["summary_mode"] = value
+                else:
+                    retrieval_context[key] = value
+        retrieval_context["summary_search_requested"] = bool(use_summary_search)
+        retrieval_context["summary_search_applied"] = (
+            bool(selection_summary_context) and bool(use_summary_search)
+        )
+        chunks = selection_chunks
+        summary_context = selection_summary_context
+    else:
+        if use_summary_search:
+            summary_payload = _retrieve_chunks_from_document_summaries(
+                normalized_question
+            )
+            if summary_payload:
+                chunks, summary_context = summary_payload
+                retrieval_context = {
+                    **summary_context,
+                    "summary_search_requested": True,
+                    "summary_search_applied": summary_context.get(
+                        "summary_search_applied", True
+                    ),
+                }
+                logger.debug(
+                    "基于文档摘要检索命中 %d 篇文档",
+                    len(summary_context.get("summary_matches", [])),
+                )
+            else:
+                chunks = _retrieve_chunks(normalized_question, top_k)
+                retrieval_context["summary_fallback"] = True
         else:
             chunks = _retrieve_chunks(normalized_question, top_k)
-            retrieval_context["summary_fallback"] = True
-    else:
-        chunks = _retrieve_chunks(normalized_question, top_k)
 
     if full_text_search and resolved_selected_records:
         full_text_chunks, full_text_documents = _collect_full_text_chunks_from_records(
@@ -2470,10 +2909,46 @@ def _prepare_chat_context(
                 retrieval_context["mode"] = "baseline"
     else:
         retrieval_context["full_text_mode"] = False
-        if retrieval_context.get("mode") != "summary":
+        if (not selection_mode) and retrieval_context.get("mode") != "summary":
             retrieval_context["mode"] = "baseline"
 
+    highlights_raw = retrieval_context.get("highlights")
+
+    highlight_doc_ids: Set[int] = set()
+    highlight_paths: Set[str] = set()
+    if isinstance(highlights_raw, list):
+        for item in highlights_raw:
+            if not isinstance(item, dict):
+                continue
+            doc_id = item.get("document_id")
+            if isinstance(doc_id, int) and doc_id >= 0:
+                highlight_doc_ids.add(doc_id)
+            path_value = item.get("file_path")
+            if path_value:
+                highlight_paths.add(_normalize_path(path_value))
+
     references = _build_references_from_chunks(chunks)
+    reference_preview = _select_reference_preview(references, REFERENCE_DISPLAY_LIMIT)
+
+    highlighted_reference_ids: List[str] = []
+    if highlight_doc_ids or highlight_paths:
+        for reference in references:
+            doc_id = reference.document_id
+            normalized_candidates = {
+                _normalize_path(reference.file_path),
+                _normalize_path(reference.project_relative_path),
+                _normalize_path(reference.absolute_path),
+            }
+            matches_doc = (
+                doc_id is not None and doc_id >= 0 and doc_id in highlight_doc_ids
+            )
+            matches_path = any(
+                candidate and candidate in highlight_paths
+                for candidate in normalized_candidates
+            )
+            if matches_doc or matches_path:
+                reference.selected = True
+                highlighted_reference_ids.append(reference.reference_id)
 
     selection_data = selection.model_dump(exclude={"api_key"}, exclude_none=True)
     assistant_metadata = {
@@ -2481,7 +2956,7 @@ def _prepare_chat_context(
         "top_k": top_k,
         "model": selection_data,
         "chunks": [chunk.dict() for chunk in chunks],
-        "available_references": [reference.dict() for reference in references],
+        "available_references": [reference.dict() for reference in reference_preview],
         "references": [],
         "selected_reference_ids": [],
         "reference_mode": "retrieval" if references else "llm_only",
@@ -2490,7 +2965,10 @@ def _prepare_chat_context(
         "use_summary_search": bool(use_summary_search),
         "full_text_search": bool(full_text_search),
         "selected_files": sanitized_selected_files,
+        "selection_mode": selection_mode,
     }
+    if highlighted_reference_ids:
+        assistant_metadata["highlighted_reference_ids"] = highlighted_reference_ids
     if full_text_documents:
         assistant_metadata["full_text_documents"] = full_text_documents
     if client_request_id:
@@ -2533,6 +3011,7 @@ def _prepare_chat_context(
         "client_request_id": client_request_id,
         "retrieval_context": retrieval_context,
         "selected_files": sanitized_selected_files,
+        "selected_file_records": resolved_selected_records,
     }
 
 
@@ -2715,11 +3194,19 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
         )
         assistant_metadata["selected_reference_ids"] = selected_ids
         assistant_metadata["available_references"] = [
-            reference.dict() for reference in available_refs
+            reference.dict() for reference in available_refs[:REFERENCE_DISPLAY_LIMIT]
         ]
         assistant_metadata["references"] = [
             reference.dict() for reference in selected_refs
         ]
+        if selected_refs:
+            filtered_display_chunks = _filter_chunks_by_references(
+                context["chunks"], selected_refs
+            )
+            context["chunks"] = filtered_display_chunks
+            assistant_metadata["chunks"] = [
+                chunk.dict() for chunk in filtered_display_chunks
+            ]
         assistant_metadata["reference_mode"] = (
             "retrieval" if selected_refs else "llm_only"
         )
@@ -2932,7 +3419,7 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     )
     context["assistant_metadata"]["selected_reference_ids"] = selected_ids
     context["assistant_metadata"]["available_references"] = [
-        reference.dict() for reference in available_refs
+        reference.dict() for reference in available_refs[:REFERENCE_DISPLAY_LIMIT]
     ]
     context["assistant_metadata"]["references"] = [
         reference.dict() for reference in selected_refs
@@ -2940,6 +3427,14 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     context["assistant_metadata"]["reference_mode"] = (
         "retrieval" if selected_refs else "llm_only"
     )
+    if selected_refs:
+        filtered_display_chunks = _filter_chunks_by_references(
+            context["chunks"], selected_refs
+        )
+        context["chunks"] = filtered_display_chunks
+        context["assistant_metadata"]["chunks"] = [
+            chunk.dict() for chunk in filtered_display_chunks
+        ]
 
     _schedule_chat_progress(
         conversation_id,
