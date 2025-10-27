@@ -128,6 +128,8 @@ class ChatModule {
     this.unsubscribeChatFileSelection = null;
     this.boundHandleResize = null;
     this.filePanelForcesCollapse = false;
+    this.summaryUpdateInFlight = false;
+    this.pendingSummaryRequest = null;
   }
 
   initializeManagers() {
@@ -1724,6 +1726,9 @@ class ChatModule {
         if (typeof conversationSummary.title === 'string' && conversationSummary.title) {
           conversationSummary.title = ChatUtils.normalizeModelText(conversationSummary.title) || conversationSummary.title;
         }
+        if (typeof conversationSummary.summary === 'string' && conversationSummary.summary) {
+          conversationSummary.summary = ChatUtils.normalizeModelText(conversationSummary.summary) || conversationSummary.summary;
+        }
         if (typeof conversationSummary.last_message === 'string' && conversationSummary.last_message) {
           conversationSummary.last_message = ChatUtils.normalizeModelText(conversationSummary.last_message);
         }
@@ -2104,11 +2109,116 @@ class ChatModule {
       if (typeof normalized.title === 'string' && normalized.title) {
         normalized.title = ChatUtils.normalizeModelText(normalized.title) || normalized.title;
       }
+      if (typeof normalized.summary === 'string' && normalized.summary) {
+        normalized.summary = ChatUtils.normalizeModelText(normalized.summary) || normalized.summary;
+      }
       if (typeof normalized.last_message === 'string' && normalized.last_message) {
         normalized.last_message = ChatUtils.normalizeModelText(normalized.last_message);
       }
       return normalized;
     });
+  }
+
+  async summarizeConversation(request = {}) {
+    const conversationId = Number(request.conversationId);
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      return null;
+    }
+    const modelPayload = request.model && typeof request.model === 'object'
+      ? JSON.parse(JSON.stringify(request.model))
+      : null;
+    if (!modelPayload || !modelPayload.api_model) {
+      return null;
+    }
+    const extraBody = request.extraBody && typeof request.extraBody === 'object'
+      ? JSON.parse(JSON.stringify(request.extraBody))
+      : undefined;
+    const maxMessages = Number(request.maxHistory) || 20;
+
+    this.pendingSummaryRequest = {
+      conversationId,
+      model: modelPayload,
+      extraBody,
+      maxHistory: maxMessages
+    };
+
+    if (this.summaryUpdateInFlight) {
+      return null;
+    }
+
+    this.summaryUpdateInFlight = true;
+    let lastSummary = null;
+
+    while (this.pendingSummaryRequest) {
+      const current = this.pendingSummaryRequest;
+      this.pendingSummaryRequest = null;
+      try {
+        const body = {
+          model: current.model,
+          max_history_messages: current.maxHistory
+        };
+        if (current.extraBody && Object.keys(current.extraBody).length) {
+          body.extra_body = current.extraBody;
+        }
+        const response = await fetch(
+          `${this.baseApiUrl}/conversations/${current.conversationId}/summarize`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+          }
+        );
+        if (!response.ok) {
+          throw new Error(`生成对话摘要失败 (${response.status})`);
+        }
+        const data = await response.json();
+        const normalized = this.normalizeConversationList([data])[0] || data;
+        this.applyConversationSummary(normalized);
+        lastSummary = normalized;
+      } catch (error) {
+        console.warn('生成对话摘要失败:', error);
+      }
+    }
+
+    this.summaryUpdateInFlight = false;
+    return lastSummary;
+  }
+
+  applyConversationSummary(summary) {
+    if (!summary || typeof summary !== 'object') {
+      return;
+    }
+    const id = Number(summary.id);
+    if (!Number.isInteger(id)) {
+      return;
+    }
+    const normalizedList = this.normalizeConversationList([summary]);
+    const normalized = normalizedList[0] || summary;
+
+    if (!Array.isArray(this.conversations)) {
+      this.conversations = [];
+    }
+
+    let found = false;
+    this.conversations = this.conversations.map((item) => {
+      if (Number(item.id) === id) {
+        found = true;
+        return { ...item, ...normalized, id };
+      }
+      return item;
+    });
+
+    if (!found) {
+      this.conversations.push({ ...normalized, id });
+    }
+
+    if (this.currentConversationId === id) {
+      this.updateConversationHeader(normalized);
+    }
+
+    this.renderConversationHistory();
   }
 
   ensureMarkdownRenderer() {
@@ -3334,7 +3444,21 @@ class ChatModule {
             streamingMessage.metadata = this.streamingState.metadata;
           }
         }
+        let summaryConversationId = typeof this.currentConversationId === 'number'
+          ? this.currentConversationId
+          : null;
+        if (this.streamingState && typeof this.streamingState.conversationId === 'number') {
+          summaryConversationId = this.streamingState.conversationId;
+        }
         this.streamingState = null;
+        if (summaryConversationId !== null && summaryConversationId !== undefined) {
+          await this.summarizeConversation({
+            conversationId: summaryConversationId,
+            model: payload.model,
+            extraBody: payload.extra_body,
+            maxHistory: 20
+          });
+        }
         await this.refreshConversations();
         if (this.currentConversationId !== null && this.currentConversationId !== undefined) {
           await this.openConversation(this.currentConversationId);

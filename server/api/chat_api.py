@@ -1,3 +1,4 @@
+from datetime import datetime
 import asyncio
 import base64
 import json
@@ -98,6 +99,7 @@ def _log_model_request(provider: str, kwargs: Dict[str, Any]) -> None:
         return
     sanitized = {k: v for k, v in kwargs.items() if k not in {"api_key", "apiKey"}}
     logger.info("%s chat.completions 请求参数: %s", provider, _safe_json_dumps(sanitized))
+
 SUMMARY_SEARCH_CANDIDATE_LIMIT = 20
 SUMMARY_SEARCH_MATCH_LIMIT = 3
 SUMMARY_VECTOR_TYPE = "summary"
@@ -1347,6 +1349,7 @@ def _stream_dashscope_chat(
 class ConversationSummary(BaseModel):
     id: int
     title: str
+    summary: Optional[str] = None
     created_time: str
     updated_time: str
     last_message: Optional[str] = None
@@ -1357,6 +1360,14 @@ class ConversationSummary(BaseModel):
 class ConversationDetail(BaseModel):
     conversation: ConversationSummary
     messages: List[ChatMessageModel]
+
+
+class ConversationSummarizeRequest(BaseModel):
+    model: ModelSelection
+    extra_body: Optional[Dict[str, Any]] = None
+    max_history_messages: int = Field(
+        default=20, ge=4, le=200, description="用于生成对话摘要的消息数量上限（按时间逆序）"
+    )
 
 
 def init_chat_api(
@@ -2751,6 +2762,24 @@ def _build_llm_payload(
     return payload
 
 
+def _invoke_llm(selection: ModelSelection, payload: Dict[str, Any]) -> Dict[str, Any]:
+    api_key = (selection.api_key or "").strip()
+    if selection.source_id == "ollama":
+        return _call_ollama_chat_completion(selection, payload)
+    if selection.source_id == "modelscope":
+        if not api_key:
+            raise LLMClientError("缺少模型 API Key")
+        return _call_modelscope_chat_completion(api_key, payload)
+    if selection.source_id == "dashscope":
+        if not api_key:
+            raise LLMClientError("缺少模型 API Key")
+        return _call_dashscope_chat_completion(api_key, payload)
+    assert llm_client is not None
+    if not api_key:
+        raise LLMClientError("缺少模型 API Key")
+    return llm_client.chat_completion(api_key, payload)
+
+
 def _prepare_chat_context(
     question: str,
     conversation_id: Optional[int],
@@ -3090,6 +3119,124 @@ def _extract_completion_content(result: Dict[str, Any]) -> str:
     return _coerce_openai_content(content)
 
 
+def _build_summary_prompt(
+    messages: List[Dict[str, Any]], limit: int
+) -> List[Dict[str, Any]]:
+    filtered = [msg for msg in messages if msg.get("role") in {"user", "assistant"}]
+    trimmed = filtered[-limit:] if limit and len(filtered) > limit else filtered
+    transcript_lines: List[str] = []
+    for record in trimmed:
+        content = (record.get("content") or "").strip()
+        if not content:
+            continue
+        role = record.get("role")
+        role_label = "助手" if role == "assistant" else "用户"
+        transcript_lines.append(f"{role_label}：{content}")
+    transcript = "\n".join(transcript_lines).strip() or "（暂无有效对话内容）"
+    system_prompt = (
+        "你是总结助手，请阅读对话并仅输出 JSON，对象格式："
+        '{"title": "...", "summary": "..."}。'
+        "title 需要不超过 16 个汉字或 30 个字符，总结对话主题，不要使用标点。"
+        "summary 需要 80-150 字，概括用户诉求、助手回应与下一步计划。"
+        "严禁输出 JSON 以外的内容。"
+    )
+    user_prompt = f"以下是对话：\n\n{transcript}\n\n请生成标题和摘要。"
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _parse_summary_response(content: str) -> Dict[str, str]:
+    cleaned = (content or "").strip()
+    if not cleaned:
+        return {}
+    if cleaned.startswith("```"):
+        parts = cleaned.split("```", 2)
+        if len(parts) >= 2:
+            cleaned = parts[1].strip()
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            return {k: (str(v).strip()) for k, v in data.items()}
+    except json.JSONDecodeError:
+        pass
+    try:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            data = json.loads(cleaned[start : end + 1])
+            if isinstance(data, dict):
+                return {k: (str(v).strip()) for k, v in data.items()}
+    except Exception:  # pragma: no cover - defensive parsing
+        pass
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if not lines:
+        return {}
+    return {
+        "title": lines[0][:30],
+        "summary": cleaned[:200],
+    }
+
+
+def _generate_conversation_summary(
+    selection: ModelSelection,
+    conversation_id: int,
+    max_history: int,
+    extra_body: Optional[Dict[str, Any]] = None,
+) -> ConversationSummary:
+    assert sqlite_manager is not None
+    records = sqlite_manager.get_conversation_messages(conversation_id)
+    if not records:
+        raise HTTPException(status_code=400, detail="该会话暂无消息，无法生成摘要")
+
+    summary_messages = _build_summary_prompt(records, max_history)
+    payload = _build_llm_payload(
+        selection,
+        summary_messages,
+        stream=False,
+        extra_body=extra_body,
+    )
+    _log_model_request(selection.source_id, payload)
+    result = _invoke_llm(selection, payload)
+    content = _extract_completion_content(result)
+    parsed = _parse_summary_response(content)
+
+    summary_text = (parsed.get("summary") or "").strip()
+    title_text = (parsed.get("title") or "").strip()
+
+    if not title_text:
+        first_user = next((msg for msg in records if msg.get("role") == "user"), None)
+        fallback_source = first_user["content"] if first_user else summary_text
+        title_text = _generate_conversation_title(fallback_source or "新对话")
+    if not summary_text:
+        summary_text = content.strip() or title_text
+
+    sqlite_manager.update_conversation_summary(conversation_id, summary_text)
+    sqlite_manager.update_conversation_title(conversation_id, title_text)
+
+    conversation = sqlite_manager.get_conversation_by_id(conversation_id) or {
+        "id": conversation_id,
+        "title": title_text,
+        "summary": summary_text,
+        "created_time": datetime.utcnow().isoformat(),
+        "updated_time": datetime.utcnow().isoformat(),
+    }
+
+    last_message = records[-1] if records else None
+
+    return ConversationSummary(
+        id=int(conversation_id),
+        title=conversation["title"],
+        summary=conversation.get("summary"),
+        created_time=conversation["created_time"],
+        updated_time=conversation["updated_time"],
+        last_message=last_message.get("content") if last_message else None,
+        last_role=last_message.get("role") if last_message else None,
+        message_count=len(records),
+    )
+
+
 def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, None]:
     try:
         context = _prepare_chat_context(
@@ -3378,22 +3525,7 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
             message="正在思考中",
             step=5,
         )
-        api_key = (selection.api_key or "").strip()
-        if selection.source_id == "ollama":
-            result = _call_ollama_chat_completion(selection, llm_payload)
-        elif selection.source_id == "modelscope":
-            if not api_key:
-                raise LLMClientError("缺少模型 API Key")
-            result = _call_modelscope_chat_completion(api_key, llm_payload)
-        elif selection.source_id == "dashscope":
-            if not api_key:
-                raise LLMClientError("缺少模型 API Key")
-            result = _call_dashscope_chat_completion(api_key, llm_payload)
-        else:
-            assert llm_client is not None
-            if not api_key:
-                raise LLMClientError("缺少模型 API Key")
-            result = llm_client.chat_completion(api_key, llm_payload)
+        result = _invoke_llm(selection, llm_payload)
     except LLMClientError as exc:
         sqlite_manager.update_chat_message(
             context["assistant_message_id"],
@@ -3518,6 +3650,47 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     )
 
 
+
+
+@router.post("/conversations/{conversation_id}/summarize", response_model=ConversationSummary)
+async def summarize_conversation_endpoint(
+    conversation_id: int, payload: ConversationSummarizeRequest
+) -> ConversationSummary:
+    _ensure_dependencies(require_llm=True)
+    assert sqlite_manager is not None
+    conversation = sqlite_manager.get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    summary = _generate_conversation_summary(
+        payload.model,
+        conversation_id,
+        payload.max_history_messages,
+        payload.extra_body,
+    )
+    return summary
+
+
+
+@router.post("/conversations/{conversation_id}/summarize", response_model=ConversationSummary)
+async def summarize_conversation_endpoint(
+    conversation_id: int, payload: ConversationSummarizeRequest
+) -> ConversationSummary:
+    _ensure_dependencies(require_llm=True)
+    assert sqlite_manager is not None
+
+    conversation = sqlite_manager.get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    summary = _generate_conversation_summary(
+        payload.model,
+        conversation_id,
+        payload.max_history_messages,
+        payload.extra_body,
+    )
+    return summary
+
 @router.get("/conversations", response_model=List[ConversationSummary])
 async def list_conversations_endpoint() -> List[ConversationSummary]:
     _ensure_dependencies()
@@ -3527,6 +3700,7 @@ async def list_conversations_endpoint() -> List[ConversationSummary]:
         ConversationSummary(
             id=int(item["id"]),
             title=item["title"],
+            summary=item.get("summary"),
             created_time=item["created_time"],
             updated_time=item["updated_time"],
             last_message=item.get("last_message"),
@@ -3550,6 +3724,7 @@ async def get_conversation_endpoint(conversation_id: int) -> ConversationDetail:
     summary = ConversationSummary(
         id=int(conversation["id"]),
         title=conversation["title"],
+        summary=conversation.get("summary"),
         created_time=conversation["created_time"],
         updated_time=conversation["updated_time"],
         last_message=messages[-1]["content"] if messages else None,

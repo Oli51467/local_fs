@@ -102,6 +102,7 @@ class SQLiteManager:
                 CREATE TABLE IF NOT EXISTS conversations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
+                    summary TEXT DEFAULT '',
                     created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     messages_json TEXT DEFAULT '[]',
@@ -113,6 +114,8 @@ class SQLiteManager:
 
             cursor.execute("PRAGMA table_info(conversations)")
             existing_columns = {row[1] for row in cursor.fetchall()}
+            if 'summary' not in existing_columns:
+                cursor.execute("ALTER TABLE conversations ADD COLUMN summary TEXT DEFAULT ''")
             if 'messages_json' not in existing_columns:
                 cursor.execute("ALTER TABLE conversations ADD COLUMN messages_json TEXT DEFAULT '[]'")
             if 'message_seq' not in existing_columns:
@@ -1139,8 +1142,8 @@ class SQLiteManager:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO conversations (title, messages_json, message_seq)
-                VALUES (?, '[]', 0)
+                INSERT INTO conversations (title, summary, messages_json, message_seq)
+                VALUES (?, '', '[]', 0)
                 """,
                 (normalized_title,)
             )
@@ -1161,6 +1164,21 @@ class SQLiteManager:
                 WHERE id = ?
                 """,
                 (normalized_title, conversation_id)
+            )
+            return cursor.rowcount > 0
+
+    def update_conversation_summary(self, conversation_id: int, summary: str) -> bool:
+        """更新会话摘要"""
+        normalized_summary = (summary or '').strip()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE conversations
+                SET summary = ?, updated_time = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (normalized_summary, conversation_id)
             )
             return cursor.rowcount > 0
 
@@ -1191,7 +1209,7 @@ class SQLiteManager:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, title, created_time, updated_time
+                SELECT id, title, summary, created_time, updated_time
                 FROM conversations
                 WHERE id = ?
                 """,
@@ -1203,6 +1221,7 @@ class SQLiteManager:
             return {
                 'id': row['id'],
                 'title': row['title'],
+                'summary': row['summary'] or '',
                 'created_time': row['created_time'],
                 'updated_time': row['updated_time']
             }
@@ -1214,7 +1233,7 @@ class SQLiteManager:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, title, created_time, updated_time, messages_json
+                SELECT id, title, summary, created_time, updated_time, messages_json
                 FROM conversations
                 ORDER BY updated_time DESC, id DESC
                 """
@@ -1231,6 +1250,7 @@ class SQLiteManager:
                 conversations.append({
                     'id': row['id'],
                     'title': row['title'],
+                    'summary': row['summary'] or '',
                     'created_time': row['created_time'],
                     'updated_time': row['updated_time'],
                     'last_message': last_message.get('content') if last_message else None,
