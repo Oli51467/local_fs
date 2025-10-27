@@ -70,6 +70,7 @@ class ChatModule {
     this.chatStatusTextEl = document.getElementById('chat-status-text');
     this.chatImagePreviewEl = document.getElementById('chat-image-preview');
     this.chatImagePreviewListEl = document.getElementById('chat-image-preview-list');
+    this.chatSelectedFileListEl = document.getElementById('chat-selected-file-list');
     this.chatTitleEl = document.getElementById('chat-conversation-title');
     this.chatTimestampEl = document.getElementById('chat-conversation-updated');
     this.chatModelButtonEl = document.getElementById('chat-model-button');
@@ -130,6 +131,9 @@ class ChatModule {
     this.filePanelForcesCollapse = false;
     this.summaryUpdateInFlight = false;
     this.pendingSummaryRequest = null;
+    this.selectionImageTokens = new Map();
+    this.pendingConversationTitle = null;
+    this.pendingConversationCreatedAt = null;
   }
 
   initializeManagers() {
@@ -168,6 +172,9 @@ class ChatModule {
       if (this.chatFileToggleBtn) {
         this.chatFileToggleBtn.classList.remove('has-selection');
       }
+      this.renderSelectedFileBadges();
+      this.removeOrphanSelectionAttachments(new Set());
+      this.renderImageAttachments();
       return;
     }
     this.selectedFilePaths = paths
@@ -177,6 +184,9 @@ class ChatModule {
     if (this.chatFileToggleBtn) {
       this.chatFileToggleBtn.classList.toggle('has-selection', this.selectedFileEntries.length > 0);
     }
+    this.syncSelectedFilePreviews().catch((error) => {
+      console.warn('同步文件预览失败:', error);
+    });
   }
 
   getSelectedChatFiles() {
@@ -614,9 +624,12 @@ class ChatModule {
       if (attachment.loading) {
         item.classList.add('is-loading');
       }
+      if (attachment.source === 'chat-file-selection') {
+        item.classList.add('is-selection');
+      }
       const img = document.createElement('img');
       img.className = 'chat-image-preview-thumb';
-      img.src = attachment.objectUrl;
+      img.src = attachment.objectUrl || attachment.dataUrl || attachment.previewUrl || '';
       img.alt = '已选择的图片预览';
       item.appendChild(img);
       const removeBtn = document.createElement('button');
@@ -624,6 +637,14 @@ class ChatModule {
       removeBtn.type = 'button';
       removeBtn.setAttribute('aria-label', '移除图片');
       removeBtn.dataset.attachmentToken = attachment.token;
+      if (attachment.source === 'chat-file-selection' && attachment.selectionPath) {
+        removeBtn.dataset.selectionPath = attachment.selectionPath;
+        removeBtn.classList.add('is-selection');
+      } else {
+        removeBtn.classList.remove('is-selection');
+        delete removeBtn.dataset.selectionPath;
+        removeBtn.removeAttribute('data-selection-path');
+      }
       removeBtn.innerHTML = removeIcon;
       item.appendChild(removeBtn);
       this.chatImagePreviewListEl.appendChild(item);
@@ -644,6 +665,11 @@ class ChatModule {
     if (!removeBtn) {
       return;
     }
+    const selectionPath = removeBtn.dataset.selectionPath;
+    if (selectionPath) {
+      this.removeSelectedFileByPath(selectionPath);
+      return;
+    }
     const token = removeBtn.dataset.attachmentToken;
     if (!token) {
       return;
@@ -660,8 +686,15 @@ class ChatModule {
       return;
     }
     const [removed] = this.pendingImageAttachments.splice(index, 1);
-    if (removed?.objectUrl) {
+    if (removed?.objectUrl && typeof removed.objectUrl === 'string' && removed.objectUrl.startsWith('blob:')) {
       URL.revokeObjectURL(removed.objectUrl);
+    }
+    if (removed?.source === 'chat-file-selection' && removed.selectionPath) {
+      this.selectionImageTokens.delete(removed.selectionPath);
+      if (!options.skipDeselect) {
+        this.removeSelectedFileByPath(removed.selectionPath);
+        return;
+      }
     }
     this.renderImageAttachments();
     if (!options.keepStatus) {
@@ -670,21 +703,61 @@ class ChatModule {
   }
 
   clearAllImageAttachments(options = {}) {
-    const { keepStatus = false, preserveDisabled = false } = options || {};
-    if (Array.isArray(this.pendingImageAttachments)) {
-      this.pendingImageAttachments.forEach((attachment) => {
-        if (attachment?.objectUrl) {
-          URL.revokeObjectURL(attachment.objectUrl);
-        }
-      });
+    const { keepStatus = false, preserveDisabled = false, keepSelection = false } = options || {};
+    if (!Array.isArray(this.pendingImageAttachments)) {
+      this.pendingImageAttachments = [];
     }
-    this.pendingImageAttachments = [];
+    const next = [];
+    this.pendingImageAttachments.forEach((attachment) => {
+      const isSelection = attachment?.source === 'chat-file-selection';
+      if (keepSelection && isSelection) {
+        next.push(attachment);
+        return;
+      }
+      if (attachment?.objectUrl && typeof attachment.objectUrl === 'string' && !attachment.objectUrl.startsWith('data:')) {
+        URL.revokeObjectURL(attachment.objectUrl);
+      }
+      if (isSelection && attachment.selectionPath) {
+        this.selectionImageTokens.delete(attachment.selectionPath);
+      }
+    });
+    this.pendingImageAttachments = keepSelection ? next : [];
+    if (!keepSelection) {
+      this.selectionImageTokens.clear();
+    }
     if (!preserveDisabled) {
       this.imageAttachmentsDisabled = false;
     }
     this.renderImageAttachments();
+    this.renderSelectedFileBadges();
     if (!keepStatus) {
       this.setStatus('', 'info');
+    }
+  }
+
+  removeSelectedFileByPath(path) {
+    const normalized = typeof path === 'string' ? path.trim() : '';
+    if (!normalized) {
+      return;
+    }
+    const normalizedKey = normalized.replace(/\\+/g, '/');
+    let handled = false;
+    if (this.chatFilePanel && typeof this.chatFilePanel.removeSelectionByPath === 'function') {
+      handled = this.chatFilePanel.removeSelectionByPath(normalizedKey);
+    }
+    if (!handled) {
+      if (this.selectionImageTokens.has(normalizedKey)) {
+        const token = this.selectionImageTokens.get(normalizedKey);
+        this.selectionImageTokens.delete(normalizedKey);
+        this.removeImageAttachment(token, { keepStatus: true, skipDeselect: true });
+      }
+      this.selectedFileEntries = Array.isArray(this.selectedFileEntries)
+        ? this.selectedFileEntries.filter((entry) => this.getFileEntryKey(entry) !== normalizedKey)
+        : [];
+      this.selectedFilePaths = Array.isArray(this.selectedFilePaths)
+        ? this.selectedFilePaths.filter((item) => item.replace(/\\+/g, '/') !== normalizedKey)
+        : [];
+      this.renderSelectedFileBadges();
     }
   }
 
@@ -1425,6 +1498,9 @@ class ChatModule {
       this.streamingState = null;
     }
     this.currentConversationId = null;
+    this.pendingConversationTitle = null;
+    this.pendingConversationCreatedAt = null;
+    this.pendingConversationTitle = null;
     this.messages = [];
     this.renderMessages();
     if (this.chatTitleEl) {
@@ -1518,6 +1594,7 @@ class ChatModule {
       }
       const data = await response.json();
       this.conversations = this.normalizeConversationList(data);
+      this.sortConversationsByRecency();
       this.renderConversationHistory();
     } catch (error) {
       console.error('加载对话历史失败:', error);
@@ -2097,6 +2174,128 @@ class ChatModule {
     });
   }
 
+  getFileEntryKey(entry) {
+    if (!entry || typeof entry !== 'object') {
+      return '';
+    }
+    const rawPath = typeof entry.path === 'string' ? entry.path.trim() : '';
+    if (rawPath) {
+      return rawPath.replace(/\\+/g, '/');
+    }
+    const relative = typeof entry.relativePath === 'string' ? entry.relativePath.trim() : ''
+      || typeof entry.relative_path === 'string' ? entry.relative_path.trim() : '';
+    if (relative) {
+      return relative.replace(/\\+/g, '/');
+    }
+    if (entry.name) {
+      return String(entry.name);
+    }
+    return '';
+  }
+
+  async syncSelectedFilePreviews() {
+    const entries = Array.isArray(this.selectedFileEntries) ? this.selectedFileEntries : [];
+    const images = entries.filter((entry) => entry && entry.isImage);
+    const files = entries.filter((entry) => entry && !entry.isImage);
+
+    await this.ensureSelectionImageAttachments(images);
+    this.renderSelectedFileBadges(files);
+  }
+
+  async ensureSelectionImageAttachments(entries = []) {
+    const activeKeys = new Set(entries.map((entry) => this.getFileEntryKey(entry)).filter(Boolean));
+    this.removeOrphanSelectionAttachments(activeKeys);
+
+    for (const entry of entries) {
+      const key = this.getFileEntryKey(entry);
+      if (!key || this.selectionImageTokens.has(key)) {
+        continue;
+      }
+      try {
+        const results = await this.buildSelectedImageAttachments([entry]);
+        if (!Array.isArray(results) || !results.length) {
+          continue;
+        }
+        if (!Array.isArray(this.pendingImageAttachments)) {
+          this.pendingImageAttachments = [];
+        }
+        results.forEach((item) => {
+          const token = `selection-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const prepared = {
+            token,
+            name: item.name,
+            mime_type: item.mime_type,
+            mimeType: item.mime_type,
+            size: item.size,
+            data_url: item.data_url,
+            dataUrl: item.data_url,
+            objectUrl: item.data_url,
+            source: 'chat-file-selection',
+            selectionPath: key,
+            loading: false
+          };
+          this.pendingImageAttachments.push(prepared);
+          this.selectionImageTokens.set(key, token);
+        });
+      } catch (error) {
+        console.warn('读取图片文件失败:', error);
+      }
+    }
+    this.renderImageAttachments();
+  }
+
+  removeOrphanSelectionAttachments(validKeys = new Set()) {
+    if (!Array.isArray(this.pendingImageAttachments)) {
+      this.pendingImageAttachments = [];
+    }
+    this.pendingImageAttachments = this.pendingImageAttachments.filter((attachment) => {
+      if (!attachment || attachment.source !== 'chat-file-selection') {
+        return true;
+      }
+      if (validKeys.has(attachment.selectionPath)) {
+        return true;
+      }
+      if (attachment.objectUrl && typeof attachment.objectUrl === 'string' && !attachment.objectUrl.startsWith('data:')) {
+        URL.revokeObjectURL(attachment.objectUrl);
+      }
+      if (attachment.selectionPath) {
+        this.selectionImageTokens.delete(attachment.selectionPath);
+      }
+      return false;
+    });
+  }
+
+  renderSelectedFileBadges(fileEntries = null) {
+    if (!this.chatSelectedFileListEl) {
+      return;
+    }
+    const entries = Array.isArray(fileEntries)
+      ? fileEntries
+      : (Array.isArray(this.selectedFileEntries)
+        ? this.selectedFileEntries.filter((entry) => entry && !entry.isImage)
+        : []);
+    this.chatSelectedFileListEl.innerHTML = '';
+    if (!entries.length) {
+      this.chatSelectedFileListEl.hidden = true;
+      return;
+    }
+    entries.forEach((entry) => {
+      const tag = document.createElement('div');
+      tag.className = 'chat-selected-file-tag';
+      const name = document.createElement('span');
+      name.className = 'chat-selected-file-tag__name';
+      name.textContent = entry.name || this.extractFileName(entry.relativePath || entry.path || '');
+      const meta = document.createElement('span');
+      meta.className = 'chat-selected-file-tag__meta';
+      meta.textContent = (entry.fileType || entry.file_type || (entry.isImage ? 'image' : 'file')).toUpperCase();
+      tag.setAttribute('title', entry.relativePath || entry.path || name.textContent);
+      tag.appendChild(name);
+      tag.appendChild(meta);
+      this.chatSelectedFileListEl.appendChild(tag);
+    });
+    this.chatSelectedFileListEl.hidden = false;
+  }
+
   normalizeConversationList(conversations) {
     if (!Array.isArray(conversations)) {
       return [];
@@ -2116,6 +2315,48 @@ class ChatModule {
         normalized.last_message = ChatUtils.normalizeModelText(normalized.last_message);
       }
       return normalized;
+    });
+  }
+
+  getConversationSortValue(conversation) {
+    if (!conversation || typeof conversation !== 'object') {
+      return 0;
+    }
+    const parseTime = (value) => {
+      if (!value || typeof value !== 'string') {
+        return Number.NEGATIVE_INFINITY;
+      }
+      const timestamp = Date.parse(value);
+      return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp;
+    };
+    const updatedTime = parseTime(conversation.updated_time);
+    if (Number.isFinite(updatedTime) && updatedTime !== Number.NEGATIVE_INFINITY) {
+      return updatedTime;
+    }
+    const createdTime = parseTime(conversation.created_time);
+    if (Number.isFinite(createdTime) && createdTime !== Number.NEGATIVE_INFINITY) {
+      return createdTime;
+    }
+    if (conversation.id) {
+      const numericId = Number(conversation.id);
+      if (!Number.isNaN(numericId)) {
+        return numericId;
+      }
+    }
+    return 0;
+  }
+
+  sortConversationsByRecency() {
+    if (!Array.isArray(this.conversations) || this.conversations.length <= 1) {
+      return;
+    }
+    this.conversations.sort((a, b) => {
+      const bValue = this.getConversationSortValue(b);
+      const aValue = this.getConversationSortValue(a);
+      if (bValue === aValue) {
+        return (Number(b?.id) || 0) - (Number(a?.id) || 0);
+      }
+      return bValue - aValue;
     });
   }
 
@@ -2213,6 +2454,8 @@ class ChatModule {
     if (!found) {
       this.conversations.push({ ...normalized, id });
     }
+
+    this.sortConversationsByRecency();
 
     if (this.currentConversationId === id) {
       this.updateConversationHeader(normalized);
@@ -2876,6 +3119,19 @@ class ChatModule {
           this.streamingState.clientRequestId = data.client_request_id;
         }
       }
+      if (typeof data.conversation_id === 'number' && this.pendingConversationTitle) {
+        const tempTitle = this.pendingConversationTitle;
+        this.pendingConversationTitle = null;
+        const createdTime = this.pendingConversationCreatedAt || new Date().toISOString();
+        this.pendingConversationCreatedAt = null;
+        this.applyConversationSummary({
+          id: data.conversation_id,
+          title: tempTitle,
+          summary: '',
+          created_time: createdTime,
+          updated_time: createdTime
+        });
+      }
       return null;
     }
 
@@ -3138,6 +3394,7 @@ class ChatModule {
       return;
     }
 
+    const isNewConversation = this.currentConversationId === null || this.currentConversationId === undefined;
     if (!this.selectedModel) {
       this.setStatus('请选择模型', 'warning');
       return;
@@ -3174,9 +3431,6 @@ class ChatModule {
       return;
     }
 
-    if (this.isStreaming || this.pendingRequest) {
-      return;
-    }
 
     this.pendingRequest = true;
     this.updateSendButtonState();
@@ -3200,7 +3454,10 @@ class ChatModule {
       metadata: null
     };
     const preparedAttachments = Array.isArray(this.pendingImageAttachments)
-      ? this.pendingImageAttachments.filter((item) => item && item.dataUrl && !item.loading)
+      ? this.pendingImageAttachments.filter((item) => item
+        && item.dataUrl
+        && !item.loading
+        && item.source !== 'chat-file-selection')
       : [];
     const modelSupportsVision = this.isVisionModel(this.selectedModel);
     const selectedEntries = Array.isArray(this.selectedFileEntries)
@@ -3240,23 +3497,36 @@ class ChatModule {
     }
     let selectionAttachmentData = [];
     if (hasSelectedImages) {
-      try {
-        selectionAttachmentData = await this.buildSelectedImageAttachments(imageSelections);
-      } catch (error) {
-        console.error('选中图片转换失败:', error);
-        this.pendingRequest = null;
-        this.updateSendButtonState();
-        this.setStatus(error?.message || '无法读取选中的图片，请确认后重试。', 'error');
-        if (this.chatInputEl) {
-          this.chatInputEl.disabled = false;
-          this.chatInputEl.focus();
+      const cachedSelectionAttachments = Array.isArray(this.pendingImageAttachments)
+        ? this.pendingImageAttachments.filter((item) => item && item.source === 'chat-file-selection' && item.data_url)
+        : [];
+      if (cachedSelectionAttachments.length === imageSelections.length) {
+        selectionAttachmentData = cachedSelectionAttachments.map((item) => ({
+          type: 'image',
+          name: item.name,
+          mime_type: item.mime_type || item.mimeType || 'image/png',
+          size: item.size,
+          data_url: item.data_url || item.dataUrl
+        }));
+      } else {
+        try {
+          selectionAttachmentData = await this.buildSelectedImageAttachments(imageSelections);
+        } catch (error) {
+          console.error('选中图片转换失败:', error);
+          this.pendingRequest = null;
+          this.updateSendButtonState();
+          this.setStatus(error?.message || '无法读取选中的图片，请确认后重试。', 'error');
+          if (this.chatInputEl) {
+            this.chatInputEl.disabled = false;
+            this.chatInputEl.focus();
+          }
+          if (this.chatUploadBtn) {
+            this.chatUploadBtn.disabled = false;
+          }
+          this.setNetworkSearchButtonDisabled(false);
+          this.setImageAttachmentControlsDisabled(false);
+          return;
         }
-        if (this.chatUploadBtn) {
-          this.chatUploadBtn.disabled = false;
-        }
-        this.setNetworkSearchButtonDisabled(false);
-        this.setImageAttachmentControlsDisabled(false);
-        return;
       }
     }
     const manualAttachmentPayload = preparedAttachments.length > 0
@@ -3296,8 +3566,16 @@ class ChatModule {
         ...metadataPayload
       };
     }
-    if (preparedAttachments.length > 0) {
-      this.clearAllImageAttachments({ keepStatus: true, preserveDisabled: true });
+    this.clearAllImageAttachments({ keepStatus: true, preserveDisabled: true });
+    if (this.chatImagePreviewEl) {
+      this.chatImagePreviewEl.hidden = true;
+    }
+    if (this.chatImagePreviewListEl) {
+      this.chatImagePreviewListEl.innerHTML = '';
+    }
+    if (isNewConversation) {
+      this.pendingConversationTitle = question;
+      this.pendingConversationCreatedAt = userMessage.created_time;
     }
     this.messages.push(userMessage);
 
@@ -3479,6 +3757,10 @@ class ChatModule {
         this.streamingState = null;
         this.renderMessages();
         this.setStatus('回答已终止。', 'info');
+        if (isNewConversation) {
+          this.pendingConversationTitle = null;
+          this.pendingConversationCreatedAt = null;
+        }
       } else {
         console.error('发送消息失败:', error);
         const message = error?.message || '发送失败，请稍后重试。';
@@ -3491,6 +3773,10 @@ class ChatModule {
         this.streamingState = null;
         this.renderMessages();
         hadError = true;
+        if (isNewConversation) {
+          this.pendingConversationTitle = null;
+          this.pendingConversationCreatedAt = null;
+        }
         try {
           await this.refreshConversations();
           if (this.currentConversationId !== null && this.currentConversationId !== undefined) {

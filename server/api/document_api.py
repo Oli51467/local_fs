@@ -23,6 +23,7 @@ from service.faiss_service import FaissManager
 from service.image_faiss_service import ImageFaissManager
 from service.sqlite_service import SQLiteManager
 from service.text_splitter_service import init_text_splitter_service, get_text_splitter_service
+from service.text_utils import strip_think_tags, prepare_summary_preview
 from service.pdf_extraction_service import (
     parse_pdf_document,
     generate_pdf_markdown,
@@ -290,14 +291,6 @@ def _extract_summary_content(result: Dict[str, Any]) -> str:
     return (message.get("content") or "").strip()
 
 
-def _strip_think_tags(text: str) -> Tuple[str, bool]:
-    if not text:
-        return "", False
-    pattern = re.compile(r"<think\b[^>]*>([\s\S]*?)</think>", re.IGNORECASE)
-    cleaned, count = pattern.subn("", text)
-    return cleaned.strip(), count > 0
-
-
 def _invoke_summary_via_ollama(model: SummaryModelConfig, messages: List[Dict[str, str]]) -> str:
     if not model.api_url:
         raise LLMClientError("Ollama 模型缺少接口地址")
@@ -424,7 +417,7 @@ async def generate_document_summary_if_enabled(
         return None
 
     summary_text = (summary_text or "").strip()
-    summary_text, think_removed = _strip_think_tags(summary_text)
+    summary_text, think_removed = strip_think_tags(summary_text)
     if not summary_text:
         logger.warning("生成的文档主题为空，已跳过。")
         return None
@@ -1410,7 +1403,7 @@ async def get_document_info(file_path: str) -> DocumentInfoResponse:
     if summary_record and isinstance(summary_record, dict):
         summary_text = summary_record.get("summary_text")
         if summary_text:
-            summary_preview = summary_text[:50]
+            summary_preview = prepare_summary_preview(summary_text, limit=50)
 
     absolute_path = (ServerConfig.PROJECT_ROOT / pathlib.Path(normalized_path)).resolve()
     updated_time_display: Optional[str] = None
@@ -1982,7 +1975,7 @@ async def upload_document(request: FileUploadRequest):
                                 "chunk_index": None,
                                 "chunk_text": summary_text,
                                 "chunk_size": len(summary_text),
-                                "summary_preview": summary_text[:200],
+                                "summary_preview": prepare_summary_preview(summary_text, limit=200),
                                 "summary_length": len(summary_text),
                                 "file_type": file_type,
                             }

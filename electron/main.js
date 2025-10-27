@@ -96,27 +96,76 @@ function resolveAppPaths() {
   };
 }
 
-function resolveIconPath() {
-  const devIcon = path.join(__dirname, 'dist', 'assets', 'logo.png');
-  if (fs.existsSync(devIcon)) {
-    return devIcon;
+function getIconCandidatePaths() {
+  const assetNames = [];
+  if (process.platform === 'darwin') {
+    assetNames.push(path.join('dist', 'assets', 'logo.icns'));
   }
+  assetNames.push(path.join('dist', 'assets', 'logo.png'));
 
-  const packagedIcon = path.join(process.resourcesPath || '', 'dist', 'assets', 'logo.png');
-  if (fs.existsSync(packagedIcon)) {
-    return packagedIcon;
-  }
+  const bases = new Set([
+    __dirname,
+    path.join(__dirname, '..'),
+    process.resourcesPath,
+    process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked') : null
+  ].filter(Boolean));
 
-  return devIcon;
+  const candidates = new Set();
+  bases.forEach((base) => {
+    assetNames.forEach((asset) => {
+      candidates.add(path.join(base, asset));
+    });
+  });
+  return Array.from(candidates);
 }
 
+function loadAppIcon() {
+  const candidates = getIconCandidatePaths();
+  for (const candidate of candidates) {
+    try {
+      if (!candidate || !fs.existsSync(candidate)) {
+        continue;
+      }
+      let image = nativeImage.createFromPath(candidate);
+      if (image && !image.isEmpty()) {
+        image.setTemplateImage(false);
+        return image;
+      }
+      const buffer = fs.readFileSync(candidate);
+      if (buffer && buffer.length) {
+        image = nativeImage.createFromBuffer(buffer);
+        if (image && !image.isEmpty()) {
+          image.setTemplateImage(false);
+          return image;
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to load icon candidate:', candidate, error);
+    }
+  }
+  return null;
+}
+
+function applyAppIcon(image) {
+  if (!image || image.isEmpty()) {
+    return;
+  }
+  if (process.platform === 'darwin' && app.dock) {
+    try {
+      app.dock.setIcon(image);
+    } catch (error) {
+      console.warn('Failed to apply dock icon:', error);
+    }
+  }
+}
+
+let appIconImage = null;
+
 function createWindow() {
-  const iconPath = resolveIconPath();
-  const iconImage = nativeImage.createFromPath(iconPath);
   const win = new BrowserWindow({
     width: 1300,
     height: 800,
-    icon: iconImage.isEmpty() ? undefined : iconImage,
+    icon: appIconImage && !appIconImage.isEmpty() ? appIconImage : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -141,12 +190,17 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'index.html'));
 
-  if (!iconImage.isEmpty()) {
-    if (process.platform === 'darwin' && app.dock) {
-      app.dock.setIcon(iconImage);
-    }
+  if (appIconImage && !appIconImage.isEmpty()) {
     if (process.platform === 'win32' || process.platform === 'linux') {
-      win.setIcon(iconImage);
+      try {
+        win.setIcon(appIconImage);
+      } catch (error) {
+        console.warn('Failed to set window icon:', error);
+      }
+    } else if (process.platform === 'darwin') {
+      applyAppIcon(appIconImage);
+      win.on('minimize', () => applyAppIcon(appIconImage));
+      win.on('restore', () => applyAppIcon(appIconImage));
     }
   }
 }
@@ -183,6 +237,11 @@ app.whenReady().then(async () => {
   process.env.FS_APP_META_DIR = appPaths.metaRoot;
   process.env.FS_APP_API_HOST = process.env.FS_APP_API_HOST || '127.0.0.1';
 
+  if (!appIconImage || appIconImage.isEmpty()) {
+    appIconImage = loadAppIcon();
+  }
+  applyAppIcon(appIconImage);
+
   // 初始化所有功能模块
   modules = initializeModules(appPaths);
 
@@ -199,6 +258,21 @@ app.whenReady().then(async () => {
 
   if (!backendReady) {
     console.warn('Python backend did not report ready; continuing to launch UI for diagnostics.');
+  }
+});
+
+app.on('browser-window-created', (_event, window) => {
+  if (!appIconImage || appIconImage.isEmpty()) {
+    return;
+  }
+  if (process.platform === 'win32' || process.platform === 'linux') {
+    try {
+      window.setIcon(appIconImage);
+    } catch (error) {
+      console.warn('Failed to set icon on new window:', error);
+    }
+  } else if (process.platform === 'darwin') {
+    applyAppIcon(appIconImage);
   }
 });
 

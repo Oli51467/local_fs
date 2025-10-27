@@ -9,6 +9,7 @@ from pathlib import Path
 import mimetypes
 import shutil
 from typing import Any, Dict, Generator, List, Optional, Sequence, Set, Tuple, Literal
+import threading
 
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -34,6 +35,12 @@ from service.vision_model_service import VisionAttachment, get_vision_handler
 from service.reranker_service import RerankerService
 from service.sqlite_service import SQLiteManager
 from service.text_splitter_service import get_text_splitter_service
+from service.text_utils import prepare_summary_preview, strip_think_tags
+from service.async_summary_service import (
+    AsyncSummaryService, 
+    init_async_summary_service, 
+    get_async_summary_service
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1370,6 +1377,24 @@ class ConversationSummarizeRequest(BaseModel):
     )
 
 
+class AsyncSummaryTaskResponse(BaseModel):
+    task_id: str
+    conversation_id: int
+    status: str
+    message: str = "总结任务已创建，正在后台处理"
+
+
+class SummaryTaskStatus(BaseModel):
+    task_id: str
+    conversation_id: int
+    status: str
+    created_at: str
+    updated_at: str
+    progress: int
+    result: Optional[ConversationSummary] = None
+    error: Optional[str] = None
+
+
 def init_chat_api(
     faiss_mgr: FaissManager,
     sqlite_mgr: SQLiteManager,
@@ -1385,6 +1410,9 @@ def init_chat_api(
     bm25s_service = bm25s_srv
     reranker_service = reranker_srv
     llm_client = llm_client_instance
+    
+    # 初始化异步总结服务
+    init_async_summary_service(sqlite_mgr, llm_client_instance)
 
 
 def _ensure_dependencies(require_llm: bool = False) -> None:
@@ -3149,12 +3177,14 @@ def _build_summary_prompt(
 
 def _parse_summary_response(content: str) -> Dict[str, str]:
     cleaned = (content or "").strip()
+    cleaned, _ = strip_think_tags(cleaned)
     if not cleaned:
         return {}
     if cleaned.startswith("```"):
         parts = cleaned.split("```", 2)
         if len(parts) >= 2:
             cleaned = parts[1].strip()
+            cleaned, _ = strip_think_tags(cleaned)
     try:
         data = json.loads(cleaned)
         if isinstance(data, dict):
@@ -3204,13 +3234,18 @@ def _generate_conversation_summary(
 
     summary_text = (parsed.get("summary") or "").strip()
     title_text = (parsed.get("title") or "").strip()
+    summary_text, _ = strip_think_tags(summary_text)
+    title_text, _ = strip_think_tags(title_text)
 
     if not title_text:
         first_user = next((msg for msg in records if msg.get("role") == "user"), None)
         fallback_source = first_user["content"] if first_user else summary_text
         title_text = _generate_conversation_title(fallback_source or "新对话")
     if not summary_text:
-        summary_text = content.strip() or title_text
+        fallback_summary, _ = strip_think_tags(content)
+        summary_text = fallback_summary.strip() or title_text
+
+    summary_preview = prepare_summary_preview(summary_text, limit=20)
 
     sqlite_manager.update_conversation_summary(conversation_id, summary_text)
     sqlite_manager.update_conversation_title(conversation_id, title_text)
@@ -3228,7 +3263,7 @@ def _generate_conversation_summary(
     return ConversationSummary(
         id=int(conversation_id),
         title=conversation["title"],
-        summary=conversation.get("summary"),
+        summary=summary_preview,
         created_time=conversation["created_time"],
         updated_time=conversation["updated_time"],
         last_message=last_message.get("content") if last_message else None,
@@ -3237,7 +3272,10 @@ def _generate_conversation_summary(
     )
 
 
-def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, None]:
+def _chat_stream_generator(
+    payload: ChatStreamRequest,
+    event_loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> Generator[str, None, None]:
     try:
         context = _prepare_chat_context(
             payload.question,
@@ -3400,6 +3438,36 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
             conversation_id=context["conversation_id"],
         )
 
+        # 在保存消息后，异步调度会话标题与摘要生成任务
+        try:
+            summary_service = get_async_summary_service()
+            if summary_service:
+                task_id = summary_service.create_summary_task(conversation_id)
+                coro = summary_service.start_summary_task(
+                    task_id,
+                    payload.model.dict(),
+                    max_history=20,
+                    extra_body=payload.extra_body,
+                )
+                if event_loop and event_loop.is_running():
+                    # 从生成器所在的线程将协程提交到 FastAPI 主事件循环
+                    asyncio.run_coroutine_threadsafe(coro, event_loop)
+                else:
+                    # 兜底：在新线程中创建事件循环并运行协程，避免阻塞当前线程
+                    def _run_coro_in_thread() -> None:
+                        try:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            loop.run_until_complete(coro)
+                        finally:
+                            try:
+                                loop.close()
+                            except Exception:
+                                pass
+                    threading.Thread(target=_run_coro_in_thread, daemon=True).start()
+        except Exception as e:  # pragma: no cover - best effort scheduling
+            logger.warning("Failed to schedule async summary in stream: %s", e)
+
         yield _sse_event(
             "done",
             {
@@ -3462,7 +3530,12 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
 @router.post("/stream")
 async def chat_stream_endpoint(payload: ChatStreamRequest) -> StreamingResponse:
     _ensure_dependencies(require_llm=True)
-    generator = _chat_stream_generator(payload)
+    # 捕获当前运行的事件循环并传入生成器，供后台任务调度使用
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    generator = _chat_stream_generator(payload, event_loop=loop)
     # 指定 UTF-8 编码，避免 SSE 在不同客户端出现乱码
     return StreamingResponse(generator, media_type="text/event-stream; charset=utf-8")
 
@@ -3612,6 +3685,22 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
         conversation_id=context["conversation_id"],
     )
 
+    # 在保存消息后，异步调度会话标题与摘要生成任务
+    try:
+        summary_service = get_async_summary_service()
+        if summary_service:
+            task_id = summary_service.create_summary_task(conversation_id)
+            asyncio.create_task(
+                summary_service.start_summary_task(
+                    task_id,
+                    selection.dict(),
+                    max_history=20,
+                    extra_body=payload.extra_body,
+                )
+            )
+    except Exception as e:  # pragma: no cover - best effort scheduling
+        logger.warning("Failed to schedule async summary: %s", e)
+
     _schedule_chat_progress(
         conversation_id,
         assistant_message_id=assistant_message_id,
@@ -3652,33 +3741,84 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
 
 
 
-@router.post("/conversations/{conversation_id}/summarize", response_model=ConversationSummary)
-async def summarize_conversation_endpoint(
+@router.post("/conversations/{conversation_id}/summarize", response_model=AsyncSummaryTaskResponse)
+async def start_async_summarize_conversation(
     conversation_id: int, payload: ConversationSummarizeRequest
-) -> ConversationSummary:
+) -> AsyncSummaryTaskResponse:
+    """启动异步对话总结任务"""
     _ensure_dependencies(require_llm=True)
     assert sqlite_manager is not None
+    
+    # 检查对话是否存在
     conversation = sqlite_manager.get_conversation_by_id(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-
-    summary = _generate_conversation_summary(
-        payload.model,
-        conversation_id,
-        payload.max_history_messages,
-        payload.extra_body,
+    
+    # 获取异步总结服务
+    async_service = get_async_summary_service()
+    if not async_service:
+        raise HTTPException(status_code=500, detail="Async summary service not initialized")
+    
+    # 创建总结任务
+    task_id = async_service.create_summary_task(conversation_id)
+    
+    # 启动异步任务
+    model_dict = payload.model.dict()
+    await async_service.start_summary_task(
+        task_id, 
+        model_dict, 
+        payload.max_history_messages, 
+        payload.extra_body
     )
-    return summary
+    
+    return AsyncSummaryTaskResponse(
+        task_id=task_id,
+        conversation_id=conversation_id,
+        status="running"
+    )
 
 
+@router.get("/conversations/{conversation_id}/summarize/{task_id}", response_model=SummaryTaskStatus)
+async def get_summary_task_status(conversation_id: int, task_id: str) -> SummaryTaskStatus:
+    """获取总结任务状态"""
+    _ensure_dependencies()
+    
+    async_service = get_async_summary_service()
+    if not async_service:
+        raise HTTPException(status_code=500, detail="Async summary service not initialized")
+    
+    task_status = async_service.get_task_status(task_id)
+    if not task_status:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    if task_status["conversation_id"] != conversation_id:
+        raise HTTPException(status_code=400, detail="Task does not belong to this conversation")
+    
+    # 转换结果格式
+    result = None
+    if task_status["result"]:
+        result = ConversationSummary(**task_status["result"])
+    
+    return SummaryTaskStatus(
+        task_id=task_status["task_id"],
+        conversation_id=task_status["conversation_id"],
+        status=task_status["status"],
+        created_at=task_status["created_at"],
+        updated_at=task_status["updated_at"],
+        progress=task_status["progress"],
+        result=result,
+        error=task_status["error"]
+    )
 
-@router.post("/conversations/{conversation_id}/summarize", response_model=ConversationSummary)
-async def summarize_conversation_endpoint(
+
+@router.post("/conversations/{conversation_id}/summarize/sync", response_model=ConversationSummary)
+async def summarize_conversation_sync(
     conversation_id: int, payload: ConversationSummarizeRequest
 ) -> ConversationSummary:
+    """同步对话总结（保留兼容性）"""
     _ensure_dependencies(require_llm=True)
     assert sqlite_manager is not None
-
+    
     conversation = sqlite_manager.get_conversation_by_id(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -3700,7 +3840,7 @@ async def list_conversations_endpoint() -> List[ConversationSummary]:
         ConversationSummary(
             id=int(item["id"]),
             title=item["title"],
-            summary=item.get("summary"),
+            summary=prepare_summary_preview(item.get("summary"), limit=20),
             created_time=item["created_time"],
             updated_time=item["updated_time"],
             last_message=item.get("last_message"),
@@ -3721,10 +3861,11 @@ async def get_conversation_endpoint(conversation_id: int) -> ConversationDetail:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     messages = sqlite_manager.get_conversation_messages(conversation_id)
+    summary_preview = prepare_summary_preview(conversation.get("summary"), limit=20)
     summary = ConversationSummary(
         id=int(conversation["id"]),
         title=conversation["title"],
-        summary=conversation.get("summary"),
+        summary=summary_preview,
         created_time=conversation["created_time"],
         updated_time=conversation["updated_time"],
         last_message=messages[-1]["content"] if messages else None,

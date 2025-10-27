@@ -768,6 +768,36 @@ class ChatFilePanel {
     this.updateSelectionConstraints();
     this.scheduleSelectionBroadcast(true);
   }
+
+  removeSelectionByPath(requestPath) {
+    const normalized = typeof requestPath === 'string' ? requestPath.trim() : '';
+    if (!normalized) {
+      return false;
+    }
+    const normalizedKey = normalized.replace(/\\+/g, '/');
+    const targets = [];
+    this.runtime.selected.forEach((path) => {
+      const normalizedPath = String(path || '').replace(/\\+/g, '/');
+      if (normalizedPath === normalizedKey) {
+        targets.push(path);
+      }
+    });
+    if (!targets.length) {
+      return false;
+    }
+    targets.forEach((path) => this.runtime.selected.delete(path));
+    targets.forEach((path) => {
+      const selector = `.file-item.is-selectable[data-path="${this.escapeSelector(path)}"]`;
+      const element = this.container?.querySelector(selector);
+      if (element) {
+        element.dataset.selected = 'false';
+        element.setAttribute('aria-selected', 'false');
+      }
+    });
+    this.updateSelectionConstraints();
+    this.scheduleSelectionBroadcast(true);
+    return true;
+  }
 }
 
 window.ChatFilePanel = ChatFilePanel;

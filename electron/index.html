@@ -288,6 +288,7 @@
                 <div id="chat-image-preview" class="chat-image-preview" hidden>
                   <div id="chat-image-preview-list" class="chat-image-preview-list"></div>
                 </div>
+                <div id="chat-selected-file-list" class="chat-selected-file-list" hidden></div>
                 <textarea id="chat-input" rows="1" placeholder="询问任何问题" autocomplete="off"
                   spellcheck="false"></textarea>
               </div>
@@ -322,11 +323,6 @@
           <div class="chat-file-panel-header">
             <div class="chat-file-panel-title-group">
               <span class="chat-file-panel-title">文件</span>
-              <label class="chat-fulltext-toggle" for="chat-fulltext-toggle">
-                <input id="chat-fulltext-toggle" type="checkbox" role="switch" aria-checked="false" />
-                <span class="chat-fulltext-slider"></span>
-                <span class="chat-fulltext-label">全文检索</span>
-              </label>
             </div>
             <div class="chat-file-panel-actions">
               <button id="chat-file-refresh-btn" class="chat-file-panel-refresh" type="button" aria-label="刷新文件列表">
