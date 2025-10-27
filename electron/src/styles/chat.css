@@ -2024,8 +2024,8 @@
   border-radius: 12px;
   background: var(--bg-color);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
-  padding: 10px 14px 12px;
-  min-height: 58px;
+  padding: 9px 14px 11px;
+  min-height: 56px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -2047,6 +2047,66 @@
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.chat-network-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.chat-network-btn[aria-pressed="true"],
+.chat-network-btn.is-active {
+  color: var(--accent-color);
+}
+
+.chat-network-btn:hover,
+.chat-network-btn:focus-visible {
+  color: var(--accent-color);
+  outline: none;
+}
+
+.chat-network-btn[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: transparent;
+  transform: none;
+}
+
+.chat-network-btn svg {
+  width: 21px;
+  height: 21px;
+  transform: translate(-3px, 6px);
+  display: block;
+}
+
+.dark-mode .chat-network-btn {
+  color: rgba(226, 232, 240, 0.76);
+}
+
+.dark-mode .chat-network-btn:hover,
+.dark-mode .chat-network-btn:focus-visible {
+  color: rgba(191, 219, 254, 0.95);
+}
+
+.dark-mode .chat-network-btn[aria-pressed="true"],
+.dark-mode .chat-network-btn.is-active {
+  color: rgba(191, 219, 254, 0.98);
+}
+
+.dark-mode .chat-network-btn.is-active {
+  color: rgba(191, 219, 254, 0.98);
+  background: rgba(59, 130, 246, 0.22);
 }
 
 #chat-upload-input {
@@ -2196,7 +2256,7 @@
 .chat-upload-btn svg {
   width: 21px;
   height: 21px;
-  transform: translate(-3px, 4px);
+  transform: translate(-3px, 6px);
 }
 
 #chat-image-preview[hidden] {

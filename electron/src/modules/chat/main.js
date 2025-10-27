@@ -36,6 +36,7 @@ class ChatModule {
     this.tryAttachModelModuleListener();
     this.ensureModelSelector();
     this.updateSendButtonState();
+    this.initializeNetworkSearchButton();
   }
 
   async init() {
@@ -64,6 +65,8 @@ class ChatModule {
     this.chatSendBtn = document.getElementById('chat-send-btn');
     this.chatUploadBtn = document.getElementById('chat-upload-btn');
     this.chatUploadInput = document.getElementById('chat-upload-input');
+    this.chatNetworkSearchBtn = document.getElementById('chat-network-search-btn');
+    this.chatNetworkSearchIconEl = document.getElementById('chat-network-search-icon');
     this.chatStatusTextEl = document.getElementById('chat-status-text');
     this.chatImagePreviewEl = document.getElementById('chat-image-preview');
     this.chatImagePreviewListEl = document.getElementById('chat-image-preview-list');
@@ -106,6 +109,7 @@ class ChatModule {
     this.modelDropdownVisible = false;
     this.pendingImageAttachments = [];
     this.imageAttachmentsDisabled = false;
+    this.networkSearchEnabled = false;
     this.suppressPersistSelection = false;
     this.modelRegistryHandler = (event) => this.handleModelRegistryChanged(event);
     this.handleBackendStatusEvent = (event) => this.handleBackendStatus(event);
@@ -241,6 +245,10 @@ class ChatModule {
       this.chatUploadBtn.addEventListener('click', () => this.handleUploadButtonClick());
     }
 
+    if (this.chatNetworkSearchBtn) {
+      this.chatNetworkSearchBtn.addEventListener('click', () => this.toggleNetworkSearch());
+    }
+
     if (this.chatUploadInput) {
       this.chatUploadInput.addEventListener('change', (event) => this.handleUploadInputChange(event));
     }
@@ -304,6 +312,46 @@ class ChatModule {
       this.chatSendBtn.setAttribute('aria-label', this.sendBtnDefaultAriaLabel);
       this.chatSendBtn.classList.remove('is-stop');
       this.chatSendBtn.disabled = Boolean(this.pendingRequest);
+    }
+  }
+
+  initializeNetworkSearchButton() {
+    if (this.chatNetworkSearchIconEl) {
+      this.chatNetworkSearchIconEl.innerHTML = window.icons?.networkSearch || '';
+    }
+    this.applyNetworkSearchState();
+  }
+
+  applyNetworkSearchState() {
+    if (!this.chatNetworkSearchBtn) {
+      return;
+    }
+    this.chatNetworkSearchBtn.setAttribute('aria-pressed', this.networkSearchEnabled ? 'true' : 'false');
+    this.chatNetworkSearchBtn.classList.toggle('is-active', this.networkSearchEnabled);
+    const label = this.networkSearchEnabled ? '关闭联网搜索' : '启用联网搜索';
+    this.chatNetworkSearchBtn.setAttribute('aria-label', label);
+    this.chatNetworkSearchBtn.setAttribute('title', label);
+  }
+
+  setNetworkSearchEnabled(enabled) {
+    const next = Boolean(enabled);
+    if (this.networkSearchEnabled === next) {
+      return;
+    }
+    this.networkSearchEnabled = next;
+    this.applyNetworkSearchState();
+  }
+
+  toggleNetworkSearch() {
+    if (this.chatNetworkSearchBtn?.disabled) {
+      return;
+    }
+    this.setNetworkSearchEnabled(!this.networkSearchEnabled);
+  }
+
+  setNetworkSearchButtonDisabled(disabled) {
+    if (this.chatNetworkSearchBtn) {
+      this.chatNetworkSearchBtn.disabled = Boolean(disabled);
     }
   }
 
@@ -3031,6 +3079,7 @@ class ChatModule {
     if (this.chatUploadBtn) {
       this.chatUploadBtn.disabled = true;
     }
+    this.setNetworkSearchButtonDisabled(true);
     this.setImageAttachmentControlsDisabled(true);
 
     const userMessage = {
@@ -3060,6 +3109,7 @@ class ChatModule {
       if (this.chatUploadBtn) {
         this.chatUploadBtn.disabled = false;
       }
+      this.setNetworkSearchButtonDisabled(false);
       this.setImageAttachmentControlsDisabled(false);
       return;
     }
@@ -3074,6 +3124,7 @@ class ChatModule {
       if (this.chatUploadBtn) {
         this.chatUploadBtn.disabled = false;
       }
+      this.setNetworkSearchButtonDisabled(false);
       this.setImageAttachmentControlsDisabled(false);
       return;
     }
@@ -3093,6 +3144,7 @@ class ChatModule {
         if (this.chatUploadBtn) {
           this.chatUploadBtn.disabled = false;
         }
+        this.setNetworkSearchButtonDisabled(false);
         this.setImageAttachmentControlsDisabled(false);
         return;
       }
@@ -3204,6 +3256,20 @@ class ChatModule {
         size: item.size,
         data_url: item.data_url
       }));
+    }
+    if (this.networkSearchEnabled) {
+      payload.extra_body = {
+        ...(payload.extra_body || {}),
+        enable_search: true
+      };
+    }
+
+    if (typeof console !== 'undefined' && console.info) {
+      try {
+        console.info('[Chat] 模型请求参数:', JSON.parse(JSON.stringify(payload)));
+      } catch (error) {
+        console.info('[Chat] 模型请求参数:', payload);
+      }
     }
 
     this.chatInputEl.value = '';
@@ -3325,6 +3391,7 @@ class ChatModule {
       if (this.chatUploadBtn) {
         this.chatUploadBtn.disabled = false;
       }
+      this.setNetworkSearchButtonDisabled(false);
       this.setImageAttachmentControlsDisabled(false);
       this.updateSendButtonState();
       if (!hadError && !aborted && this.chatStatusTextEl) {

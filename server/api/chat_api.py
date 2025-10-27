@@ -81,6 +81,23 @@ CLIP_TEXT_TRUNCATE = 512
 REFERENCE_SNIPPET_MAX_CHARS = 320
 CHAT_PROGRESS_TOTAL_STEPS = 6
 SUMMARY_SEARCH_SCORE_THRESHOLD = 0.7
+
+
+def _safe_json_dumps(data: Dict[str, Any]) -> str:
+    try:
+        return json.dumps(data, ensure_ascii=False)
+    except TypeError:
+        try:
+            return json.dumps(data, ensure_ascii=False, default=str)
+        except Exception:  # pragma: no cover - defensive logging
+            return repr(data)
+
+
+def _log_model_request(provider: str, kwargs: Dict[str, Any]) -> None:
+    if not logger.isEnabledFor(logging.INFO):
+        return
+    sanitized = {k: v for k, v in kwargs.items() if k not in {"api_key", "apiKey"}}
+    logger.info("%s chat.completions 请求参数: %s", provider, _safe_json_dumps(sanitized))
 SUMMARY_SEARCH_CANDIDATE_LIMIT = 20
 SUMMARY_SEARCH_MATCH_LIMIT = 3
 SUMMARY_VECTOR_TYPE = "summary"
@@ -276,6 +293,10 @@ class ChatRequest(BaseModel):
     selected_files: Optional[List[FileSelection]] = Field(
         default=None, description="聊天模式下选择的文件信息"
     )
+    extra_body: Optional[Dict[str, Any]] = Field(
+        default=None, description="透传给底层模型的额外参数"
+    )
+
 
 
 class ChatStreamRequest(ChatRequest):
@@ -2698,6 +2719,7 @@ def _build_llm_payload(
     messages: List[Dict[str, Any]],
     stream: bool,
     attachments: Optional[List[ImageAttachment]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "model": selection.api_model,
@@ -2709,16 +2731,17 @@ def _build_llm_payload(
     max_tokens = getattr(ServerConfig, "CHAT_MAX_TOKENS", None)
     if max_tokens:
         payload["max_tokens"] = max_tokens
+
+    merged_extra = dict(extra_body or {})
     if selection.source_id == "modelscope":
-        payload["extra_body"] = {
-            "enable_thinking": bool(stream),
-            "thinking_budget": 40960,
-        }
+        merged_extra.setdefault("enable_thinking", bool(stream))
+        merged_extra.setdefault("thinking_budget", 40960)
     elif selection.source_id == "dashscope":
-        payload["extra_body"] = {
-            "enable_thinking": True,
-            "thinking_budget": 40960,
-        }
+        merged_extra.setdefault("enable_thinking", True)
+        merged_extra.setdefault("thinking_budget", 40960)
+    if merged_extra:
+        payload["extra_body"] = merged_extra
+
     handler = get_vision_handler(selection.api_model)
     if handler is not None:
         vision_attachments = _convert_image_attachments(attachments)
@@ -3113,7 +3136,9 @@ def _chat_stream_generator(payload: ChatStreamRequest) -> Generator[str, None, N
         context["llm_messages"],
         stream=True,
         attachments=context.get("attachments"),
+        extra_body=payload.extra_body,
     )
+    _log_model_request(selection.source_id, llm_payload)
     buffer_parts: List[str] = []
 
     _schedule_chat_progress(
@@ -3325,7 +3350,9 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
         context["llm_messages"],
         stream=False,
         attachments=context.get("attachments"),
+        extra_body=payload.extra_body,
     )
+    _log_model_request(selection.source_id, llm_payload)
     conversation_id = context["conversation_id"]
     assistant_message_id = context["assistant_message_id"]
     user_message_id = context["user_message_id"]
