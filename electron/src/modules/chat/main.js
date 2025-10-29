@@ -3652,6 +3652,13 @@ class ChatModule {
       };
     }
 
+    if (settingsModule && typeof settingsModule.getMemoryOptionsForRequest === 'function') {
+      const memoryOptions = settingsModule.getMemoryOptionsForRequest();
+      if (memoryOptions && memoryOptions.enabled) {
+        payload.memory_options = memoryOptions;
+      }
+    }
+
     if (typeof console !== 'undefined' && console.info) {
       try {
         console.info('[Chat] 模型请求参数:', JSON.parse(JSON.stringify(payload)));

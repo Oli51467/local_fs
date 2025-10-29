@@ -14,11 +14,13 @@ class SettingsBackendModule {
       modelscopeApiKey: '',
       qwenApiKey: '',
       siliconflwApiKey: '',
+      mem0ApiKey: '',
       customModels: [],
       chatModelSelection: null,
       enableModelSummary: false,
       modelSummarySelection: null,
-      enableSummarySearch: false
+      enableSummarySearch: false,
+      enableMemoryManagement: false
     };
     
     // 初始化配置管理器
@@ -56,6 +58,10 @@ class SettingsBackendModule {
     // 测试通义千问（DashScope）连通性
     ipcMain.handle('test-dashscope-connection', async (event, payload) => {
       return this.testDashScopeConnection(payload);
+    });
+
+    ipcMain.handle('validate-memory-settings', async (event, payload) => {
+      return this.validateMemorySettings(payload);
     });
   }
 
@@ -167,6 +173,48 @@ class SettingsBackendModule {
       return {
         success: false,
         error: error?.message || '请求通义千问测试接口失败'
+      };
+    }
+  }
+
+  async validateMemorySettings(payload = {}) {
+    const mem0 = (payload?.mem0ApiKey || payload?.mem0_api_key || '').trim();
+    const openai = (payload?.openaiApiKey || payload?.openai_api_key || '').trim();
+
+    if (!mem0 && !openai) {
+      return { success: false, detail: '请至少提供 Mem0 或 OpenAI API Key。' };
+    }
+
+    const host = process.env.FS_APP_API_HOST || '127.0.0.1';
+    const port = process.env.FS_APP_API_PORT || '8000';
+    const url = `http://${host}:${port}/api/memory/validate`;
+
+    try {
+      const response = await fetchFn(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          mem0_api_key: mem0 || undefined,
+          openai_api_key: openai || undefined
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = data?.detail || `HTTP ${response.status}`;
+        return {
+          success: false,
+          status: response.status,
+          detail: message
+        };
+      }
+      return data;
+    } catch (error) {
+      return {
+        success: false,
+        detail: error?.message || '请求记忆校验接口失败'
       };
     }
   }

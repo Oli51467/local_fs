@@ -19,11 +19,13 @@ class ConfigManager extends EventEmitter {
       modelscopeApiKey: '',
       qwenApiKey: '',
       siliconflwApiKey: '',
+      mem0ApiKey: '',
       customModels: [],
       chatModelSelection: null,
       enableModelSummary: false,
       modelSummarySelection: null,
-      enableSummarySearch: false
+      enableSummarySearch: false,
+      enableMemoryManagement: false
     };
 
     this.ensureSettingsDirExists();

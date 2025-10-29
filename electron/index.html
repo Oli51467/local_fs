@@ -270,8 +270,8 @@
           <span id="chat-conversation-updated" class="chat-timestamp"></span>
         </div>
         <div class="chat-page-header-actions">
-          <button id="chat-file-toggle-btn" class="chat-header-action-btn chat-header-action-btn--icon-only" type="button" aria-pressed="false"
-            aria-expanded="false" aria-controls="chat-file-panel">
+          <button id="chat-file-toggle-btn" class="chat-header-action-btn chat-header-action-btn--icon-only"
+            type="button" aria-pressed="false" aria-expanded="false" aria-controls="chat-file-panel">
             <span class="chat-header-action-icon" id="chat-file-toggle-icon"></span>
           </button>
         </div>
@@ -304,7 +304,8 @@
                     </svg>
                   </button>
                   <input id="chat-upload-input" type="file" accept="image/*" multiple aria-hidden="true">
-                  <button id="chat-network-search-btn" class="chat-network-btn" type="button" aria-pressed="false" aria-label="启用联网搜索">
+                  <button id="chat-network-search-btn" class="chat-network-btn" type="button" aria-pressed="false"
+                    aria-label="启用联网搜索">
                     <span id="chat-network-search-icon"></span>
                   </button>
                 </div>
@@ -404,6 +405,25 @@
           <select id="model-summary-select" class="settings-select settings-select--compact"
             aria-describedby="model-summary-hint"></select>
         </div>
+      </section>
+
+      <section class="settings-section" id="memory-settings">
+        <div class="settings-section-header">
+          <h2>记忆管理</h2>
+          <span id="memory-settings-status" class="settings-status-text" aria-live="polite"></span>
+        </div>
+        <div class="settings-divider"></div>
+        <div class="setting-item setting-item--stack">
+          <div class="setting-item-text">
+            <span class="setting-item-title">启用记忆管理</span>
+            <p class="setting-item-desc">开启后，聊天会检索并更新用户的长期记忆，用于丰富上下文回答。</p>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="enable-memory-toggle">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <p class="settings-input-hint" id="memory-settings-hint">请填写 Mem0 API Key 和 OpenAI API Key。</p>
       </section>
 
       <section class="settings-section">
@@ -506,6 +526,35 @@
               </button>
             </div>
             <p class="settings-input-hint">用于访问 OpenAI 模型服务。</p>
+          </div>
+
+          <div class="settings-input-field">
+            <label for="api-key-mem0" class="settings-input-label">Mem0 API Key</label>
+            <div class="settings-input-control">
+              <input type="password" id="api-key-mem0" class="settings-input" placeholder="输入 Mem0 Key"
+                autocomplete="off" autocapitalize="none" spellcheck="false" data-settings-key="mem0ApiKey">
+              <button type="button" class="settings-input-visibility-toggle" data-target-input="api-key-mem0"
+                data-platform-name="Mem0" aria-label="显示 Mem0 API Key" aria-pressed="false">
+                <svg class="icon-eye icon-eye-open" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M12 5C6.9 5 3.1 8.3 1.5 12c1.6 3.7 5.4 7 10.5 7s8.9-3.3 10.5-7C20.9 8.3 17.1 5 12 5Z"
+                    stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                  <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6" />
+                </svg>
+                <svg class="icon-eye icon-eye-closed" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"
+                  focusable="false">
+                  <path d="M3 3l18 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                  <path
+                    d="M9.5 5.6C10.3 5.3 11.1 5 12 5c5.1 0 8.9 3.3 10.5 7-.6 1.2-1.4 2.3-2.4 3.2m-6.7 2.1c-.5.1-1 .1-1.4.1-5.1 0-8.9-3.3-10.5-7 1-2.3 3-4.3 5.5-5.5"
+                    stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+                    fill="none" />
+                  <path d="M14.5 14.5a3 3 0 0 1-4.2-4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                    stroke-linejoin="round" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <p class="settings-input-hint">用于连接 Mem0 记忆服务，启用个性化记忆管理。</p>
           </div>
 
           <div class="settings-input-field">

@@ -41,6 +41,11 @@ from service.async_summary_service import (
     init_async_summary_service, 
     get_async_summary_service
 )
+from service.memory_service import (
+    MemoryService,
+    MemoryRuntimeOptions,
+    MemoryServiceError,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +59,7 @@ bm25s_service: Optional[BM25SService] = None
 reranker_service: Optional[RerankerService] = None
 llm_client: Optional[SiliconFlowClient] = None
 clip_embedding_service: Optional[CLIPEmbeddingService] = None
+memory_service: Optional[MemoryService] = None
 
 MAX_CHUNK_CHARS = 800
 
@@ -113,6 +119,8 @@ SUMMARY_VECTOR_TYPE = "summary"
 SUMMARY_SEARCH_VECTOR_WEIGHT = 0.6
 SUMMARY_SEARCH_LEXICAL_WEIGHT = 0.4
 REFERENCE_DISPLAY_LIMIT = 6
+MEMORY_RESULT_LIMIT = 3
+MEMORY_RESULT_LIMIT_MAX = 10
 
 
 def _schedule_status_broadcast(
@@ -228,6 +236,43 @@ class ReferenceDocument(BaseModel):
     selected_chunk_ids: List[str] = Field(default_factory=list)
 
 
+class MemoryOptions(BaseModel):
+    enabled: bool = Field(default=False, alias="enabled")
+    mem0_api_key: Optional[str] = Field(default=None, alias="mem0_api_key")
+    openai_api_key: Optional[str] = Field(default=None, alias="openai_api_key")
+    user_id: Optional[str] = Field(default=None, alias="user_id")
+    limit: Optional[int] = Field(default=None, alias="limit")
+
+    class Config:  # pylint: disable=too-few-public-methods
+        populate_by_name = True
+        extra = "ignore"
+
+    @staticmethod
+    def _normalize_str(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            value = str(value)
+        trimmed = value.strip()
+        return trimmed or None
+
+    def normalized(self) -> "MemoryOptions":
+        data = {
+            "enabled": bool(self.enabled),
+            "mem0_api_key": self._normalize_str(self.mem0_api_key),
+            "openai_api_key": self._normalize_str(self.openai_api_key),
+            "user_id": self._normalize_str(self.user_id),
+            "limit": self.limit,
+        }
+        limit = data.get("limit")
+        if limit is not None:
+            try:
+                sanitized = int(limit)
+            except (TypeError, ValueError):
+                sanitized = MEMORY_RESULT_LIMIT
+            data["limit"] = max(1, min(MEMORY_RESULT_LIMIT_MAX, sanitized))
+        return MemoryOptions(**data)
+
 class ModelSelection(BaseModel):
     source_id: str = Field(..., description="模型来源 ID")
     model_id: str = Field(..., description="模型标识")
@@ -304,6 +349,9 @@ class ChatRequest(BaseModel):
     )
     extra_body: Optional[Dict[str, Any]] = Field(
         default=None, description="透传给底层模型的额外参数"
+    )
+    memory_options: Optional[MemoryOptions] = Field(
+        default=None, description="记忆管理相关配置"
     )
 
 
@@ -1402,15 +1450,17 @@ def init_chat_api(
     bm25s_srv: Optional[BM25SService] = None,
     reranker_srv: Optional[RerankerService] = None,
     llm_client_instance: Optional[SiliconFlowClient] = None,
+    memory_service_instance: Optional[MemoryService] = None,
 ) -> None:
-    global faiss_manager, sqlite_manager, embedding_service, bm25s_service, reranker_service, llm_client
+    global faiss_manager, sqlite_manager, embedding_service, bm25s_service, reranker_service, llm_client, memory_service
     faiss_manager = faiss_mgr
     sqlite_manager = sqlite_mgr
     embedding_service = embedding_srv
     bm25s_service = bm25s_srv
     reranker_service = reranker_srv
     llm_client = llm_client_instance
-    
+    memory_service = memory_service_instance
+
     # 初始化异步总结服务
     init_async_summary_service(sqlite_mgr, llm_client_instance)
 
@@ -2674,6 +2724,7 @@ def _build_llm_messages(
     references: List[ReferenceDocument],
     selection: ModelSelection,
     retrieval_context: Optional[Dict[str, Any]] = None,
+    memories: Optional[List[str]] = None,
 ) -> List[Dict[str, str]]:
     system_prompt = (
         "你是一名资深的企业知识助手，会综合提供的资料与自身掌握的通用知识回答问题。\n"
@@ -2698,6 +2749,18 @@ def _build_llm_messages(
         history_segments.append(f"{display_role}：{snippet}")
 
     context_parts: List[str] = []
+
+    sanitized_memories = [
+        entry.strip()
+        for entry in (memories or [])
+        if isinstance(entry, str) and entry.strip()
+    ]
+    if sanitized_memories:
+        memory_lines = "\n".join(f"- {entry}" for entry in sanitized_memories)
+        context_parts.append(
+            "以下为系统为该用户记录的重点记忆，请在回答时酌情参考：\n"
+            f"{memory_lines}\n\n"
+        )
 
     reference_material = _format_reference_material(references, chunks)
     summary_mode = (
@@ -2790,6 +2853,56 @@ def _build_llm_payload(
     return payload
 
 
+def _persist_memory_interaction(
+    memory_ctx: Optional[Dict[str, Any]],
+    question: str,
+    assistant_content: str,
+) -> None:
+    if not memory_ctx or not memory_ctx.get("enabled"):
+        return
+    if memory_service is None:
+        return
+
+    runtime_options = memory_ctx.get("runtime_options")
+    if not isinstance(runtime_options, MemoryRuntimeOptions):
+        options_model = memory_ctx.get("options")
+        if isinstance(options_model, MemoryOptions):
+            try:
+                runtime_options = memory_service.resolve_options(
+                    options_model.mem0_api_key,
+                    options_model.openai_api_key,
+                    options_model.user_id,
+                    (options_model.limit or MEMORY_RESULT_LIMIT),
+                )
+                memory_ctx["runtime_options"] = runtime_options
+            except MemoryServiceError as exc:  # pragma: no cover - defensive logging
+                logger.debug("重建记忆配置失败: %s", exc)
+                return
+        else:
+            return
+
+    if not isinstance(runtime_options, MemoryRuntimeOptions):
+        return
+
+    sanitized_question = (question or "").strip()
+    sanitized_answer = (assistant_content or "").strip()
+    if not sanitized_question or not sanitized_answer:
+        return
+
+    messages = [
+        {"role": "system", "content": "You are a helpful AI assistant."},
+        {"role": "user", "content": sanitized_question},
+        {"role": "assistant", "content": sanitized_answer},
+    ]
+
+    try:
+        memory_service.add_memory(runtime_options, messages)
+    except MemoryServiceError as exc:  # pragma: no cover - defensive logging
+        logger.debug("写入记忆失败: %s", exc)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.debug("写入记忆时发生异常: %s", exc, exc_info=True)
+
+
 def _invoke_llm(selection: ModelSelection, payload: Dict[str, Any]) -> Dict[str, Any]:
     api_key = (selection.api_key or "").strip()
     if selection.source_id == "ollama":
@@ -2818,6 +2931,7 @@ def _prepare_chat_context(
     full_text_search: bool = False,
     use_summary_search: bool = False,
     client_request_id: Optional[str] = None,
+    memory_options: Optional[MemoryOptions] = None,
 ) -> Dict[str, Any]:
     _ensure_dependencies(require_llm=True)
     assert sqlite_manager is not None
@@ -2847,6 +2961,48 @@ def _prepare_chat_context(
         )
 
     sanitized_attachments = _sanitize_attachments_metadata(attachment_list)
+
+    normalized_memory_options = memory_options.normalized() if memory_options else None
+    memory_context: Dict[str, Any] = {
+        "enabled": False,
+        "entries": [],
+        "error": None,
+        "provider": None,
+        "runtime_options": None,
+        "options": normalized_memory_options,
+    }
+    if (
+        normalized_memory_options
+        and normalized_memory_options.enabled
+    ):
+        if memory_service is None:
+            memory_context["error"] = "记忆服务未初始化"
+        else:
+            try:
+                runtime_opts = memory_service.resolve_options(
+                    normalized_memory_options.mem0_api_key,
+                    normalized_memory_options.openai_api_key,
+                    normalized_memory_options.user_id,
+                    normalized_memory_options.limit or MEMORY_RESULT_LIMIT,
+                )
+                entries = memory_service.search_memories(
+                    runtime_opts,
+                    normalized_question,
+                )
+                memory_context.update(
+                    {
+                        "enabled": True,
+                        "entries": entries,
+                        "provider": "mem0" if runtime_opts.mem0_api_key else "local",
+                        "runtime_options": runtime_opts,
+                    }
+                )
+            except MemoryServiceError as exc:
+                logger.warning("记忆检索失败: %s", exc)
+                memory_context["error"] = str(exc)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug("记忆检索过程中出现异常: %s", exc, exc_info=True)
+                memory_context["error"] = "记忆检索失败"
 
     if conversation_id is not None:
         conversation = sqlite_manager.get_conversation_by_id(conversation_id)
@@ -3053,6 +3209,15 @@ def _prepare_chat_context(
         assistant_metadata["full_text_documents"] = full_text_documents
     if client_request_id:
         assistant_metadata["client_request_id"] = client_request_id
+    if normalized_memory_options and normalized_memory_options.enabled:
+        memory_meta: Dict[str, Any] = {
+            "enabled": bool(memory_context.get("enabled")),
+            "provider": memory_context.get("provider"),
+            "entries": list(memory_context.get("entries") or []),
+        }
+        if memory_context.get("error"):
+            memory_meta["error"] = memory_context.get("error")
+        assistant_metadata["memory"] = memory_meta
 
     assistant_message_id = sqlite_manager.insert_chat_message(
         conversation_id, "assistant", "", metadata=assistant_metadata
@@ -3076,6 +3241,7 @@ def _prepare_chat_context(
         references,
         selection,
         retrieval_context=retrieval_context,
+        memories=memory_context.get("entries"),
     )
 
     return {
@@ -3092,6 +3258,7 @@ def _prepare_chat_context(
         "retrieval_context": retrieval_context,
         "selected_files": sanitized_selected_files,
         "selected_file_records": resolved_selected_records,
+        "memory_context": memory_context,
     }
 
 
@@ -3287,6 +3454,7 @@ def _chat_stream_generator(
             full_text_search=payload.full_text_search,
             use_summary_search=payload.use_summary_search,
             client_request_id=payload.client_request_id,
+            memory_options=payload.memory_options,
         )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, str) else "请求无效"
@@ -3438,6 +3606,12 @@ def _chat_stream_generator(
             conversation_id=context["conversation_id"],
         )
 
+        _persist_memory_interaction(
+            context.get("memory_context"),
+            payload.question,
+            final_content,
+        )
+
         # 在保存消息后，异步调度会话标题与摘要生成任务
         try:
             summary_service = get_async_summary_service()
@@ -3557,6 +3731,7 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
             full_text_search=payload.full_text_search,
             use_summary_search=payload.use_summary_search,
             client_request_id=payload.client_request_id,
+            memory_options=payload.memory_options,
         )
     except HTTPException:
         raise
@@ -3683,6 +3858,12 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
         content=final_content,
         metadata=context["assistant_metadata"],
         conversation_id=context["conversation_id"],
+    )
+
+    _persist_memory_interaction(
+        context.get("memory_context"),
+        payload.question,
+        final_content,
     )
 
     # 在保存消息后，异步调度会话标题与摘要生成任务

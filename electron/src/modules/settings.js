@@ -42,14 +42,16 @@ class SettingsModule {
       openaiApiKey: document.getElementById('api-key-openai'),
       modelscopeApiKey: document.getElementById('api-key-modelscope'),
       qwenApiKey: document.getElementById('api-key-qwen'),
-      siliconflwApiKey: document.getElementById('api-key-siliconflw')
+      siliconflwApiKey: document.getElementById('api-key-siliconflw'),
+      mem0ApiKey: document.getElementById('api-key-mem0')
     };
     this.apiVisibilityControllers = [];
     this.apiSettings = {
       openaiApiKey: '',
       modelscopeApiKey: '',
       qwenApiKey: '',
-      siliconflwApiKey: ''
+      siliconflwApiKey: '',
+      mem0ApiKey: ''
     };
     this.apiSettingsOriginal = { ...this.apiSettings };
     this.apiSettingsKeys = Object.keys(this.apiSettings);
@@ -74,6 +76,12 @@ class SettingsModule {
     this.modelSummarySectionEl = null;
     this.modelSummarySaveTimer = null;
     this.summarySearchToggleEl = null;
+    this.enableMemoryManagement = false;
+    this.memoryToggleEl = document.getElementById('enable-memory-toggle');
+    this.memoryStatusEl = document.getElementById('memory-settings-status');
+    this.memoryHintEl = document.getElementById('memory-settings-hint');
+    this.memoryStatusTimer = null;
+    this.memoryValidationLoading = false;
 
     this.init();
   }
@@ -85,6 +93,7 @@ class SettingsModule {
     await this.loadSettings();
     this.setupModelSummaryControls();
     this.setupSummarySearchControl();
+    this.setupMemoryControls();
     this.bindEvents();
     this.setupConfigListener();
     await this.loadRetrievalSettings();
@@ -110,9 +119,11 @@ class SettingsModule {
         this.chatModelSelectionKey = this.normalizeChatModelKey(newConfig?.chatModelSelection);
         this.chatModelSelection = this.deserializeChatModelSelection(this.chatModelSelectionKey);
         this.enableSummarySearch = Boolean(newConfig?.enableSummarySearch);
+        this.enableMemoryManagement = Boolean(newConfig?.enableMemoryManagement);
         this.refreshSummaryModelOptions();
         this.syncSummaryControls();
         this.syncSummarySearchControl();
+        this.syncMemoryControls();
         // 不需要保存，因为配置已经在主进程中更新了
       });
     }
@@ -179,6 +190,8 @@ class SettingsModule {
       this.chatModelSelectionKey = this.normalizeChatModelKey(settings?.chatModelSelection);
       this.chatModelSelection = this.deserializeChatModelSelection(this.chatModelSelectionKey);
       this.enableSummarySearch = Boolean(settings?.enableSummarySearch);
+      this.enableMemoryManagement = Boolean(settings?.enableMemoryManagement);
+      this.syncMemoryControls();
       // 确保标题栏主题在应用启动时正确应用
       await window.fsAPI.setTitleBarTheme(this.isDarkMode);
     } catch (error) {
@@ -195,6 +208,7 @@ class SettingsModule {
       customModels: this.customModels,
       enableModelSummary: this.enableModelSummary,
       enableSummarySearch: this.enableSummarySearch,
+      enableMemoryManagement: this.enableMemoryManagement,
       modelSummarySelection: this.sanitizeModelSelection(this.modelSummarySelection),
       chatModelSelection: this.chatModelSelectionKey || null,
       ...overrides
@@ -336,6 +350,7 @@ class SettingsModule {
     } else if (wasDirty) {
       this.clearApiStatus();
     }
+    this.syncMemoryControls();
   }
 
   checkApiSettingsDirty() {
@@ -440,6 +455,7 @@ class SettingsModule {
         this.clearApiStatus();
       }
     }
+    this.syncMemoryControls();
   }
 
   async saveApiSettings() {
@@ -468,6 +484,7 @@ class SettingsModule {
       this.updateApiSaveButtonState();
       this.hideAllApiKeys();
       this.setApiStatus('更新成功', 'success', { autoClear: 3200 });
+      this.syncMemoryControls();
     } catch (error) {
       console.error('更新 API Key 失败:', error);
       this.setApiStatus('更新失败，请稍后重试。', 'error');
@@ -987,6 +1004,219 @@ class SettingsModule {
       });
     }
     this.syncSummarySearchControl();
+  }
+
+  setupMemoryControls() {
+    if (this.memoryToggleEl) {
+      this.memoryToggleEl.addEventListener('change', (event) => {
+        this.handleMemoryToggleChange(event);
+      });
+    }
+    this.syncMemoryControls();
+  }
+
+  canEnableMemoryManagement() {
+    const hasMem0 = Boolean(this.getApiKey('mem0ApiKey'));
+    const hasOpenAI = Boolean(this.getApiKey('openaiApiKey'));
+    return hasMem0 && hasOpenAI;
+  }
+
+  setMemoryValidationLoading(isLoading) {
+    this.memoryValidationLoading = Boolean(isLoading);
+    if (this.memoryValidationLoading) {
+      this.setMemoryStatus('正在验证 API Key...', 'info');
+    }
+    this.updateMemoryToggleState();
+  }
+
+  setMemoryStatus(message, status = 'info', options = {}) {
+    if (!this.memoryStatusEl) {
+      return;
+    }
+    if (this.memoryStatusTimer) {
+      clearTimeout(this.memoryStatusTimer);
+      this.memoryStatusTimer = null;
+    }
+    if (!message) {
+      this.memoryStatusEl.textContent = '';
+      this.memoryStatusEl.removeAttribute('data-status');
+      return;
+    }
+    this.memoryStatusEl.textContent = message;
+    this.memoryStatusEl.dataset.status = status;
+    if (options.autoClear) {
+      this.memoryStatusTimer = setTimeout(() => {
+        this.clearMemoryStatus();
+      }, Number(options.autoClear) || 3200);
+    }
+  }
+
+  clearMemoryStatus() {
+    if (!this.memoryStatusEl) {
+      return;
+    }
+    if (this.memoryStatusTimer) {
+      clearTimeout(this.memoryStatusTimer);
+      this.memoryStatusTimer = null;
+    }
+    this.memoryStatusEl.textContent = '';
+    this.memoryStatusEl.removeAttribute('data-status');
+  }
+
+  updateMemoryToggleState() {
+    if (!this.memoryToggleEl) {
+      return;
+    }
+    const canEnable = this.canEnableMemoryManagement();
+    if (!canEnable && this.enableMemoryManagement) {
+      this.enableMemoryManagement = false;
+    }
+    const shouldCheck = Boolean(this.enableMemoryManagement && canEnable);
+    this.memoryToggleEl.checked = shouldCheck;
+    this.memoryToggleEl.disabled = !canEnable || this.memoryValidationLoading;
+
+    if (this.memoryHintEl) {
+      if (!canEnable) {
+        this.memoryHintEl.textContent = '请填写 Mem0 API Key 和 OpenAI API Key。';
+      } else if (shouldCheck) {
+        this.memoryHintEl.textContent = '';
+      } else {
+        this.memoryHintEl.textContent = '开启后，系统会检索并更新个性化记忆以补充回答。';
+      }
+    }
+  }
+
+  async handleMemoryToggleChange(event) {
+    if (!this.memoryToggleEl) {
+      return;
+    }
+    if (this.memoryValidationLoading) {
+      this.memoryToggleEl.checked = Boolean(this.enableMemoryManagement);
+      return;
+    }
+    const target = event?.target || this.memoryToggleEl;
+    const nextState = Boolean(target.checked);
+
+    if (nextState) {
+      if (!this.canEnableMemoryManagement()) {
+        this.memoryToggleEl.checked = false;
+        this.enableMemoryManagement = false;
+        this.setMemoryStatus('请先同时配置 Mem0 与 OpenAI 的 API Key。', 'info', { autoClear: 3600 });
+        this.updateMemoryToggleState();
+        return;
+      }
+      this.setMemoryValidationLoading(true);
+      const validation = await this.performMemoryValidation();
+      this.setMemoryValidationLoading(false);
+      if (!validation.success) {
+        this.memoryToggleEl.checked = false;
+        this.enableMemoryManagement = false;
+        this.setMemoryStatus(validation.detail || '记忆校验失败，请稍后重试。', 'error');
+        this.updateMemoryToggleState();
+        return;
+      }
+      this.enableMemoryManagement = true;
+      const persisted = await this.persistMemorySettings();
+      if (!persisted) {
+        this.enableMemoryManagement = false;
+        this.memoryToggleEl.checked = false;
+        this.updateMemoryToggleState();
+        return;
+      }
+      this.setMemoryStatus(validation.detail || '记忆管理已开启。', 'success', { autoClear: 3600 });
+    } else {
+      if (this.enableMemoryManagement) {
+        this.enableMemoryManagement = false;
+        const persisted = await this.persistMemorySettings({ silent: true });
+        if (!persisted) {
+          this.setMemoryStatus('保存记忆设置失败，请稍后重试。', 'error');
+        } else {
+          this.setMemoryStatus('记忆管理已关闭。', 'info', { autoClear: 2400 });
+        }
+      } else {
+        this.clearMemoryStatus();
+      }
+    }
+    this.syncMemoryControls();
+  }
+
+  async performMemoryValidation() {
+    if (!this.canEnableMemoryManagement()) {
+      return { success: false, detail: '请先同时配置 Mem0 与 OpenAI 的 API Key。' };
+    }
+    if (!window.fsAPI || typeof window.fsAPI.validateMemorySettings !== 'function') {
+      return { success: true, detail: '已跳过记忆服务校验。' };
+    }
+    const mem0Key = this.getApiKey('mem0ApiKey');
+    const openaiKey = this.getApiKey('openaiApiKey');
+    try {
+      const response = await window.fsAPI.validateMemorySettings({
+        mem0_api_key: mem0Key || undefined,
+        openai_api_key: openaiKey || undefined
+      });
+      if (!response || response.success === false) {
+        const detail = response?.detail || '记忆校验失败，请稍后重试。';
+        return { success: false, detail };
+      }
+      return {
+        success: true,
+        detail: response.detail || '记忆管理已开启。',
+        mem0Valid: response.mem0_valid,
+        openaiValid: response.openai_valid
+      };
+    } catch (error) {
+      return { success: false, detail: error?.message || '记忆校验失败，请稍后重试。' };
+    }
+  }
+
+  async persistMemorySettings(options = {}) {
+    const { silent = false } = options;
+    try {
+      const result = await this.saveSettings({ enableMemoryManagement: this.enableMemoryManagement });
+      if (result && result.success === false) {
+        if (!silent) {
+          this.setMemoryStatus('保存记忆设置失败，请稍后重试。', 'error');
+        }
+        return false;
+      }
+      return true;
+    } catch (error) {
+      if (!silent) {
+        this.setMemoryStatus('保存记忆设置失败，请稍后重试。', 'error');
+      }
+      return false;
+    }
+  }
+
+  syncMemoryControls() {
+    if (!this.canEnableMemoryManagement() && this.enableMemoryManagement) {
+      this.enableMemoryManagement = false;
+    }
+    this.updateMemoryToggleState();
+  }
+
+  isMemoryManagementEnabled() {
+    return Boolean(this.enableMemoryManagement && this.canEnableMemoryManagement());
+  }
+
+  getMemoryOptionsForRequest() {
+    if (!this.isMemoryManagementEnabled()) {
+      return { enabled: false };
+    }
+    const payload = {
+      enabled: true,
+      user_id: 'default_user',
+      limit: 3
+    };
+    const mem0Key = this.getApiKey('mem0ApiKey');
+    const openaiKey = this.getApiKey('openaiApiKey');
+    if (mem0Key) {
+      payload.mem0_api_key = mem0Key;
+    }
+    if (openaiKey) {
+      payload.openai_api_key = openaiKey;
+    }
+    return payload;
   }
 
   registerModelSummaryRegistryListener() {

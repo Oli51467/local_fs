@@ -14,6 +14,7 @@ from api.faiss_api import router as faiss_router, init_faiss_api
 from api.model_api import router as model_router
 from api.config_api import router as config_router
 from api.status_api import router as status_router, status_broadcaster
+from api.memory_api import router as memory_router, init_memory_api
 from service.sqlite_service import SQLiteManager
 from service.faiss_service import FaissManager
 from service.image_faiss_service import ImageFaissManager
@@ -22,6 +23,7 @@ from service.llm_client import SiliconFlowClient
 from service.reranker_service import init_reranker_service
 from service.bm25s_service import init_bm25s_service
 from service.model_manager import get_model_manager
+from service.memory_service import get_memory_service, MemoryServiceError
 
 # 配置日志
 logging.basicConfig(
@@ -93,6 +95,13 @@ async def lifespan(app: FastAPI):
     # 初始化对话API
     llm_client_instance = SiliconFlowClient()
 
+    memory_service_instance = None
+    try:
+        memory_service_instance = get_memory_service()
+    except MemoryServiceError as exc:  # pragma: no cover - optional dependency
+        logger.warning("记忆服务初始化失败: %s", exc)
+        memory_service_instance = None
+
     init_chat_api(
         faiss_instance,
         sqlite_instance,
@@ -100,8 +109,13 @@ async def lifespan(app: FastAPI):
         bm25s_service_instance,
         reranker_service_instance,
         llm_client_instance,
+        memory_service_instance,
     )
-    
+
+    try:
+        init_memory_api(memory_service_instance)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("初始化记忆 API 失败: %s", exc)
 
     
     logger.info("系统初始化完成")
@@ -154,6 +168,7 @@ app.include_router(document_router)
 app.include_router(model_router)
 app.include_router(config_router)
 app.include_router(chat_router)
+app.include_router(memory_router)
 app.include_router(status_router)
 
 @app.get("/")
