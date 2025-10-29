@@ -40,6 +40,7 @@ extraResources:
     filter:
       - '**/*'
 mac:
+  icon: dist/assets/logo.icns
   category: public.app-category.utilities
   target:
     - dmg
