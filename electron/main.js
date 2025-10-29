@@ -171,8 +171,6 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
-      webSecurity: false,
-      allowRunningInsecureContent: true,
       experimentalFeatures: false,
       enableBlinkFeatures: '',
       disableBlinkFeatures: 'Auxclick'

@@ -1,11 +1,16 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+const optionalModuleWarnings = new Set();
+
 function safeRequire(moduleId) {
   try {
     // eslint-disable-next-line global-require, import/no-dynamic-require
     return require(moduleId);
   } catch (error) {
-    console.warn(`Optional dependency "${moduleId}" failed to load:`, error.message);
+    if (!optionalModuleWarnings.has(moduleId)) {
+      optionalModuleWarnings.add(moduleId);
+      console.info(`Optional dependency "${moduleId}" failed to load and will be skipped: ${error.message}`);
+    }
     return null;
   }
 }
