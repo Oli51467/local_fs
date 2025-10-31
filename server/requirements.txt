@@ -1,21 +1,22 @@
-fastapi==0.104.1
-uvicorn==0.24.0
+fastapi
+uvicorn==0.31.1
 websockets==12.0
 FlagEmbedding==1.2.10
 torch>=1.9.0
 transformers>=4.21.0 # ==4.50.1
 numpy>=1.21.0,<2.0.0
-pydantic>=2.0.0
+pydantic>=2.7.2,<2.11
 faiss-cpu==1.8.0
 bm25s[full]
 langchain
+langchain-text-splitters
 python-multipart
 Pillow>=9.0.0
 jieba
 python-docx>=0.8.11
 pypandoc-binary>=1.13
 huggingface_hub>=0.23.0
-magic-pdf[full] # ==1.3.12
+magic-pdf[full]==1.3.12 # ==1.3.12
 sentence-transformers==5.1.1
 python-pptx
 requests>=2.31.0

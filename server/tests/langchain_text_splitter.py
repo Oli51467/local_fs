@@ -1,4 +1,4 @@
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 if __name__ == "__main__":
     text_splitter = RecursiveCharacterTextSplitter(

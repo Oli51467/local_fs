@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 LOGGER = logging.getLogger(__name__)
 
