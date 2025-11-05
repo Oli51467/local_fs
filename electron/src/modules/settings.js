@@ -43,6 +43,7 @@ class SettingsModule {
       modelscopeApiKey: document.getElementById('api-key-modelscope'),
       qwenApiKey: document.getElementById('api-key-qwen'),
       siliconflwApiKey: document.getElementById('api-key-siliconflw'),
+      kimiApiKey: document.getElementById('api-key-kimi'),
       mem0ApiKey: document.getElementById('api-key-mem0')
     };
     this.apiVisibilityControllers = [];
@@ -51,6 +52,7 @@ class SettingsModule {
       modelscopeApiKey: '',
       qwenApiKey: '',
       siliconflwApiKey: '',
+      kimiApiKey: '',
       mem0ApiKey: ''
     };
     this.apiSettingsOriginal = { ...this.apiSettings };

@@ -41,6 +41,8 @@ function getAssetUrl(relativePath) {
 }
 
 const DASH_SCOPE_AUTO_MANAGED_KEY = 'dashscope:auto-managed';
+const KIMI_AUTO_MANAGED_KEY = 'kimi:auto-managed';
+
 const DASH_SCOPE_FALLBACK_MODELS = [
   {
     modelId: 'qwen3-max',
@@ -89,6 +91,24 @@ const DASH_SCOPE_FALLBACK_MODELS = [
   }
 ];
 
+const KIMI_FALLBACK_MODELS = [
+  {
+    modelId: 'moonshot-v1-8k',
+    name: 'Kimi v1 8K',
+    description: '8K tokens，适合常规对话与编程协助。'
+  },
+  {
+    modelId: 'moonshot-v1-32k',
+    name: 'Kimi v1 32K',
+    description: '32K tokens，支持更长上下文。'
+  },
+  {
+    modelId: 'moonshot-v1-128k',
+    name: 'Kimi v1 128K',
+    description: '128K tokens，适合长篇文档分析。'
+  }
+];
+
 class ModelModule {
   constructor(options = {}) {
     this.catalog = this.buildModelCatalog();
@@ -122,9 +142,16 @@ class ModelModule {
         managedKey: DASH_SCOPE_AUTO_MANAGED_KEY,
         lastApiKey: '',
         fetchInFlight: null
+      },
+      kimi: {
+        managedKey: KIMI_AUTO_MANAGED_KEY,
+        lastApiKey: '',
+        fetchInFlight: null
       }
     };
     this.managedProvidersInitialized = false;
+    this.lastKnownQwenApiKey = '';
+    this.lastKnownKimiApiKey = '';
   }
 
   buildModelCatalog() {
@@ -198,6 +225,24 @@ class ModelModule {
         apiKeySetting: 'openaiApiKey',
         requiresApiKey: true,
         models: []
+      },
+      {
+        sourceId: 'kimi',
+        name: 'Kimi',
+        icon: null,
+        apiKeySetting: 'kimiApiKey',
+        requiresApiKey: true,
+        defaultApiUrl: 'https://api.moonshot.cn/v1/chat/completions',
+        models: [
+          {
+            modelId: 'moonshot-v1-8k',
+            name: 'Kimi v1 8K',
+            description: 'Moonshot 提供的 8K 上下文模型，适用于常规问答与创作。',
+            tags: ['Kimi', 'Moonshot', '8K'],
+            apiModel: 'moonshot-v1-8k',
+            apiKeySetting: 'kimiApiKey'
+          }
+        ]
       }
     ];
   }
@@ -334,29 +379,47 @@ class ModelModule {
       } catch (error) {
         this.lastKnownQwenApiKey = '';
       }
+      try {
+        this.lastKnownKimiApiKey = settingsModule.getApiKey('kimiApiKey') || '';
+      } catch (error) {
+        this.lastKnownKimiApiKey = '';
+      }
     } else {
       this.lastKnownQwenApiKey = '';
+      this.lastKnownKimiApiKey = '';
     }
 
-    this.syncDashScopeModelsFromApiKey({ initial: true }).catch(() => {});
+    Promise.allSettled([
+      this.syncDashScopeModelsFromApiKey({ initial: true }),
+      this.syncKimiModelsFromApiKey({ initial: true })
+    ]).catch(() => {});
   }
 
   handleSettingsConfigUpdated(config) {
     if (!config || typeof config !== 'object') {
       return;
     }
-    if (!Object.prototype.hasOwnProperty.call(config, 'qwenApiKey')) {
-      return;
+    if (Object.prototype.hasOwnProperty.call(config, 'qwenApiKey')) {
+      const incomingQwen = typeof config.qwenApiKey === 'string' ? config.qwenApiKey.trim() : '';
+      if (incomingQwen !== this.lastKnownQwenApiKey) {
+        this.lastKnownQwenApiKey = incomingQwen;
+        this.syncDashScopeModelsFromApiKey({
+          apiKeyOverride: incomingQwen,
+          reason: 'settings-update'
+        }).catch(() => {});
+      }
     }
-    const incoming = typeof config.qwenApiKey === 'string' ? config.qwenApiKey.trim() : '';
-    if (incoming === this.lastKnownQwenApiKey) {
-      return;
+
+    if (Object.prototype.hasOwnProperty.call(config, 'kimiApiKey')) {
+      const incomingKimi = typeof config.kimiApiKey === 'string' ? config.kimiApiKey.trim() : '';
+      if (incomingKimi !== this.lastKnownKimiApiKey) {
+        this.lastKnownKimiApiKey = incomingKimi;
+        this.syncKimiModelsFromApiKey({
+          apiKeyOverride: incomingKimi,
+          reason: 'settings-update'
+        }).catch(() => {});
+      }
     }
-    this.lastKnownQwenApiKey = incoming;
-    this.syncDashScopeModelsFromApiKey({
-      apiKeyOverride: incoming,
-      reason: 'settings-update'
-    }).catch(() => {});
   }
 
   async syncDashScopeModelsFromApiKey(options = {}) {
@@ -569,6 +632,211 @@ class ModelModule {
       requiresApiKey: true,
       apiKeySetting: 'qwenApiKey',
       managedBy: DASH_SCOPE_AUTO_MANAGED_KEY
+    }));
+  }
+
+  async syncKimiModelsFromApiKey(options = {}) {
+    const provider = this.autoManagedProviders?.kimi;
+    if (!provider) {
+      return null;
+    }
+
+    const settingsModule = this.dependencies.getSettingsModule ? this.dependencies.getSettingsModule() : null;
+    let apiKeyCandidate = options.apiKeyOverride;
+    if (apiKeyCandidate === undefined) {
+      apiKeyCandidate = settingsModule && typeof settingsModule.getApiKey === 'function'
+        ? settingsModule.getApiKey('kimiApiKey')
+        : '';
+    }
+    const normalizedApiKey = typeof apiKeyCandidate === 'string' ? apiKeyCandidate.trim() : '';
+
+    if (!normalizedApiKey) {
+      provider.lastApiKey = '';
+      provider.fetchInFlight = null;
+      const removed = this.removeManagedModels(provider.managedKey);
+      if (removed) {
+        this.renderAllModels();
+        this.persistModels();
+      }
+      return [];
+    }
+
+    if (!options.force && provider.lastApiKey === normalizedApiKey && !options.revalidate) {
+      if (this.hasManagedModels(provider.managedKey)) {
+        return null;
+      }
+    }
+
+    if (provider.fetchInFlight) {
+      return provider.fetchInFlight;
+    }
+
+    const fetchPromise = this.fetchKimiModels(normalizedApiKey)
+      .then((models) => {
+        provider.lastApiKey = normalizedApiKey;
+        const changed = this.applyManagedModels(provider.managedKey, models);
+        if (changed) {
+          this.renderAllModels();
+          this.persistModels();
+        } else if (!this.hasManagedModels(provider.managedKey) && Array.isArray(models) && models.length) {
+          this.renderAllModels();
+        }
+        return models;
+      })
+      .catch((error) => {
+        if (options.initial) {
+          console.warn('初始化同步 Kimi 模型失败:', error);
+        } else {
+          console.warn('同步 Kimi 模型失败:', error);
+        }
+        const fallbackModels = this.buildKimiFallbackModels();
+        if (fallbackModels.length) {
+          console.info('使用内置 Kimi 模型列表作为回退。');
+          return fallbackModels;
+        }
+        throw error;
+      })
+      .finally(() => {
+        provider.fetchInFlight = null;
+      });
+
+    provider.fetchInFlight = fetchPromise;
+    return fetchPromise;
+  }
+
+  getKimiDefaultApiUrl() {
+    const source = this.getSourceById('kimi');
+    return (source && typeof source.defaultApiUrl === 'string' && source.defaultApiUrl)
+      ? source.defaultApiUrl
+      : 'https://api.moonshot.cn/v1/chat/completions';
+  }
+
+  async fetchKimiModels(apiKey) {
+    const endpoint = `${this.baseApiUrl}/api/models/kimi/models`;
+
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 15000) : null;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ api_key: apiKey }),
+        signal: controller ? controller.signal : undefined
+      });
+
+      if (!response.ok) {
+        let message = '';
+        try {
+          message = await response.text();
+        } catch (error) {
+          message = '';
+        }
+        throw new Error(message || `HTTP ${response.status}`);
+      }
+
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch (error) {
+        payload = {};
+      }
+
+      return this.buildKimiModelRecords(payload);
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error('请求 Kimi 模型列表超时');
+      }
+      throw error;
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  buildKimiModelRecords(payload = {}) {
+    const sourceId = 'kimi';
+    const items = Array.isArray(payload?.models) ? payload.models : [];
+    const defaultApiUrl = this.getKimiDefaultApiUrl();
+    const uniqueMap = new Map();
+
+    items.forEach((entry) => {
+      if (!entry) {
+        return;
+      }
+      let modelId = '';
+      let details = {};
+      if (typeof entry === 'string') {
+        modelId = entry;
+      } else if (typeof entry === 'object') {
+        details = entry;
+        modelId = entry.id || entry.model_id || entry.name || '';
+      }
+
+      const trimmedId = typeof modelId === 'string' ? modelId.trim() : '';
+      if (!trimmedId) {
+        return;
+      }
+
+      const lowerId = trimmedId.toLowerCase();
+      if (lowerId.includes('embed') || lowerId.includes('embedding') || lowerId.includes('image')) {
+        return;
+      }
+
+      const displayName = typeof details.display_name === 'string' && details.display_name.trim()
+        ? details.display_name.trim()
+        : (details.name || trimmedId);
+
+      let description = '';
+      if (typeof details.description === 'string') {
+        description = details.description.trim();
+      } else if (details.metadata && typeof details.metadata === 'object' && typeof details.metadata.description === 'string') {
+        description = details.metadata.description.trim();
+      }
+
+      const record = {
+        sourceId,
+        modelId: trimmedId,
+        apiModel: trimmedId,
+        name: displayName || trimmedId,
+        providerName: 'Kimi',
+        providerIcon: null,
+        description,
+        apiUrl: defaultApiUrl,
+        requiresApiKey: true,
+        apiKeySetting: 'kimiApiKey',
+        managedBy: KIMI_AUTO_MANAGED_KEY
+      };
+
+      const key = this.getModelKey(record);
+      if (!key || uniqueMap.has(key)) {
+        return;
+      }
+      uniqueMap.set(key, record);
+    });
+
+    const result = Array.from(uniqueMap.values());
+    result.sort((a, b) => a.modelId.localeCompare(b.modelId, 'en'));
+    return result;
+  }
+
+  buildKimiFallbackModels() {
+    const defaultApiUrl = this.getKimiDefaultApiUrl();
+    return KIMI_FALLBACK_MODELS.map((item) => ({
+      sourceId: 'kimi',
+      modelId: item.modelId,
+      apiModel: item.modelId,
+      name: item.name,
+      description: item.description || '',
+      providerName: 'Kimi',
+      providerIcon: null,
+      apiUrl: defaultApiUrl,
+      requiresApiKey: true,
+      apiKeySetting: 'kimiApiKey',
+      managedBy: KIMI_AUTO_MANAGED_KEY
     }));
   }
 
@@ -1300,7 +1568,9 @@ class ModelModule {
       dashscope: '通义千问',
       modelscope: 'ModelScope',
       openai: 'OpenAI',
-      ollama: 'Ollama'
+      ollama: 'Ollama',
+      kimi: 'Kimi',
+      moonshot: 'Kimi'
     };
     if (overrides[canonicalKey]) {
       return overrides[canonicalKey];
@@ -1580,6 +1850,8 @@ class ModelModule {
         await this.testModelScopeConnection(apiKey, modelName);
       } else if (sourceId === 'dashscope') {
         await this.testDashScopeConnection(apiKey, modelName);
+      } else if (sourceId === 'kimi') {
+        await this.testKimiConnection(apiKey, modelName);
       } else {
         await this.testSiliconflowConnection(apiKey, modelName);
       }
@@ -1832,6 +2104,38 @@ class ModelModule {
     }
   }
 
+  async testKimiConnection(apiKey, model = 'moonshot-v1-8k') {
+    const url = 'https://api.moonshot.cn/v1/chat/completions';
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: 'You are a helpful assistant.' },
+          { role: 'user', content: '你好，如果你能够正常工作，请回复我“你好”。' }
+        ],
+        max_tokens: 32
+      })
+    });
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (error) {
+      console.warn('解析 Kimi 响应失败:', error);
+    }
+
+    if (!response.ok) {
+      const errorMessage = data?.error?.message || data?.message || `模型 "${model}" 调用失败，状态码 ${response.status}`;
+      throw new Error(errorMessage);
+    }
+  }
+
   async testOpenAIConnection(apiKey, model = "gpt-4o-mini") {
     const url = 'https://api.openai.com/v1/chat/completions';
 
@@ -2044,11 +2348,6 @@ class ModelModule {
   buildModelCard(model) {
     const card = document.createElement('article');
     card.className = 'model-card';
-    const isManaged = model && model.managedBy === DASH_SCOPE_AUTO_MANAGED_KEY;
-    if (isManaged) {
-      card.classList.add('model-card--managed');
-    }
-
     const header = document.createElement('div');
     header.className = 'model-card-header';
 
@@ -2073,13 +2372,6 @@ class ModelModule {
 
     header.appendChild(titleWrapper);
 
-    if (isManaged) {
-      const badge = document.createElement('span');
-      badge.className = 'model-card-managed-badge';
-      badge.textContent = '自动同步';
-      header.appendChild(badge);
-    }
-
     const description = document.createElement('p');
     description.className = 'model-card-description';
     description.textContent = model.description || '暂无简介。';
@@ -2103,15 +2395,11 @@ class ModelModule {
       card.appendChild(tagsWrapper);
     }
 
-    if (!isManaged) {
-      card.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.confirmRemoveModel(model);
-      });
-    } else {
-      card.setAttribute('title', '该模型由 Qwen API Key 自动同步，如需移除请先清空对应 API Key。');
-    }
+    card.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.confirmRemoveModel(model);
+    });
 
     return card;
   }
@@ -2292,6 +2580,8 @@ class ModelModule {
             enriched.apiKeySetting = 'modelscopeApiKey';
           } else if (source.sourceId === 'dashscope') {
             enriched.apiKeySetting = 'qwenApiKey';
+          } else if (source.sourceId === 'kimi') {
+            enriched.apiKeySetting = 'kimiApiKey';
           } else if (source.sourceId === 'openai') {
             enriched.apiKeySetting = 'openaiApiKey';
           } else {
@@ -2329,6 +2619,8 @@ class ModelModule {
           enriched.apiKeySetting = 'modelscopeApiKey';
         } else if (enriched.sourceId === 'dashscope') {
           enriched.apiKeySetting = 'qwenApiKey';
+        } else if (enriched.sourceId === 'kimi') {
+          enriched.apiKeySetting = 'kimiApiKey';
         } else if (enriched.sourceId === 'openai') {
           enriched.apiKeySetting = 'openaiApiKey';
         } else {

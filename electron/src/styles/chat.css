@@ -540,6 +540,14 @@
   gap: 4px;
 }
 
+.chat-model-provider-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-color);
+  padding: 6px 4px 4px;
+  text-transform: none;
+}
+
 .dark-mode .chat-model-dropdown {
   background: rgba(17, 24, 39, 0.94);
   border-color: rgba(148, 163, 184, 0.22);

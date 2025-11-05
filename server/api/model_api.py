@@ -18,6 +18,7 @@ from service.vision_model_service import get_vision_handler
 
 MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1/"
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+KIMI_BASE_URL = "https://api.moonshot.cn/v1"
 
 
 router = APIRouter(prefix="/api/models", tags=["models"])
@@ -352,3 +353,76 @@ def list_dashscope_models(payload: DashScopeModelsRequest) -> DashScopeModelsRes
             )
 
     return DashScopeModelsResponse(models=items)
+
+
+class KimiModelsRequest(BaseModel):
+    api_key: str = Field(..., description="Kimi (Moonshot) API Key")
+
+
+class KimiModelItem(BaseModel):
+    id: str = Field(..., description="模型唯一标识")
+    display_name: Optional[str] = Field(default=None, description="模型展示名称")
+    description: Optional[str] = Field(default=None, description="模型简介")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="模型附加信息")
+
+
+class KimiModelsResponse(BaseModel):
+    models: List[KimiModelItem] = Field(default_factory=list, description="可用模型列表")
+
+
+@router.post("/kimi/models", response_model=KimiModelsResponse)
+def list_kimi_models(payload: KimiModelsRequest) -> KimiModelsResponse:
+    api_key = (payload.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="缺少 Kimi API Key")
+
+    endpoint = f"{KIMI_BASE_URL.rstrip('/')}/models"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=15)
+    except RequestException as exc:  # pragma: no cover - network failure
+        raise HTTPException(status_code=502, detail=f"请求 Kimi 失败: {exc}") from exc
+
+    if response.status_code == 401:
+        raise HTTPException(status_code=401, detail="Kimi API Key 无效或已过期")
+
+    if response.status_code >= 500:
+        raise HTTPException(status_code=502, detail="Kimi 服务暂时不可用，请稍后重试")
+
+    if response.status_code >= 400:
+        detail = response.text or f"HTTP {response.status_code}"
+        raise HTTPException(status_code=response.status_code, detail=detail)
+
+    try:
+        data = response.json()
+    except ValueError as exc:  # pragma: no cover - unexpected payload
+        raise HTTPException(status_code=502, detail="Kimi 响应解析失败") from exc
+
+    raw_models = data.get("data") or data.get("models") or []
+    items: List[KimiModelItem] = []
+
+    for entry in raw_models:
+        if isinstance(entry, str):
+            items.append(KimiModelItem(id=entry, display_name=entry))
+        elif isinstance(entry, dict):
+            item_id = entry.get("id") or entry.get("model_id") or entry.get("name")
+            if not item_id:
+                continue
+            description = entry.get("description")
+            metadata = entry.get("metadata")
+            if not description and isinstance(metadata, dict):
+                description = metadata.get("description")
+            items.append(
+                KimiModelItem(
+                    id=str(item_id),
+                    display_name=entry.get("display_name") or entry.get("name") or str(item_id),
+                    description=description,
+                    metadata=metadata if isinstance(metadata, dict) else None,
+                )
+            )
+
+    return KimiModelsResponse(models=items)

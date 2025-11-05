@@ -19,6 +19,7 @@ class ConfigManager extends EventEmitter {
       modelscopeApiKey: '',
       qwenApiKey: '',
       siliconflwApiKey: '',
+      kimiApiKey: '',
       mem0ApiKey: '',
       customModels: [],
       chatModelSelection: null,
@@ -40,7 +41,6 @@ class ConfigManager extends EventEmitter {
 
   sanitizeConfigEntries(config = {}) {
     const sanitized = { ...config };
-    delete sanitized.kimiApiKey;
     delete sanitized.claudeApiKey;
     return sanitized;
   }

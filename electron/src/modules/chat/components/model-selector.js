@@ -130,9 +130,30 @@
         return;
       }
 
-      const activeKey = this.selected ? this.getModelKey(this.selected) : '';
+      const sorted = this.models
+        .slice()
+        .sort((a, b) => {
+          const providerA = this.getProviderLabel(a);
+          const providerB = this.getProviderLabel(b);
+          if (providerA === providerB) {
+            return (a.name || a.modelId || '').localeCompare(b.name || b.modelId || '', 'zh-Hans');
+          }
+          return providerA.localeCompare(providerB, 'zh-Hans');
+        });
 
-      this.models.forEach((model) => {
+      const activeKey = this.selected ? this.getModelKey(this.selected) : '';
+      let lastProviderTitle = null;
+
+      sorted.forEach((model) => {
+        const providerTitle = this.getProviderTitle(model);
+        if (providerTitle !== lastProviderTitle) {
+          lastProviderTitle = providerTitle;
+          const title = global.document.createElement('div');
+          title.className = 'chat-model-provider-title';
+          title.textContent = providerTitle;
+          this.dropdownEl.appendChild(title);
+        }
+
         const key = this.getModelKey(model);
         const option = global.document.createElement('button');
         option.type = 'button';
@@ -153,7 +174,7 @@
 
         const provider = global.document.createElement('span');
         provider.className = 'chat-model-option-provider';
-        provider.textContent = ` - ${model.providerName || model.sourceId || '自定义'}`;
+        provider.textContent = model.apiModel || model.modelId || '';
         label.appendChild(provider);
 
         const check = global.document.createElement('span');
@@ -234,6 +255,33 @@
         return '';
       }
       return `${model.sourceId || ''}::${model.modelId || ''}`;
+    }
+
+    getProviderLabel(model) {
+      return model.providerName || model.sourceId || '其他';
+    }
+
+    getProviderTitle(model) {
+      const sourceRaw = (model.sourceId || '').trim();
+      let resolved = sourceRaw;
+      if (sourceRaw) {
+        const canonical = sourceRaw.toLowerCase();
+        const overrides = {
+          dashscope: 'qwen',
+          siliconflow: 'qwen',
+          modelscope: 'qwen',
+          kimi: 'kimi',
+          moonshot: 'kimi'
+        };
+        resolved = overrides[canonical] || sourceRaw;
+      } else {
+        resolved = this.getProviderLabel(model);
+      }
+      const sanitized = (resolved || '').trim();
+      if (!sanitized) {
+        return 'Other';
+      }
+      return sanitized.charAt(0).toUpperCase() + sanitized.slice(1);
     }
 
     emitChange() {

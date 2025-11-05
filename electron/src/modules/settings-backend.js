@@ -14,6 +14,7 @@ class SettingsBackendModule {
       modelscopeApiKey: '',
       qwenApiKey: '',
       siliconflwApiKey: '',
+      kimiApiKey: '',
       mem0ApiKey: '',
       customModels: [],
       chatModelSelection: null,
