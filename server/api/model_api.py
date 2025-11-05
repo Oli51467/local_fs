@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
+import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from openai import OpenAI
+from requests.exceptions import RequestException
 
 from service.model_download_service import (
     ModelDownloadService,
@@ -277,3 +279,76 @@ def test_dashscope_connection(payload: DashScopeTestRequest) -> DashScopeTestRes
         combined = content_text or reasoning_text or ""
 
     return DashScopeTestResponse(success=True, model=model_id, content=combined or None)
+
+
+class DashScopeModelsRequest(BaseModel):
+    api_key: str = Field(..., description="DashScope API Key")
+
+
+class DashScopeModelItem(BaseModel):
+    id: str = Field(..., description="模型唯一标识")
+    display_name: Optional[str] = Field(default=None, description="模型展示名称")
+    description: Optional[str] = Field(default=None, description="模型简介")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="模型附加信息")
+
+
+class DashScopeModelsResponse(BaseModel):
+    models: List[DashScopeModelItem] = Field(default_factory=list, description="可用模型列表")
+
+
+@router.post("/dashscope/models", response_model=DashScopeModelsResponse)
+def list_dashscope_models(payload: DashScopeModelsRequest) -> DashScopeModelsResponse:
+    api_key = (payload.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="缺少 DashScope API Key")
+
+    endpoint = f"{DASHSCOPE_BASE_URL.rstrip('/')}/models"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=15)
+    except RequestException as exc:  # pragma: no cover - network failure
+        raise HTTPException(status_code=502, detail=f"请求 DashScope 失败: {exc}") from exc
+
+    if response.status_code == 401:
+        raise HTTPException(status_code=401, detail="DashScope API Key 无效或已过期")
+
+    if response.status_code >= 500:
+        raise HTTPException(status_code=502, detail="DashScope 服务暂时不可用，请稍后重试")
+
+    if response.status_code >= 400:
+        detail = response.text or f"HTTP {response.status_code}"
+        raise HTTPException(status_code=response.status_code, detail=detail)
+
+    try:
+        data = response.json()
+    except ValueError as exc:  # pragma: no cover - unexpected payload
+        raise HTTPException(status_code=502, detail="DashScope 响应解析失败") from exc
+
+    raw_models = data.get("data") or data.get("models") or []
+    items: List[DashScopeModelItem] = []
+
+    for entry in raw_models:
+        if isinstance(entry, str):
+            items.append(DashScopeModelItem(id=entry, display_name=entry))
+        elif isinstance(entry, dict):
+            item_id = entry.get("id") or entry.get("model_id") or entry.get("modelId") or entry.get("name")
+            if not item_id:
+                continue
+            description = entry.get("description")
+            metadata = entry.get("metadata")
+            if not description and isinstance(metadata, dict):
+                description = metadata.get("description")
+            items.append(
+                DashScopeModelItem(
+                    id=str(item_id),
+                    display_name=entry.get("display_name") or entry.get("name") or str(item_id),
+                    description=description,
+                    metadata=metadata if isinstance(metadata, dict) else None,
+                )
+            )
+
+    return DashScopeModelsResponse(models=items)

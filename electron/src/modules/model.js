@@ -40,6 +40,55 @@ function getAssetUrl(relativePath) {
   return resolved;
 }
 
+const DASH_SCOPE_AUTO_MANAGED_KEY = 'dashscope:auto-managed';
+const DASH_SCOPE_FALLBACK_MODELS = [
+  {
+    modelId: 'qwen3-max',
+    name: 'Qwen3-Max',
+    description: '通义千问旗舰大模型，支持复杂推理与长上下文。'
+  },
+  {
+    modelId: 'qwen3-72b-instruct',
+    name: 'Qwen3-72B-Instruct',
+    description: '72B 参数指令模型，适合高精度场景。'
+  },
+  {
+    modelId: 'qwen3-32b-instruct',
+    name: 'Qwen3-32B-Instruct',
+    description: '32B 参数平衡型模型。'
+  },
+  {
+    modelId: 'qwen3-14b-instruct',
+    name: 'Qwen3-14B-Instruct',
+    description: '14B 参数模型，兼顾性能与成本。'
+  },
+  {
+    modelId: 'qwen3-7b-instruct',
+    name: 'Qwen3-7B-Instruct',
+    description: '7B 轻量指令模型，适合本地部署与测试。'
+  },
+  {
+    modelId: 'qwen3-1.8b-instruct',
+    name: 'Qwen3-1.8B-Instruct',
+    description: '1.8B 超轻量模型，适用于快速迭代。'
+  },
+  {
+    modelId: 'qwen3-0.5b-instruct',
+    name: 'Qwen3-0.5B-Instruct',
+    description: '0.5B 入门模型，演示与开发调试。'
+  },
+  {
+    modelId: 'qwen3-vl-plus',
+    name: 'Qwen3-VL-Plus',
+    description: '多模态模型，支持图文理解与推理。'
+  },
+  {
+    modelId: 'qwen-vl-max',
+    name: 'Qwen-VL-Max',
+    description: '旗舰多模态模型，适用于高阶视觉任务。'
+  }
+];
+
 class ModelModule {
   constructor(options = {}) {
     this.catalog = this.buildModelCatalog();
@@ -67,6 +116,15 @@ class ModelModule {
       getSettingsModule: () => null
     };
     this.dependencies = { ...this.dependencies, ...options };
+
+    this.autoManagedProviders = {
+      dashscope: {
+        managedKey: DASH_SCOPE_AUTO_MANAGED_KEY,
+        lastApiKey: '',
+        fetchInFlight: null
+      }
+    };
+    this.managedProvidersInitialized = false;
   }
 
   buildModelCatalog() {
@@ -238,6 +296,8 @@ class ModelModule {
     this.bindEvents();
     this.renderAllModels();
 
+    this.initializeManagedProviders();
+
     this.initialized = true;
 
     this.fetchSystemModels({ initial: true }).catch((error) => {
@@ -251,6 +311,347 @@ class ModelModule {
         this.showAddModal();
       });
     }
+  }
+
+  initializeManagedProviders() {
+    if (this.managedProvidersInitialized) {
+      return;
+    }
+    this.managedProvidersInitialized = true;
+
+    if (typeof window !== 'undefined' && window.fsAPI && typeof window.fsAPI.onSettingsUpdated === 'function') {
+      try {
+        window.fsAPI.onSettingsUpdated((config) => this.handleSettingsConfigUpdated(config));
+      } catch (error) {
+        console.warn('注册设置更新监听失败:', error);
+      }
+    }
+
+    const settingsModule = this.dependencies.getSettingsModule ? this.dependencies.getSettingsModule() : null;
+    if (settingsModule && typeof settingsModule.getApiKey === 'function') {
+      try {
+        this.lastKnownQwenApiKey = settingsModule.getApiKey('qwenApiKey') || '';
+      } catch (error) {
+        this.lastKnownQwenApiKey = '';
+      }
+    } else {
+      this.lastKnownQwenApiKey = '';
+    }
+
+    this.syncDashScopeModelsFromApiKey({ initial: true }).catch(() => {});
+  }
+
+  handleSettingsConfigUpdated(config) {
+    if (!config || typeof config !== 'object') {
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(config, 'qwenApiKey')) {
+      return;
+    }
+    const incoming = typeof config.qwenApiKey === 'string' ? config.qwenApiKey.trim() : '';
+    if (incoming === this.lastKnownQwenApiKey) {
+      return;
+    }
+    this.lastKnownQwenApiKey = incoming;
+    this.syncDashScopeModelsFromApiKey({
+      apiKeyOverride: incoming,
+      reason: 'settings-update'
+    }).catch(() => {});
+  }
+
+  async syncDashScopeModelsFromApiKey(options = {}) {
+    const provider = this.autoManagedProviders?.dashscope;
+    if (!provider) {
+      return null;
+    }
+
+    const settingsModule = this.dependencies.getSettingsModule ? this.dependencies.getSettingsModule() : null;
+    let apiKeyCandidate = options.apiKeyOverride;
+    if (apiKeyCandidate === undefined) {
+      apiKeyCandidate = settingsModule && typeof settingsModule.getApiKey === 'function'
+        ? settingsModule.getApiKey('qwenApiKey')
+        : '';
+    }
+    const normalizedApiKey = typeof apiKeyCandidate === 'string' ? apiKeyCandidate.trim() : '';
+
+    if (!normalizedApiKey) {
+      provider.lastApiKey = '';
+      provider.fetchInFlight = null;
+      const removed = this.removeManagedModels(provider.managedKey);
+      if (removed) {
+        this.renderAllModels();
+        this.persistModels();
+      }
+      return [];
+    }
+
+    if (!options.force && provider.lastApiKey === normalizedApiKey && !options.revalidate) {
+      if (this.hasManagedModels(provider.managedKey)) {
+        return null;
+      }
+    }
+
+    if (provider.fetchInFlight) {
+      return provider.fetchInFlight;
+    }
+
+    const fetchPromise = this.fetchDashScopeModels(normalizedApiKey)
+      .then((models) => {
+        provider.lastApiKey = normalizedApiKey;
+        const changed = this.applyManagedModels(provider.managedKey, models);
+        if (changed) {
+          this.renderAllModels();
+          this.persistModels();
+        } else if (!this.hasManagedModels(provider.managedKey) && Array.isArray(models) && models.length) {
+          this.renderAllModels();
+        }
+        return models;
+      })
+      .catch((error) => {
+        if (options.initial) {
+          console.warn('初始化同步通义千问模型失败:', error);
+        } else {
+          console.warn('同步通义千问模型失败:', error);
+        }
+        const fallbackModels = this.buildDashScopeFallbackModels();
+        if (fallbackModels.length) {
+          console.info('使用内置 Qwen 模型列表作为回退。');
+          return fallbackModels;
+        }
+        throw error;
+      })
+      .finally(() => {
+        provider.fetchInFlight = null;
+      });
+
+    provider.fetchInFlight = fetchPromise;
+    return fetchPromise;
+  }
+
+  getDashScopeDefaultApiUrl() {
+    const source = this.getSourceById('dashscope');
+    return (source && typeof source.defaultApiUrl === 'string' && source.defaultApiUrl)
+      ? source.defaultApiUrl
+      : 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+  }
+
+  async fetchDashScopeModels(apiKey) {
+    const endpoint = `${this.baseApiUrl}/api/models/dashscope/models`;
+
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 15000) : null;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ api_key: apiKey }),
+        signal: controller ? controller.signal : undefined
+      });
+
+      if (!response.ok) {
+        let message = '';
+        try {
+          message = await response.text();
+        } catch (error) {
+          message = '';
+        }
+        throw new Error(message || `HTTP ${response.status}`);
+      }
+
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch (error) {
+        payload = {};
+      }
+
+      return this.buildDashScopeModelRecords(payload);
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error('请求 Qwen 模型列表超时');
+      }
+      throw error;
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  buildDashScopeModelRecords(payload = {}) {
+    const sourceId = 'dashscope';
+    const items = Array.isArray(payload?.data)
+      ? payload.data
+      : (Array.isArray(payload?.models) ? payload.models : []);
+
+    const defaultApiUrl = this.getDashScopeDefaultApiUrl();
+    const uniqueMap = new Map();
+
+    items.forEach((entry) => {
+      let modelId = '';
+      let details = {};
+      if (typeof entry === 'string') {
+        modelId = entry;
+      } else if (entry && typeof entry === 'object') {
+        details = entry;
+        modelId = entry.id || entry.modelId || entry.model_id || entry.name || '';
+      }
+
+      const trimmedId = typeof modelId === 'string' ? modelId.trim() : '';
+      if (!trimmedId) {
+        return;
+      }
+
+      if (!/qwen/i.test(trimmedId)) {
+        return;
+      }
+
+      if (/(embedding|embedding-)/i.test(trimmedId)) {
+        return;
+      }
+
+      const lowerId = trimmedId.toLowerCase();
+      if (lowerId.includes('embedding') || lowerId.includes('rerank') || lowerId.includes('ranker')) {
+        return;
+      }
+
+      const displayName = typeof details.display_name === 'string' && details.display_name.trim()
+        ? details.display_name.trim()
+        : trimmedId;
+
+      let description = '';
+      if (typeof details.description === 'string') {
+        description = details.description.trim();
+      } else if (details.metadata && typeof details.metadata === 'object' && typeof details.metadata.description === 'string') {
+        description = details.metadata.description.trim();
+      }
+
+      const record = {
+        sourceId,
+        modelId: trimmedId,
+        apiModel: trimmedId,
+        name: displayName,
+        providerName: '通义千问',
+        providerIcon: null,
+        description,
+        apiUrl: defaultApiUrl,
+        requiresApiKey: true,
+        apiKeySetting: 'qwenApiKey',
+        managedBy: DASH_SCOPE_AUTO_MANAGED_KEY
+      };
+
+      const key = this.getModelKey(record);
+      if (!key || uniqueMap.has(key)) {
+        return;
+      }
+      uniqueMap.set(key, record);
+    });
+
+    const result = Array.from(uniqueMap.values());
+    result.sort((a, b) => a.modelId.localeCompare(b.modelId, 'en'));
+    return result;
+  }
+
+  buildDashScopeFallbackModels() {
+    const defaultApiUrl = this.getDashScopeDefaultApiUrl();
+    return DASH_SCOPE_FALLBACK_MODELS.map((item) => ({
+      sourceId: 'dashscope',
+      modelId: item.modelId,
+      apiModel: item.modelId,
+      name: item.name,
+      description: item.description || '',
+      providerName: '通义千问',
+      providerIcon: null,
+      apiUrl: defaultApiUrl,
+      requiresApiKey: true,
+      apiKeySetting: 'qwenApiKey',
+      managedBy: DASH_SCOPE_AUTO_MANAGED_KEY
+    }));
+  }
+
+  hasManagedModels(managedKey) {
+    return this.userModels.some((model) => model && model.managedBy === managedKey);
+  }
+
+  removeManagedModels(managedKey) {
+    const before = this.userModels.length;
+    this.userModels = this.userModels.filter((model) => model && model.managedBy !== managedKey);
+    return this.userModels.length !== before;
+  }
+
+  applyManagedModels(managedKey, models) {
+    const incoming = Array.isArray(models) ? models : [];
+    const manualKeySet = new Set(
+      this.userModels
+        .filter((model) => model && model.managedBy !== managedKey)
+        .map((model) => this.getModelKey(model))
+        .filter(Boolean)
+    );
+
+    const prepared = incoming
+      .map((model) => {
+        const candidateKey = this.getModelKey(model);
+        if (!candidateKey || manualKeySet.has(candidateKey)) {
+          return null;
+        }
+        const enriched = this.enrichModel({ ...model, managedBy: managedKey });
+        enriched.managedBy = managedKey;
+        return enriched;
+      })
+      .filter(Boolean);
+
+    const existingManaged = this.userModels
+      .filter((model) => model && model.managedBy === managedKey)
+      .map((model) => this.serializeManagedModel(model))
+      .sort((a, b) => (a.modelId || '').localeCompare(b.modelId || '', 'en'));
+
+    this.userModels = [
+      ...this.userModels.filter((model) => model && model.managedBy !== managedKey),
+      ...prepared
+    ];
+
+    const nextManaged = this.userModels
+      .filter((model) => model && model.managedBy === managedKey)
+      .map((model) => this.serializeManagedModel(model))
+      .sort((a, b) => (a.modelId || '').localeCompare(b.modelId || '', 'en'));
+
+    return JSON.stringify(existingManaged) !== JSON.stringify(nextManaged);
+  }
+
+  serializeManagedModel(model) {
+    if (!model || typeof model !== 'object') {
+      return {};
+    }
+    return {
+      sourceId: model.sourceId || '',
+      modelId: model.modelId || '',
+      apiModel: model.apiModel || '',
+      name: model.name || '',
+      apiUrl: model.apiUrl || '',
+      providerName: model.providerName || '',
+      description: model.description || '',
+      managedBy: model.managedBy || ''
+    };
+  }
+
+  getModelKey(model) {
+    if (!model || typeof model !== 'object') {
+      return '';
+    }
+    const source = model.sourceId || model.source_id || '';
+    const identifier = model.modelId
+      || model.model_id
+      || model.apiModel
+      || model.api_model
+      || model.name
+      || '';
+    if (!source && !identifier) {
+      return '';
+    }
+    return `${source}::${identifier}`;
   }
 
   buildSourceSelectOptions() {
@@ -1585,6 +1986,7 @@ class ModelModule {
   renderAllModels() {
     if (!this.cardContainerEl) {
       this.notifyModelRegistryChanged();
+      this.notifyChatModuleModels();
       return;
     }
 
@@ -1636,11 +2038,16 @@ class ModelModule {
 
     this.cardContainerEl.appendChild(fragment);
     this.notifyModelRegistryChanged();
+    this.notifyChatModuleModels();
   }
 
   buildModelCard(model) {
     const card = document.createElement('article');
     card.className = 'model-card';
+    const isManaged = model && model.managedBy === DASH_SCOPE_AUTO_MANAGED_KEY;
+    if (isManaged) {
+      card.classList.add('model-card--managed');
+    }
 
     const header = document.createElement('div');
     header.className = 'model-card-header';
@@ -1666,6 +2073,13 @@ class ModelModule {
 
     header.appendChild(titleWrapper);
 
+    if (isManaged) {
+      const badge = document.createElement('span');
+      badge.className = 'model-card-managed-badge';
+      badge.textContent = '自动同步';
+      header.appendChild(badge);
+    }
+
     const description = document.createElement('p');
     description.className = 'model-card-description';
     description.textContent = model.description || '暂无简介。';
@@ -1689,16 +2103,36 @@ class ModelModule {
       card.appendChild(tagsWrapper);
     }
 
-    card.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.confirmRemoveModel(model);
-    });
+    if (!isManaged) {
+      card.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.confirmRemoveModel(model);
+      });
+    } else {
+      card.setAttribute('title', '该模型由 Qwen API Key 自动同步，如需移除请先清空对应 API Key。');
+    }
 
     return card;
   }
 
   confirmRemoveModel(model) {
+    if (model && model.managedBy === DASH_SCOPE_AUTO_MANAGED_KEY) {
+      const message = '该模型由 Qwen API Key 自动同步，如需移除请先在设置中清空 Qwen API Key。';
+      if (typeof window.showModal === 'function') {
+        window.showModal({
+          type: 'info',
+          title: '无法移除自动同步模型',
+          message,
+          confirmText: '好的',
+          showCancel: false
+        });
+      } else {
+        window.alert(message);
+      }
+      return;
+    }
+
     const confirmRemoval = () => {
       this.removeModel(model);
     };
@@ -1722,6 +2156,9 @@ class ModelModule {
   }
 
   removeModel(model) {
+    if (model && model.managedBy === DASH_SCOPE_AUTO_MANAGED_KEY) {
+      return;
+    }
     this.userModels = this.userModels.filter((item) => {
       return !(item.sourceId === model.sourceId && item.modelId === model.modelId);
     });
@@ -1754,6 +2191,27 @@ class ModelModule {
     document.dispatchEvent(new CustomEvent('modelRegistryChanged', {
       detail: { models: safeSnapshot }
     }));
+  }
+
+  notifyChatModuleModels() {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const chatModule = window.chatModule;
+    if (!chatModule || typeof chatModule.refreshAvailableModels !== 'function') {
+      return;
+    }
+    const snapshot = this.getModels();
+    try {
+      const result = chatModule.refreshAvailableModels({ models: snapshot });
+      if (result && typeof result.then === 'function') {
+        result.catch((error) => {
+          console.warn('刷新聊天模型列表失败:', error);
+        });
+      }
+    } catch (error) {
+      console.warn('刷新聊天模型列表失败:', error);
+    }
   }
 
   onModelRegistryChanged(listener) {
